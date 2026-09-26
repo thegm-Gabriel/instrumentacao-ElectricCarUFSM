@@ -1,0 +1,21 @@
+{
+  "versao_do_formato": 1,
+  "versao_da_entrega": "0.0.0-exemplo",
+  "firmwares": {
+    "mestre-s3": {
+      "versao": "0.0.0",
+      "arquivo": "mestre-s3.bin",
+      "sha256": "SUBSTITUIR_PELO_SHA256_DO_ARQUIVO"
+    },
+    "equipe-s3": {
+      "versao": "0.0.0",
+      "arquivo": "equipe-s3.bin",
+      "sha256": "SUBSTITUIR_PELO_SHA256_DO_ARQUIVO"
+    },
+    "visitantes-s3": {
+      "versao": "0.0.0",
+      "arquivo": "visitantes-s3.bin",
+      "sha256": "SUBSTITUIR_PELO_SHA256_DO_ARQUIVO"
+    }
+  }
+}

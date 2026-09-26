@@ -1,0 +1,19 @@
+#pragma once
+
+#include "driver/gpio.h"
+#include "driver/uart.h"
+
+#define WIFI_SSID "UFSM-Carro-Visitantes"
+#define WIFI_SENHA "telemetria2026"
+#define WIFI_CANAL 1
+#define WIFI_MAXIMO_CLIENTES 4
+
+#define UART_TELEMETRIA UART_NUM_1
+#define UART_BAUD_RATE 460800
+#define PINO_UART_TX GPIO_NUM_6
+#define PINO_UART_RX GPIO_NUM_5
+#define UART_TAMANHO_BUFFER 1024
+
+#define IP_PAINEL "192.168.4.1"
+#define PORTA_HTTP 80
+#define PORTA_DNS 53
