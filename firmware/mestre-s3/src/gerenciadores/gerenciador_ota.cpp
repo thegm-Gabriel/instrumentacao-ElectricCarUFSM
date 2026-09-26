@@ -1,35 +1,236 @@
 #include "gerenciadores/gerenciador_ota.h"
 
+#include <array>
+#include <cctype>
 #include <cstring>
 
+#include "esp_app_desc.h"
+#include "esp_crt_bundle.h"
+#include "esp_https_ota.h"
 #include "esp_log.h"
-#include "nucleo/configuracao_placa.h"
+#include "esp_ota_ops.h"
+#include "esp_partition.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "nucleo/configuracao_ota.h"
 
 namespace {
 constexpr char ETIQUETA[] = "gerenciador_ota";
+constexpr size_t TAMANHO_URL = 512;
+constexpr size_t TAMANHO_SHA256_TEXTO = 65;
+
+std::array<char, TAMANHO_URL> endereco_https{};
+std::array<char, 32> versao_esperada{};
+std::array<char, TAMANHO_SHA256_TEXTO> sha256_esperado{};
+const char* certificado_raiz = nullptr;
+uint32_t tempo_limite_ms = 0;
 bool configurado = false;
+SemaphoreHandle_t mutex_execucao = nullptr;
+
+bool sha256_texto_valido(const char* texto) {
+    if (texto == nullptr || std::strlen(texto) != 64) return false;
+    for (size_t indice = 0; indice < 64; indice++) {
+        if (!std::isxdigit(static_cast<unsigned char>(texto[indice]))) return false;
+    }
+    return true;
 }
 
+uint8_t valor_hexadecimal(char caractere) {
+    if (caractere >= '0' && caractere <= '9') return caractere - '0';
+    caractere = static_cast<char>(std::tolower(static_cast<unsigned char>(caractere)));
+    return static_cast<uint8_t>(caractere - 'a' + 10);
+}
+
+void converter_sha256(const char* texto, uint8_t* saida) {
+    for (size_t indice = 0; indice < 32; indice++) {
+        saida[indice] = static_cast<uint8_t>((valor_hexadecimal(texto[indice * 2]) << 4) |
+                                              valor_hexadecimal(texto[indice * 2 + 1]));
+    }
+}
+
+esp_err_t verificar_sha256(const esp_partition_t* particao) {
+    uint8_t calculado[32]{};
+    uint8_t esperado[32]{};
+    converter_sha256(sha256_esperado.data(), esperado);
+
+    esp_err_t erro = esp_partition_get_sha256(particao, calculado);
+    if (erro != ESP_OK) {
+        ESP_LOGE(ETIQUETA, "Não foi possível calcular SHA-256: %s", esp_err_to_name(erro));
+        return erro;
+    }
+    if (std::memcmp(calculado, esperado, sizeof(calculado)) != 0) {
+        ESP_LOGE(ETIQUETA, "SHA-256 da imagem difere do manifesto");
+        return ESP_ERR_INVALID_CRC;
+    }
+    ESP_LOGI(ETIQUETA, "SHA-256 da imagem confirmado");
+    return ESP_OK;
+}
+
+bool obter_estado_em_execucao(esp_ota_img_states_t* estado) {
+    const esp_partition_t* particao = esp_ota_get_running_partition();
+    return particao != nullptr && esp_ota_get_state_partition(particao, estado) == ESP_OK;
+}
+}  // namespace
+
 esp_err_t gerenciador_ota_iniciar(const ConfiguracaoOta& configuracao_ota) {
-    if (configuracao_ota.endereco_https == nullptr || configuracao_ota.tempo_limite_ms == 0 ||
-        std::strncmp(configuracao_ota.endereco_https, "https://", 8) != 0) {
-        ESP_LOGE(ETIQUETA, "Configuracao OTA invalida; use uma URL HTTPS");
+    if (!configuracao::HABILITAR_OTA) return ESP_ERR_NOT_SUPPORTED;
+    if (configuracao_ota.endereco_https == nullptr ||
+        std::strncmp(configuracao_ota.endereco_https, "https://", 8) != 0 ||
+        std::strlen(configuracao_ota.endereco_https) >= endereco_https.size() ||
+        configuracao_ota.versao_esperada == nullptr ||
+        configuracao_ota.versao_esperada[0] == '\0' ||
+        std::strlen(configuracao_ota.versao_esperada) >= versao_esperada.size() ||
+        !sha256_texto_valido(configuracao_ota.sha256_esperado) ||
+        configuracao_ota.tempo_limite_ms == 0) {
+        ESP_LOGE(ETIQUETA, "Configuração OTA inválida");
         return ESP_ERR_INVALID_ARG;
     }
-    if (!configuracao::HABILITAR_OTA) {
-        ESP_LOGW(ETIQUETA, "OTA preparado, mas desabilitado ate definir servidor e particoes");
+    if (esp_ota_get_next_update_partition(nullptr) == nullptr) {
+        ESP_LOGE(ETIQUETA, "Tabela de partições não possui um destino OTA");
         return ESP_ERR_NOT_SUPPORTED;
     }
-    configurado = false;
-    return ESP_ERR_NOT_SUPPORTED;
+    if (mutex_execucao == nullptr) mutex_execucao = xSemaphoreCreateMutex();
+    if (mutex_execucao == nullptr) return ESP_ERR_NO_MEM;
+    if (xSemaphoreTake(mutex_execucao, 0) != pdTRUE) return ESP_ERR_INVALID_STATE;
+
+    std::strcpy(endereco_https.data(), configuracao_ota.endereco_https);
+    std::strcpy(versao_esperada.data(), configuracao_ota.versao_esperada);
+    std::strcpy(sha256_esperado.data(), configuracao_ota.sha256_esperado);
+    certificado_raiz = configuracao_ota.certificado_raiz;
+    tempo_limite_ms = configuracao_ota.tempo_limite_ms;
+    configurado = true;
+    xSemaphoreGive(mutex_execucao);
+
+    ESP_LOGI(ETIQUETA, "OTA configurado para download HTTPS");
+    return ESP_OK;
 }
 
 esp_err_t gerenciador_ota_executar() {
-    if (!configurado) {
-        ESP_LOGE(ETIQUETA, "OTA solicitado antes da configuracao");
+    if (!configurado || mutex_execucao == nullptr) {
+        ESP_LOGE(ETIQUETA, "OTA solicitado antes da configuração");
         return ESP_ERR_INVALID_STATE;
     }
-    return ESP_ERR_NOT_SUPPORTED;
+    if (xSemaphoreTake(mutex_execucao, 0) != pdTRUE) {
+        ESP_LOGW(ETIQUETA, "Já existe uma atualização OTA em andamento");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const esp_partition_t* particao_atual = esp_ota_get_running_partition();
+    const esp_partition_t* particao_destino = esp_ota_get_next_update_partition(nullptr);
+    if (particao_atual == nullptr || particao_destino == nullptr) {
+        xSemaphoreGive(mutex_execucao);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    esp_http_client_config_t http{};
+    http.url = endereco_https.data();
+    http.cert_pem = certificado_raiz;
+    http.crt_bundle_attach = certificado_raiz == nullptr ? esp_crt_bundle_attach : nullptr;
+    http.timeout_ms = static_cast<int>(tempo_limite_ms);
+    http.keep_alive_enable = true;
+    http.max_redirection_count = 8;
+    http.user_agent = "UFSM-Carro-Mestre-OTA/1";
+
+    esp_https_ota_config_t ota{};
+    ota.http_config = &http;
+
+    ESP_LOGW(ETIQUETA, "Iniciando gravação OTA na partição '%s'", particao_destino->label);
+    esp_https_ota_handle_t manipulador = nullptr;
+    esp_err_t erro = esp_https_ota_begin(&ota, &manipulador);
+    if (erro != ESP_OK) {
+        ESP_LOGE(ETIQUETA, "Falha ao iniciar download: %s", esp_err_to_name(erro));
+        xSemaphoreGive(mutex_execucao);
+        return erro;
+    }
+
+    esp_app_desc_t nova_imagem{};
+    erro = esp_https_ota_get_img_desc(manipulador, &nova_imagem);
+    if (erro != ESP_OK) {
+        ESP_LOGE(ETIQUETA, "Cabeçalho da nova imagem inválido: %s", esp_err_to_name(erro));
+        esp_https_ota_abort(manipulador);
+        xSemaphoreGive(mutex_execucao);
+        return erro;
+    }
+
+    const esp_app_desc_t* imagem_atual = esp_app_get_description();
+    ESP_LOGI(ETIQUETA, "Imagem atual=%s nova=%s", imagem_atual->version, nova_imagem.version);
+    if (std::strcmp(nova_imagem.version, versao_esperada.data()) != 0) {
+        ESP_LOGE(ETIQUETA, "Versão da imagem (%s) difere do manifesto (%s)",
+                 nova_imagem.version, versao_esperada.data());
+        esp_https_ota_abort(manipulador);
+        xSemaphoreGive(mutex_execucao);
+        return ESP_ERR_INVALID_VERSION;
+    }
+    if (std::strcmp(imagem_atual->version, nova_imagem.version) == 0) {
+        ESP_LOGW(ETIQUETA, "A imagem recebida possui a mesma versão em execução");
+        esp_https_ota_abort(manipulador);
+        xSemaphoreGive(mutex_execucao);
+        return ESP_ERR_INVALID_VERSION;
+    }
+
+    const int tamanho_total = esp_https_ota_get_image_size(manipulador);
+    if (tamanho_total > 0 && static_cast<size_t>(tamanho_total) > particao_destino->size) {
+        ESP_LOGE(ETIQUETA, "Imagem de %d bytes excede a partição de %lu bytes",
+                 tamanho_total, static_cast<unsigned long>(particao_destino->size));
+        esp_https_ota_abort(manipulador);
+        xSemaphoreGive(mutex_execucao);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    int ultimo_percentual = -10;
+    do {
+        erro = esp_https_ota_perform(manipulador);
+        const int recebidos = esp_https_ota_get_image_len_read(manipulador);
+        if (tamanho_total > 0 && recebidos >= 0) {
+            const int percentual = (recebidos * 100) / tamanho_total;
+            if (percentual >= ultimo_percentual + 10) {
+                ultimo_percentual = percentual;
+                ESP_LOGI(ETIQUETA, "Download OTA: %d%% (%d/%d bytes)", percentual,
+                         recebidos, tamanho_total);
+            }
+        }
+    } while (erro == ESP_ERR_HTTPS_OTA_IN_PROGRESS);
+
+    if (erro != ESP_OK || !esp_https_ota_is_complete_data_received(manipulador)) {
+        if (erro == ESP_OK) erro = ESP_ERR_HTTP_INCOMPLETE_DATA;
+        ESP_LOGE(ETIQUETA, "Download OTA incompleto: %s", esp_err_to_name(erro));
+        esp_https_ota_abort(manipulador);
+        xSemaphoreGive(mutex_execucao);
+        return erro;
+    }
+
+    erro = esp_https_ota_finish(manipulador);
+    if (erro == ESP_OK) erro = verificar_sha256(particao_destino);
+    if (erro != ESP_OK) {
+        ESP_LOGE(ETIQUETA, "Imagem OTA rejeitada: %s", esp_err_to_name(erro));
+        esp_err_t erro_restaura = esp_ota_set_boot_partition(particao_atual);
+        if (erro_restaura != ESP_OK) {
+            ESP_LOGE(ETIQUETA, "Falha crítica ao restaurar partição de boot: %s",
+                     esp_err_to_name(erro_restaura));
+        }
+        xSemaphoreGive(mutex_execucao);
+        return erro;
+    }
+
+    ESP_LOGI(ETIQUETA, "Imagem gravada, validada e selecionada para o próximo boot");
+    xSemaphoreGive(mutex_execucao);
+    return ESP_OK;
+}
+
+esp_err_t gerenciador_ota_confirmar_firmware_em_execucao() {
+    esp_ota_img_states_t estado;
+    if (!obter_estado_em_execucao(&estado) || estado != ESP_OTA_IMG_PENDING_VERIFY) return ESP_OK;
+    esp_err_t erro = esp_ota_mark_app_valid_cancel_rollback();
+    if (erro == ESP_OK) ESP_LOGI(ETIQUETA, "Novo firmware confirmado como válido");
+    else ESP_LOGE(ETIQUETA, "Falha ao confirmar firmware: %s", esp_err_to_name(erro));
+    return erro;
+}
+
+esp_err_t gerenciador_ota_rejeitar_firmware_em_execucao() {
+    esp_ota_img_states_t estado;
+    if (!obter_estado_em_execucao(&estado) || estado != ESP_OTA_IMG_PENDING_VERIFY) return ESP_OK;
+    ESP_LOGE(ETIQUETA, "Autoteste falhou; retornando ao firmware anterior");
+    return esp_ota_mark_app_invalid_rollback_and_reboot();
 }
 
 bool gerenciador_ota_esta_configurado() { return configurado; }

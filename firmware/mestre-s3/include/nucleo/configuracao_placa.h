@@ -33,9 +33,8 @@ constexpr int TAMANHO_BUFFER_UART_TX = 1024;
 constexpr uint32_t TEMPO_LIMITE_UART_MS = 20;
 constexpr int INTERVALO_TELEMETRIA_MS = 500;
 
-// I2S, SD e OTA permanecem desabilitados até a definição de hardware e política.
+// I2S e SD permanecem desabilitados até a definição de hardware.
 constexpr bool HABILITAR_I2S = false;
 constexpr bool HABILITAR_CARTAO_SD = false;
-constexpr bool HABILITAR_OTA = false;
 
 }  // namespace configuracao

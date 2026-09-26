@@ -10,13 +10,17 @@ O código ativo está dividido por responsabilidade:
 
 ## Estado atual
 
-UART e I2C possuem implementação funcional. I2S, OTA e cartão SD possuem contratos,
+UART, I2C e OTA possuem implementação funcional. I2S e cartão SD possuem contratos,
 validação de argumentos, estados e códigos de erro, mas permanecem desabilitados em
 `nucleo/configuracao_placa.h`. Eles devem ser completados depois que forem definidos:
 
 - I2S: direção, formato, DMA e pinos de clock/dados.
-- OTA: conexão de rede, servidor HTTPS, certificado e tabela de partições.
 - SD: SPI ou SDMMC, pinagem, ponto de montagem e política de gravação.
+
+O OTA usa Wi-Fi em modo estação, HTTPS com o pacote de certificados do ESP-IDF,
+manifesto no GitHub Release, SHA-256, duas partições de aplicação e rollback. A
+orquestração e a autorização ficam em `servicos/servico_ota.cpp`; acesso a Wi-Fi e
+gravação da imagem ficam nos respectivos gerenciadores.
 
 Os gerenciadores retornam `esp_err_t`. O código chamador deve sempre verificar o
 resultado antes de usar os dados ou avançar para a próxima etapa.

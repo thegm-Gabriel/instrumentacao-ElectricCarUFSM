@@ -11,6 +11,17 @@ idf_component_register(
     SRCS ${app_sources}
     INCLUDE_DIRS
         "../include"
-        "../../../compartilhado/protocolos"
-        "../../../compartilhado/telemetria"
-        "../../../compartilhado/comum")
+        "../../compartilhado/protocolos"
+        "../../compartilhado/telemetria"
+        "../../compartilhado/comum"
+    PRIV_REQUIRES
+        app_update
+        esp_http_client
+        esp_https_ota
+        esp_netif
+        esp_psram
+        esp_wifi
+        json
+        mbedtls
+        nvs_flash
+        spi_flash)
