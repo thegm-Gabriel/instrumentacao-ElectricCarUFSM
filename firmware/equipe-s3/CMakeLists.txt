@@ -1,3 +1,8 @@
 cmake_minimum_required(VERSION 3.16.0)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+if(DEFINED ENV{VERSAO_FIRMWARE})
+    set(PROJECT_VER "$ENV{VERSAO_FIRMWARE}")
+else()
+    set(PROJECT_VER "0.1.0")
+endif()
 project(esp32s3_equipe)
