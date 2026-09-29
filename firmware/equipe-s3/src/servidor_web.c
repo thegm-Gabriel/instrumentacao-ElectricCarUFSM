@@ -16,6 +16,7 @@
 #include "freertos/task.h"
 #include "gerenciador_uart.h"
 #include "lwip/sockets.h"
+#include "painel_mestre_web.h"
 #include "protocolo_comandos.h"
 #include "receptor_uart.h"
 #include "servico_comandos_satelite.h"
@@ -78,25 +79,6 @@ static const char pagina_diagnostico_html[] =
     "<div class=c><div class=r>Comandos ao mestre</div><div class=v id=comandos>—</div></div></div>"
     "<script>function v(i,x){document.getElementById(i).textContent=x}async function a(){try{let d=await(await fetch('/api/diagnostico',{cache:'no-store'})).json();let ok=d.valido&&d.idade_ms<2000;v('estado',ok?'Recebendo · '+d.idade_ms+' ms':'Sem dados recentes');document.getElementById('estado').className='v '+(ok?'ok':'erro');v('versao',d.versao_firmware+' · protocolo v'+d.versao_protocolo);v('uptime',(d.tempo_ativo_ms/1000).toFixed(0)+' s');v('heap',(d.heap_livre/1024).toFixed(1)+' / '+(d.heap_minimo/1024).toFixed(1)+' KiB');v('clientes',d.clientes_wifi);v('taxa',(d.taxa_pacotes_centesimos_hz/100).toFixed(2)+' pkt/s · '+d.intervalo_medio_ms+' ms');v('atraso',d.jitter_medio_ms+' / '+d.latencia_relativa_ms+' ms');v('pacotes',d.pacotes_validos+' / '+d.pacotes_invalidos);v('sequencia',d.pacotes_perdidos+' / '+d.pacotes_duplicados);v('erros',d.falhas_crc+' / '+d.falhas_cabecalho+' / '+d.falhas_conteudo);v('bytes',d.bytes_recebidos+' / '+d.bytes_enviados+' bytes');v('fisicos',d.erros_fisicos);v('comandos',d.comandos_ok+' respostas · '+d.comandos_timeout+' timeout(s)')}catch(e){v('estado','Falha ao consultar diagnóstico')}}a();setInterval(a,1000)</script>";
 
-static const char pagina_mestre_html[] =
-    "<!doctype html><html lang=pt-BR><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
-    "<title>Mestre remoto | UFSM Carro</title><style>*{box-sizing:border-box}body{margin:0;background:#101720;color:#e8edf2;font:16px Arial}main{max-width:850px;margin:auto;padding:24px}h1{color:#f5b942}a{color:#f5b942}.acoes{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}button{background:#263544;color:#e8edf2;border:1px solid #40556a;padding:14px;border-radius:8px;text-align:left;font-size:1rem}button:hover{border-color:#f5b942}button:disabled{opacity:.55}.confirmacao{margin:18px 0;padding:16px;border:1px solid #f5b942;border-radius:9px;background:#1b2633}.confirmacao[hidden]{display:none}.confirmacao button{margin:8px 8px 0 0}.estado{padding:10px 13px;border-radius:8px;background:#263544}.processando{color:#f5b942}.sucesso{color:#65db8a}.erro{color:#ff8080}pre{min-height:220px;white-space:pre-wrap;background:#071019;color:#65db8a;padding:16px;border-radius:9px;overflow:auto}</style><main>"
-    "<h1>Terminal remoto do mestre</h1><p><a href=/>← Voltar ao painel</a></p>"
-    "<p>As consultas são enviadas pela UART somente quando solicitadas.</p><div id=estado class=estado>Pronto para enviar comandos.</div><h2>Consultas</h2><div class=acoes>"
-    "<button onclick=enviar('ping')>[1] Ping e latência</button><button onclick=enviar('versao')>[2] Versão e capacidades</button>"
-    "<button onclick=enviar('saude')>[3] Saúde do sistema</button><button onclick=enviar('telemetria')>[4] Última telemetria</button>"
-    "<button onclick=enviar('uart')>[5] Estado da UART</button><button onclick=enviar('ota')>[6] Estado da OTA</button>"
-    "<button onclick=enviar('wifi')>[7] Estado do Wi-Fi</button></div><h2>Ações confirmadas</h2><div class=acoes>"
-    "<button onclick=\"preparar('verificar_ota','Solicitar verificação de atualizações?')\">[8] Verificar atualizações</button>"
-    "<button onclick=\"preparar('autorizar_mestre','Autorizar a OTA do mestre?')\">[9] Autorizar OTA do mestre</button>"
-    "<button onclick=\"preparar('autorizar_equipe','Autorizar a OTA do satélite da equipe?')\">[10] Autorizar OTA da equipe</button>"
-    "<button onclick=\"preparar('autorizar_visitantes','Autorizar a OTA do satélite de visitantes?')\">[11] Autorizar OTA de visitantes</button>"
-    "<button onclick=\"preparar('cancelar_ota','Cancelar as atualizações pendentes?')\">[12] Cancelar OTA pendente</button>"
-    "<button onclick=\"preparar('resumo_terminal','Solicitar um resumo no terminal serial do mestre?')\">[13] Resumo no terminal do mestre</button></div>"
-    "<div id=confirmacao class=confirmacao hidden><strong id=pergunta></strong><br><button onclick=confirmar()>Confirmar</button><button onclick=cancelar()>Voltar</button></div>"
-    "<h2>Resposta</h2><pre id=saida>Escolha uma consulta.</pre></main>"
-    "<script>let pendente='',cicloOta=0,ocupado=false;const saida=document.getElementById('saida'),estado=document.getElementById('estado'),caixa=document.getElementById('confirmacao');function mensagem(t,c){estado.textContent=t;estado.className='estado '+c}function bloquear(v){ocupado=v;document.querySelectorAll('button').forEach(b=>b.disabled=v)}function preparar(c,m){if(ocupado)return;pendente=c;document.getElementById('pergunta').textContent=m;caixa.hidden=false;mensagem('Confirme a ação abaixo.','processando');caixa.scrollIntoView()}function cancelar(){pendente='';caixa.hidden=true;mensagem('Ação cancelada.','')}async function enviar(c,metodo='GET',silencioso=false){if(ocupado&&!silencioso)return null;caixa.hidden=true;if(!silencioso){bloquear(true);saida.className='';saida.textContent='Enviando '+c+' ao mestre...';mensagem('Aguardando resposta do mestre pela UART...','processando')}let controlador=new AbortController(),limite=setTimeout(()=>controlador.abort(),12000);try{let r=await fetch('/api/mestre?consulta='+encodeURIComponent(c),{method:metodo,cache:'no-store',signal:controlador.signal});let texto=await r.text(),d;try{d=JSON.parse(texto)}catch(_){throw new Error('resposta HTTP inválida: '+texto)}saida.textContent=JSON.stringify(d,null,2);if(!r.ok||d.ok===false){saida.className='erro';mensagem(d.erro||'Comando recusado pelo mestre.','erro')}else{saida.className='';mensagem('Resposta recebida com sucesso.','sucesso')}return d}catch(e){saida.textContent='Falha ao comunicar com o mestre: '+(e.name==='AbortError'?'tempo limite excedido':e.message);saida.className='erro';mensagem('Não foi possível concluir o comando.','erro');return null}finally{clearTimeout(limite);if(!silencioso)bloquear(false)}}async function confirmar(){if(!pendente)return;let c=pendente;pendente='';caixa.hidden=true;let d=await enviar(c,'POST');if(d&&d.ok&&c!=='resumo_terminal'){let meu=++cicloOta;acompanharOta(meu)}}async function acompanharOta(meu){for(let i=0;i<90&&meu===cicloOta;i++){await new Promise(r=>setTimeout(r,2000));let d=await enviar('ota','GET',true);if(!d||!d.ok)return;if(i>0&&![2,3,6].includes(d.estado))return}}</script></html>";
-
 static esp_err_t responder_painel(httpd_req_t *requisicao)
 {
     httpd_resp_set_type(requisicao, "text/html; charset=utf-8");
@@ -107,7 +89,8 @@ static esp_err_t responder_mestre_pagina(httpd_req_t *requisicao)
 {
     httpd_resp_set_hdr(requisicao, "Cache-Control", "no-store, max-age=0");
     httpd_resp_set_type(requisicao, "text/html; charset=utf-8");
-    return httpd_resp_send(requisicao, pagina_mestre_html, HTTPD_RESP_USE_STRLEN);
+    return httpd_resp_send(requisicao, PAGINA_MESTRE_WEB,
+                           HTTPD_RESP_USE_STRLEN);
 }
 
 static void escapar_texto_json(char *destino, size_t capacidade,
@@ -132,6 +115,7 @@ static codigo_comando_t localizar_consulta_mestre(const char *consulta)
 {
     if (strcmp(consulta, "ping") == 0) return COMANDO_PING;
     if (strcmp(consulta, "versao") == 0) return COMANDO_OBTER_VERSAO;
+    if (strcmp(consulta, "capacidades") == 0) return COMANDO_OBTER_CAPACIDADES;
     if (strcmp(consulta, "saude") == 0) return COMANDO_OBTER_SAUDE;
     if (strcmp(consulta, "telemetria") == 0) return COMANDO_OBTER_TELEMETRIA;
     if (strcmp(consulta, "uart") == 0) return COMANDO_OBTER_ESTADO_UART;
@@ -192,6 +176,19 @@ static esp_err_t enviar_json_comando(httpd_req_t *requisicao,
     return httpd_resp_send(requisicao, json, HTTPD_RESP_USE_STRLEN);
 }
 
+static void codificar_hexadecimal(char *destino, size_t capacidade,
+                                  const uint8_t *dados, size_t tamanho)
+{
+    static const char DIGITOS[] = "0123456789ABCDEF";
+    if (destino == NULL || capacidade == 0) return;
+    size_t saida = 0;
+    for (size_t indice = 0; indice < tamanho && saida + 2 < capacidade; ++indice) {
+        destino[saida++] = DIGITOS[dados[indice] >> 4];
+        destino[saida++] = DIGITOS[dados[indice] & 0x0Fu];
+    }
+    destino[saida] = '\0';
+}
+
 static esp_err_t responder_mestre_api(httpd_req_t *requisicao)
 {
     char consulta_url[64] = {0};
@@ -221,41 +218,61 @@ static esp_err_t responder_mestre_api(httpd_req_t *requisicao)
     uint8_t resposta[COMANDO_TAMANHO_MAXIMO_CARGA] = {0};
     uint16_t tamanho_resposta = 0;
     codigo_resposta_comando_t resultado = RESPOSTA_COMANDO_TIMEOUT;
-    const int64_t inicio_us = esp_timer_get_time();
-    const esp_err_t erro = servico_comandos_satelite_solicitar(
+    informacoes_solicitacao_comando_t informacoes = {0};
+    const esp_err_t erro = servico_comandos_satelite_solicitar_detalhado(
         comando, NULL, 0, resposta, sizeof(resposta), &tamanho_resposta,
-        &resultado, pdMS_TO_TICKS(1500));
+        &resultado, pdMS_TO_TICKS(1500), &informacoes);
     if (erro != ESP_OK) {
         if (acao) {
             ESP_LOGW(TAG, "Mestre não confirmou a ação '%s': %s",
                      consulta, esp_err_to_name(erro));
         }
-        char json[160];
+        char json[384];
         snprintf(json, sizeof(json),
-                 "{\"ok\":false,\"erro\":\"%s\",\"codigo_esp\":%ld}",
+                 "{\"ok\":false,\"consulta\":\"%s\",\"comando\":%u,"
+                 "\"solicitacao\":%lu,\"tentativas\":%u,\"duracao_ms\":%lu,"
+                 "\"erro\":\"%s\",\"codigo_esp\":%ld}",
+                 consulta, (unsigned)comando,
+                 (unsigned long)informacoes.identificador,
+                 (unsigned)informacoes.tentativas,
+                 (unsigned long)informacoes.duracao_ms,
                  esp_err_to_name(erro), (long)erro);
-        return enviar_json_comando(requisicao, "504 Gateway Timeout", json);
+        return enviar_json_comando(
+            requisicao, erro == ESP_ERR_TIMEOUT
+                             ? "504 Gateway Timeout" : "502 Bad Gateway",
+            json);
     }
     if (resultado != RESPOSTA_COMANDO_OK) {
         if (acao) {
             ESP_LOGW(TAG, "Mestre recusou a ação '%s' com resultado %u",
                      consulta, (unsigned)resultado);
         }
-        char json[128];
+        char json[384];
         snprintf(json, sizeof(json),
-                 "{\"ok\":false,\"erro\":\"%.63s\",\"resultado\":%u}",
-                 descrever_resultado_comando(resultado), (unsigned)resultado);
+                 "{\"ok\":false,\"consulta\":\"%s\",\"comando\":%u,"
+                 "\"solicitacao\":%lu,\"resultado\":%u,\"tentativas\":%u,"
+                 "\"duracao_ms\":%lu,\"erro\":\"%.63s\"}",
+                 consulta, (unsigned)comando,
+                 (unsigned long)informacoes.identificador, (unsigned)resultado,
+                 (unsigned)informacoes.tentativas,
+                 (unsigned long)informacoes.duracao_ms,
+                 descrever_resultado_comando(resultado));
         return enviar_json_comando(requisicao, "409 Conflict", json);
     }
 
-    char json[512];
+    char json[1536];
     int tamanho = -1;
     if (comando == COMANDO_PING && tamanho_resposta == sizeof(resposta_comando_ping_t)) {
         resposta_comando_ping_t dados;
         memcpy(&dados, resposta, sizeof(dados));
         tamanho = snprintf(json, sizeof(json),
-            "{\"ok\":true,\"consulta\":\"ping\",\"rtt_ms\":%lu,\"tempo_ativo_ms\":%lu}",
-            (unsigned long)((esp_timer_get_time() - inicio_us) / 1000),
+            "{\"ok\":true,\"consulta\":\"ping\",\"comando\":%u,\"solicitacao\":%lu,"
+            "\"resultado\":0,\"tentativas\":%u,\"duracao_ms\":%lu,"
+            "\"rtt_ms\":%lu,\"tempo_ativo_ms\":%lu}",
+            (unsigned)comando, (unsigned long)informacoes.identificador,
+            (unsigned)informacoes.tentativas,
+            (unsigned long)informacoes.duracao_ms,
+            (unsigned long)informacoes.duracao_ms,
             (unsigned long)dados.tempo_ativo_ms);
     } else if (comando == COMANDO_OBTER_VERSAO &&
                tamanho_resposta == sizeof(resposta_comando_versao_t)) {
@@ -265,15 +282,36 @@ static esp_err_t responder_mestre_api(httpd_req_t *requisicao)
         dados.versao[sizeof(dados.versao) - 1] = '\0';
         escapar_texto_json(versao, sizeof(versao), dados.versao);
         tamanho = snprintf(json, sizeof(json),
-            "{\"ok\":true,\"consulta\":\"versao\",\"firmware\":\"%s\",\"capacidades\":%lu,\"no\":%u}",
-            versao, (unsigned long)dados.capacidades, (unsigned)dados.no);
+            "{\"ok\":true,\"consulta\":\"versao\",\"comando\":%u,\"solicitacao\":%lu,"
+            "\"resultado\":0,\"tentativas\":%u,\"duracao_ms\":%lu,"
+            "\"firmware\":\"%s\",\"capacidades\":%lu,\"no\":%u}",
+            (unsigned)comando, (unsigned long)informacoes.identificador,
+            (unsigned)informacoes.tentativas,
+            (unsigned long)informacoes.duracao_ms, versao,
+            (unsigned long)dados.capacidades, (unsigned)dados.no);
+    } else if (comando == COMANDO_OBTER_CAPACIDADES &&
+               tamanho_resposta == sizeof(resposta_comando_capacidades_t)) {
+        resposta_comando_capacidades_t dados;
+        memcpy(&dados, resposta, sizeof(dados));
+        tamanho = snprintf(json, sizeof(json),
+            "{\"ok\":true,\"consulta\":\"capacidades\",\"comando\":%u,\"solicitacao\":%lu,"
+            "\"resultado\":0,\"tentativas\":%u,\"duracao_ms\":%lu,\"capacidades\":%lu}",
+            (unsigned)comando, (unsigned long)informacoes.identificador,
+            (unsigned)informacoes.tentativas,
+            (unsigned long)informacoes.duracao_ms,
+            (unsigned long)dados.capacidades);
     } else if (comando == COMANDO_OBTER_SAUDE &&
                tamanho_resposta == sizeof(resposta_comando_saude_t)) {
         resposta_comando_saude_t dados;
         memcpy(&dados, resposta, sizeof(dados));
         tamanho = snprintf(json, sizeof(json),
-            "{\"ok\":true,\"consulta\":\"saude\",\"estado\":%u,\"causas_ativas\":%lu,\"tempo_ativo_ms\":%lu,\"heap_livre\":%lu,\"erros_historicos\":%lu}",
-            (unsigned)dados.estado, (unsigned long)dados.causas_ativas,
+            "{\"ok\":true,\"consulta\":\"saude\",\"comando\":%u,\"solicitacao\":%lu,"
+            "\"resultado\":0,\"tentativas\":%u,\"duracao_ms\":%lu,\"estado\":%u,"
+            "\"causas_ativas\":%lu,\"tempo_ativo_ms\":%lu,\"heap_livre\":%lu,\"erros_historicos\":%lu}",
+            (unsigned)comando, (unsigned long)informacoes.identificador,
+            (unsigned)informacoes.tentativas,
+            (unsigned long)informacoes.duracao_ms, (unsigned)dados.estado,
+            (unsigned long)dados.causas_ativas,
             (unsigned long)dados.tempo_ativo_ms, (unsigned long)dados.heap_livre,
             (unsigned long)dados.erros_historicos);
     } else if (comando == COMANDO_OBTER_TELEMETRIA &&
@@ -281,8 +319,13 @@ static esp_err_t responder_mestre_api(httpd_req_t *requisicao)
         resposta_comando_telemetria_t dados;
         memcpy(&dados, resposta, sizeof(dados));
         tamanho = snprintf(json, sizeof(json),
-            "{\"ok\":true,\"consulta\":\"telemetria\",\"sequencia\":%u,\"tempo_mestre_ms\":%lu,\"adc\":%u,\"velocidade_kmh\":%.2f,\"carga_percentual\":%.1f}",
-            (unsigned)dados.sequencia, (unsigned long)dados.tempo_mestre_ms,
+            "{\"ok\":true,\"consulta\":\"telemetria\",\"comando\":%u,\"solicitacao\":%lu,"
+            "\"resultado\":0,\"tentativas\":%u,\"duracao_ms\":%lu,\"sequencia\":%u,"
+            "\"tempo_mestre_ms\":%lu,\"adc\":%u,\"velocidade_kmh\":%.2f,\"carga_percentual\":%.1f}",
+            (unsigned)comando, (unsigned long)informacoes.identificador,
+            (unsigned)informacoes.tentativas,
+            (unsigned long)informacoes.duracao_ms, (unsigned)dados.sequencia,
+            (unsigned long)dados.tempo_mestre_ms,
             (unsigned)dados.tensao_adc_bruta,
             dados.velocidade_centesimos_kmh / 100.0,
             dados.carga_decimos_percentual / 10.0);
@@ -291,9 +334,59 @@ static esp_err_t responder_mestre_api(httpd_req_t *requisicao)
         resposta_comando_uart_t dados;
         memcpy(&dados, resposta, sizeof(dados));
         tamanho = snprintf(json, sizeof(json),
-            "{\"ok\":true,\"consulta\":\"uart\",\"envios\":%lu,\"recepcoes\":%lu,\"erros\":%lu,\"descartes\":%lu}",
+            "{\"ok\":true,\"consulta\":\"uart\",\"comando\":%u,\"solicitacao\":%lu,"
+            "\"resultado\":0,\"tentativas\":%u,\"duracao_ms\":%lu,\"envios\":%lu,"
+            "\"recepcoes\":%lu,\"erros\":%lu,\"descartes\":%lu}",
+            (unsigned)comando, (unsigned long)informacoes.identificador,
+            (unsigned)informacoes.tentativas,
+            (unsigned long)informacoes.duracao_ms,
             (unsigned long)dados.envios, (unsigned long)dados.recepcoes,
             (unsigned long)dados.erros, (unsigned long)dados.descartes);
+    } else if (comando == COMANDO_OBTER_ESTADO_OTA &&
+               tamanho_resposta == sizeof(resposta_comando_ota_detalhada_t)) {
+        resposta_comando_ota_detalhada_t dados;
+        char mestre_atual[37], mestre_disponivel[37];
+        char equipe_atual[37], equipe_disponivel[37];
+        char visitantes_atual[37], visitantes_disponivel[37];
+        memcpy(&dados, resposta, sizeof(dados));
+        if (dados.versao_formato != COMANDO_FORMATO_OTA_DETALHADO) {
+            ESP_LOGW(TAG, "Resposta OTA detalhada com formato desconhecido: %u",
+                     (unsigned)dados.versao_formato);
+            return enviar_json_comando(
+                requisicao, "502 Bad Gateway",
+                "{\"ok\":false,\"erro\":\"formato da resposta OTA não suportado\"}");
+        }
+        dados.versao_mestre_atual[sizeof(dados.versao_mestre_atual) - 1] = '\0';
+        dados.versao_mestre_disponivel[sizeof(dados.versao_mestre_disponivel) - 1] = '\0';
+        dados.versao_equipe_atual[sizeof(dados.versao_equipe_atual) - 1] = '\0';
+        dados.versao_equipe_disponivel[sizeof(dados.versao_equipe_disponivel) - 1] = '\0';
+        dados.versao_visitantes_atual[sizeof(dados.versao_visitantes_atual) - 1] = '\0';
+        dados.versao_visitantes_disponivel[sizeof(dados.versao_visitantes_disponivel) - 1] = '\0';
+        escapar_texto_json(mestre_atual, sizeof(mestre_atual), dados.versao_mestre_atual);
+        escapar_texto_json(mestre_disponivel, sizeof(mestre_disponivel), dados.versao_mestre_disponivel);
+        escapar_texto_json(equipe_atual, sizeof(equipe_atual), dados.versao_equipe_atual);
+        escapar_texto_json(equipe_disponivel, sizeof(equipe_disponivel), dados.versao_equipe_disponivel);
+        escapar_texto_json(visitantes_atual, sizeof(visitantes_atual), dados.versao_visitantes_atual);
+        escapar_texto_json(visitantes_disponivel, sizeof(visitantes_disponivel), dados.versao_visitantes_disponivel);
+        tamanho = snprintf(json, sizeof(json),
+            "{\"ok\":true,\"consulta\":\"ota\",\"comando\":%u,\"solicitacao\":%lu,"
+            "\"resultado\":0,\"tentativas\":%u,\"duracao_ms\":%lu,\"formato\":%u,"
+            "\"estado\":%u,\"alvo\":%u,\"falhas\":%lu,\"verificacoes\":%lu,"
+            "\"mestre\":{\"estado\":%u,\"progresso_percentual\":%.1f,\"versao_atual\":\"%s\",\"versao_disponivel\":\"%s\"},"
+            "\"equipe\":{\"estado\":%u,\"progresso_percentual\":%.1f,\"versao_atual\":\"%s\",\"versao_disponivel\":\"%s\"},"
+            "\"visitantes\":{\"estado\":%u,\"progresso_percentual\":%.1f,\"versao_atual\":\"%s\",\"versao_disponivel\":\"%s\"}}",
+            (unsigned)comando, (unsigned long)informacoes.identificador,
+            (unsigned)informacoes.tentativas,
+            (unsigned long)informacoes.duracao_ms,
+            (unsigned)dados.versao_formato, (unsigned)dados.estado,
+            (unsigned)dados.alvo_ativo, (unsigned long)dados.falhas,
+            (unsigned long)dados.verificacoes, (unsigned)dados.estado_mestre,
+            dados.progresso_mestre_decimos / 10.0, mestre_atual, mestre_disponivel,
+            (unsigned)dados.estado_equipe,
+            dados.progresso_equipe_decimos / 10.0, equipe_atual, equipe_disponivel,
+            (unsigned)dados.estado_visitantes,
+            dados.progresso_visitantes_decimos / 10.0,
+            visitantes_atual, visitantes_disponivel);
     } else if (comando == COMANDO_OBTER_ESTADO_OTA &&
                tamanho_resposta == sizeof(resposta_comando_ota_t)) {
         resposta_comando_ota_t dados;
@@ -304,7 +397,13 @@ static esp_err_t responder_mestre_api(httpd_req_t *requisicao)
         escapar_texto_json(atual, sizeof(atual), dados.versao_atual);
         escapar_texto_json(disponivel, sizeof(disponivel), dados.versao_disponivel);
         tamanho = snprintf(json, sizeof(json),
-            "{\"ok\":true,\"consulta\":\"ota\",\"estado\":%u,\"alvo\":%u,\"progresso_percentual\":%.1f,\"falhas\":%lu,\"versao_atual\":\"%s\",\"versao_disponivel\":\"%s\"}",
+            "{\"ok\":true,\"consulta\":\"ota\",\"comando\":%u,\"solicitacao\":%lu,"
+            "\"resultado\":0,\"tentativas\":%u,\"duracao_ms\":%lu,\"formato\":1,"
+            "\"estado\":%u,\"alvo\":%u,\"progresso_percentual\":%.1f,\"falhas\":%lu,"
+            "\"versao_atual\":\"%s\",\"versao_disponivel\":\"%s\"}",
+            (unsigned)comando, (unsigned long)informacoes.identificador,
+            (unsigned)informacoes.tentativas,
+            (unsigned long)informacoes.duracao_ms,
             (unsigned)dados.estado, (unsigned)dados.alvo,
             dados.progresso_decimos / 10.0, (unsigned long)dados.falhas,
             atual, disponivel);
@@ -316,7 +415,12 @@ static esp_err_t responder_mestre_api(httpd_req_t *requisicao)
         dados.rede[sizeof(dados.rede) - 1] = '\0';
         escapar_texto_json(rede, sizeof(rede), dados.rede);
         tamanho = snprintf(json, sizeof(json),
-            "{\"ok\":true,\"consulta\":\"wifi\",\"radio_ativo\":%s,\"conectado\":%s,\"rssi_dbm\":%d,\"canal\":%u,\"rede\":\"%s\"}",
+            "{\"ok\":true,\"consulta\":\"wifi\",\"comando\":%u,\"solicitacao\":%lu,"
+            "\"resultado\":0,\"tentativas\":%u,\"duracao_ms\":%lu,"
+            "\"radio_ativo\":%s,\"conectado\":%s,\"rssi_dbm\":%d,\"canal\":%u,\"rede\":\"%s\"}",
+            (unsigned)comando, (unsigned long)informacoes.identificador,
+            (unsigned)informacoes.tentativas,
+            (unsigned long)informacoes.duracao_ms,
             dados.radio_ativo ? "true" : "false",
             dados.conectado ? "true" : "false", dados.rssi_dbm,
             (unsigned)dados.canal, rede);
@@ -330,16 +434,42 @@ static esp_err_t responder_mestre_api(httpd_req_t *requisicao)
         }
         ESP_LOGI(TAG, "Mestre confirmou a ação '%s'", consulta);
         tamanho = snprintf(json, sizeof(json),
-            "{\"ok\":true,\"acao\":\"%s\",\"confirmada\":true,\"tempo_mestre_ms\":%lu,\"mensagem\":\"solicitação aceita; acompanhando o estado\"}",
-            consulta, (unsigned long)dados.tempo_mestre_ms);
+            "{\"ok\":true,\"consulta\":\"%s\",\"acao\":\"%s\",\"comando\":%u,"
+            "\"solicitacao\":%lu,\"resultado\":0,\"tentativas\":%u,\"duracao_ms\":%lu,"
+            "\"confirmada\":true,\"tempo_mestre_ms\":%lu,"
+            "\"mensagem\":\"solicitação aceita pelo mestre\"}",
+            consulta, consulta, (unsigned)comando,
+            (unsigned long)informacoes.identificador,
+            (unsigned)informacoes.tentativas,
+            (unsigned long)informacoes.duracao_ms,
+            (unsigned long)dados.tempo_mestre_ms);
     } else if (acao && tamanho_resposta == 0) {
         // Compatibilidade durante a atualização gradual: a primeira versão
         // dos comandos confirmava a ação somente pelo código do cabeçalho.
         ESP_LOGW(TAG, "Mestre confirmou a ação '%s' no formato legado",
                  consulta);
         tamanho = snprintf(json, sizeof(json),
-            "{\"ok\":true,\"acao\":\"%s\",\"confirmada\":true,\"formato\":\"legado\",\"mensagem\":\"solicitação aceita; acompanhando o estado\"}",
-            consulta);
+            "{\"ok\":true,\"consulta\":\"%s\",\"acao\":\"%s\",\"comando\":%u,"
+            "\"solicitacao\":%lu,\"resultado\":0,\"tentativas\":%u,\"duracao_ms\":%lu,"
+            "\"confirmada\":true,\"formato\":\"legado\","
+            "\"mensagem\":\"solicitação aceita pelo mestre\"}",
+            consulta, consulta, (unsigned)comando,
+            (unsigned long)informacoes.identificador,
+            (unsigned)informacoes.tentativas,
+            (unsigned long)informacoes.duracao_ms);
+    } else if (!acao) {
+        char carga_hex[COMANDO_TAMANHO_MAXIMO_CARGA * 2 + 1];
+        codificar_hexadecimal(carga_hex, sizeof(carga_hex), resposta,
+                              tamanho_resposta);
+        tamanho = snprintf(json, sizeof(json),
+            "{\"ok\":true,\"consulta\":\"%s\",\"comando\":%u,\"solicitacao\":%lu,"
+            "\"resultado\":0,\"tentativas\":%u,\"duracao_ms\":%lu,"
+            "\"formato\":\"binario\",\"tamanho_resposta\":%u,\"carga_hex\":\"%s\"}",
+            consulta, (unsigned)comando,
+            (unsigned long)informacoes.identificador,
+            (unsigned)informacoes.tentativas,
+            (unsigned long)informacoes.duracao_ms,
+            (unsigned)tamanho_resposta, carga_hex);
     }
     if (tamanho < 0 || tamanho >= (int)sizeof(json)) {
         return enviar_json_comando(requisicao, "502 Bad Gateway",
@@ -490,6 +620,8 @@ esp_err_t servidor_web_iniciar(void)
     httpd_handle_t servidor = NULL;
     httpd_config_t configuracao = HTTPD_DEFAULT_CONFIG();
     configuracao.server_port = PORTA_HTTP;
+    // Os manipuladores montam respostas de diagnóstico e OTA na pilha.
+    configuracao.stack_size = 8192;
     ESP_RETURN_ON_ERROR(httpd_start(&servidor, &configuracao), TAG, "servidor HTTP");
     const httpd_uri_t rota_painel = { .uri = "/", .method = HTTP_GET, .handler = responder_painel };
     const httpd_uri_t rota_api = { .uri = "/api/telemetria", .method = HTTP_GET, .handler = responder_telemetria };

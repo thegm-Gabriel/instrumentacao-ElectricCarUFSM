@@ -277,7 +277,7 @@ static void processar_quadro_telemetria(const uint8_t *quadro)
 static void tarefa_recepcao_uart(void *argumento)
 {
     (void)argumento;
-    uint8_t lote[256];
+    uint8_t lote[1024];
     parser_enlace_uart_t parser;
     protocolo_enlace_uart_inicializar(&parser, TELEMETRIA_INICIO_2,
                                       TAMANHO_PACOTE_TELEMETRIA);
@@ -304,7 +304,6 @@ static void tarefa_recepcao_uart(void *argumento)
                     parser.quadro, parser.ultimo_tamanho);
             }
         }
-        if (recebidos == (int)sizeof(lote)) vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
 
