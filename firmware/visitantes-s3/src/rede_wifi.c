@@ -55,7 +55,21 @@ esp_err_t rede_wifi_iniciar(void)
     configuracao_ap.ap.authmode = WIFI_AUTH_WPA2_PSK;
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_AP), TAG, "modo AP");
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_AP, &configuracao_ap), TAG, "configurar AP");
+    const wifi_bandwidth_t largura = WIFI_LARGURA_CANAL_MHZ == 40
+                                         ? WIFI_BW_HT40 : WIFI_BW_HT20;
+    ESP_RETURN_ON_ERROR(esp_wifi_set_bandwidth(WIFI_IF_AP, largura), TAG,
+                        "configurar largura do canal");
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "iniciar AP");
+    ESP_RETURN_ON_ERROR(
+        esp_wifi_set_max_tx_power((int8_t)(WIFI_POTENCIA_MAXIMA_DBM * 4)),
+        TAG, "configurar potência do rádio");
+    int8_t potencia_aplicada = 0;
+    ESP_RETURN_ON_ERROR(esp_wifi_get_max_tx_power(&potencia_aplicada), TAG,
+                        "consultar potência do rádio");
     ESP_LOGI(TAG, "AP '%s' ativo em " IPSTR, WIFI_SSID, IP2STR(&ip_info.ip));
+    ESP_LOGI(TAG,
+             "Rádio AP: canal=%u, largura=%u MHz, potência máxima=%d.%02d dBm",
+             (unsigned)WIFI_CANAL, (unsigned)WIFI_LARGURA_CANAL_MHZ,
+             potencia_aplicada / 4, (potencia_aplicada % 4) * 25);
     return ESP_OK;
 }

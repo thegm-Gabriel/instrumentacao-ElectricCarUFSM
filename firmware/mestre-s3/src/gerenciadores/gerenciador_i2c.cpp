@@ -23,9 +23,20 @@ void registrar_resultado(esp_err_t resultado, size_t escritos, size_t lidos) {
         estatisticas.operacoes_ok++;
         estatisticas.bytes_escritos += escritos;
         estatisticas.bytes_lidos += lidos;
+        estatisticas.ultimo_erro = ESP_OK;
     } else {
         estatisticas.erros++;
         estatisticas.ultimo_erro = resultado;
+    }
+    portEXIT_CRITICAL(&trava_estatisticas);
+}
+
+void registrar_sondagem(bool respondeu) {
+    portENTER_CRITICAL(&trava_estatisticas);
+    if (respondeu) {
+        estatisticas.sondagens_ok++;
+    } else {
+        estatisticas.enderecos_ausentes++;
     }
     portEXIT_CRITICAL(&trava_estatisticas);
 }
@@ -60,6 +71,39 @@ esp_err_t gerenciador_i2c_iniciar() {
              configuracao::PINO_I2C_SCL,
              static_cast<unsigned long>(configuracao::FREQUENCIA_I2C_HZ));
     return ESP_OK;
+}
+
+esp_err_t gerenciador_i2c_sondar(uint8_t endereco, TickType_t tempo_limite) {
+    if (endereco > 0x7F || endereco == 0) return ESP_ERR_INVALID_ARG;
+    if (!estatisticas.inicializado || mutex_barramento == nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (xSemaphoreTake(mutex_barramento, tempo_limite) != pdTRUE) {
+        registrar_resultado(ESP_ERR_TIMEOUT, 0, 0);
+        return ESP_ERR_TIMEOUT;
+    }
+
+    i2c_cmd_handle_t comandos = i2c_cmd_link_create();
+    if (comandos == nullptr) {
+        xSemaphoreGive(mutex_barramento);
+        registrar_resultado(ESP_ERR_NO_MEM, 0, 0);
+        return ESP_ERR_NO_MEM;
+    }
+    esp_err_t erro = i2c_master_start(comandos);
+    if (erro == ESP_OK) {
+        erro = i2c_master_write_byte(
+            comandos, static_cast<uint8_t>((endereco << 1) | I2C_MASTER_WRITE), true);
+    }
+    if (erro == ESP_OK) erro = i2c_master_stop(comandos);
+    if (erro == ESP_OK) {
+        erro = i2c_master_cmd_begin(configuracao::PORTA_I2C, comandos,
+                                    tempo_limite);
+    }
+    i2c_cmd_link_delete(comandos);
+    xSemaphoreGive(mutex_barramento);
+
+    registrar_sondagem(erro == ESP_OK);
+    return erro;
 }
 
 esp_err_t gerenciador_i2c_escrever(uint8_t endereco, const void* dados, size_t tamanho,

@@ -1,0 +1,8 @@
+{
+  "versao_formato": 1,
+  "alvo": "mestre-s3",
+  "versao": "0.2.0",
+  "url_firmware": "https://github.com/thegm-Gabriel/instrumentacao-ElectricCarUFSM/releases/download/v0.2.0/mestre-s3.bin",
+  "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "tamanho_bytes": 1048576
+}

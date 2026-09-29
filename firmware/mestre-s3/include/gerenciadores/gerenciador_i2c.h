@@ -12,10 +12,15 @@ struct EstatisticasI2c {
     uint32_t erros = 0;
     uint64_t bytes_escritos = 0;
     uint64_t bytes_lidos = 0;
+    uint32_t sondagens_ok = 0;
+    uint32_t enderecos_ausentes = 0;
     esp_err_t ultimo_erro = ESP_OK;
 };
 
 esp_err_t gerenciador_i2c_iniciar();
+// Verifica ACK de um endereço. A ausência esperada não entra no contador de erros.
+esp_err_t gerenciador_i2c_sondar(uint8_t endereco,
+                                 TickType_t tempo_limite = pdMS_TO_TICKS(100));
 esp_err_t gerenciador_i2c_escrever(uint8_t endereco, const void* dados, size_t tamanho,
                                    TickType_t tempo_limite = pdMS_TO_TICKS(100));
 esp_err_t gerenciador_i2c_escrever_ler(uint8_t endereco, const void* comando,

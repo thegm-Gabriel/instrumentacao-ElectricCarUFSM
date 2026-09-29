@@ -16,6 +16,10 @@ struct EstatisticasUart {
     bool inicializado = false;
     uint32_t envios_ok = 0;
     uint32_t erros_envio = 0;
+    uint32_t mensagens_enfileiradas = 0;
+    uint32_t mensagens_descartadas = 0;
+    uint16_t ocupacao_fila_tx = 0;
+    uint16_t maior_ocupacao_fila_tx = 0;
     uint32_t recepcoes_ok = 0;
     uint32_t erros_recepcao = 0;
     uint64_t bytes_enviados = 0;
@@ -25,6 +29,7 @@ struct EstatisticasUart {
     uint32_t erros_quadro = 0;
     uint32_t erros_paridade = 0;
     uint32_t sinais_break = 0;
+    uint32_t recuperacoes = 0;
     esp_err_t ultimo_erro_envio = ESP_OK;
     esp_err_t ultimo_erro_recepcao = ESP_OK;
 };
@@ -35,5 +40,5 @@ esp_err_t gerenciador_uart_enviar(DestinoUart destino, const void* dados, size_t
 int gerenciador_uart_receber(DestinoUart origem, void* buffer, size_t capacidade,
                              TickType_t tempo_limite);
 esp_err_t gerenciador_uart_limpar_recepcao(DestinoUart origem);
+esp_err_t gerenciador_uart_recuperar(DestinoUart destino);
 EstatisticasUart gerenciador_uart_obter_estatisticas(DestinoUart destino);
-const char* gerenciador_uart_nome(DestinoUart destino);

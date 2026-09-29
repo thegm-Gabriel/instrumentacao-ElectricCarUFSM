@@ -3,7 +3,6 @@
 #include <cstring>
 
 #include "esp_log.h"
-#include "nucleo/configuracao_placa.h"
 
 namespace {
 constexpr char ETIQUETA[] = "gerenciador_sd";
@@ -16,10 +15,7 @@ esp_err_t gerenciador_cartao_sd_iniciar(const ConfiguracaoCartaoSd& configuracao
         ESP_LOGE(ETIQUETA, "Configuracao do cartao SD invalida");
         return ESP_ERR_INVALID_ARG;
     }
-    if (!configuracao::HABILITAR_CARTAO_SD) {
-        ESP_LOGW(ETIQUETA, "Cartao SD preparado, mas desabilitado ate definir barramento e pinos");
-        return ESP_ERR_NOT_SUPPORTED;
-    }
+    ESP_LOGW(ETIQUETA, "Cartao SD ainda não implementado; faltam barramento e pinos");
     montado = false;
     return ESP_ERR_NOT_SUPPORTED;
 }

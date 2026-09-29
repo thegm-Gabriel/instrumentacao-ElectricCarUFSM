@@ -1,0 +1,98 @@
+name: Publicar firmwares OTA
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar o repositório
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Ler versões preparadas
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          estado = json.loads(Path("versoes/estado_versoes.json").read_text())
+          valores = {
+              "VERSAO_RELEASE": estado["versao_release"],
+              "VERSAO_MESTRE": estado["firmwares"]["mestre-s3"]["versao"],
+              "VERSAO_EQUIPE": estado["firmwares"]["equipe-s3"]["versao"],
+              "VERSAO_VISITANTES": estado["firmwares"]["visitantes-s3"]["versao"],
+          }
+          if (os.environ.get("GITHUB_REF_TYPE") == "tag":
+              esperada = f"v{valores['VERSAO_RELEASE']}"
+              recebida = os.environ.get("GITHUB_REF_NAME")
+              if recebida != esperada:
+                  raise SystemExit(f"A etiqueta {recebida} difere de {esperada}")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as saida:
+              for chave, valor in valores.items():
+                  saida.write(f"{chave}={valor}\n")
+              saida.write(f"ETIQUETA_RELEASE=v{valores['VERSAO_RELEASE']}\n")
+          PY
+
+      - name: Instalar PlatformIO
+        run: python -m pip install --disable-pip-version-check platformio
+
+      - name: Compilar firmware mestre
+        run: VERSAO_FIRMWARE="${VERSAO_MESTRE}" pio run -d firmware/mestre-s3
+
+      - name: Compilar firmware da equipe
+        run: VERSAO_FIRMWARE="${VERSAO_EQUIPE}" pio run -d firmware/equipe-s3
+
+      - name: Compilar firmware de visitantes
+        run: VERSAO_FIRMWARE="${VERSAO_VISITANTES}" pio run -d firmware/visitantes-s3
+
+      - name: Preparar arquivos do release
+        shell: bash
+        run: |
+          mkdir -p versoes/saida
+          cp firmware/mestre-s3/.pio/build/mestre-s3-n16r8/firmware.bin versoes/saida/mestre-s3.bin
+          cp firmware/equipe-s3/.pio/build/esp32-s3-devkitm-1/firmware.bin versoes/saida/equipe-s3.bin
+          cp firmware/visitantes-s3/.pio/build/esp32-s3-devkitm-1/firmware.bin versoes/saida/visitantes-s3.bin
+          python ferramentas/criar_manifesto_ota.py \
+            --firmware-mestre versoes/saida/mestre-s3.bin \
+            --firmware-equipe versoes/saida/equipe-s3.bin \
+            --firmware-visitantes versoes/saida/visitantes-s3.bin \
+            --versao-mestre "${VERSAO_MESTRE}" \
+            --versao-equipe "${VERSAO_EQUIPE}" \
+            --versao-visitantes "${VERSAO_VISITANTES}" \
+            --etiqueta "${ETIQUETA_RELEASE}" \
+            --repositorio "${GITHUB_REPOSITORY}" \
+            --saida versoes/saida/manifesto-firmwares.json
+
+      - name: Criar ou atualizar GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if gh release view "${ETIQUETA_RELEASE}" >/dev/null 2>&1; then
+            gh release upload "${ETIQUETA_RELEASE}" \
+              versoes/saida/mestre-s3.bin \
+              versoes/saida/equipe-s3.bin \
+              versoes/saida/visitantes-s3.bin \
+              versoes/saida/manifesto-firmwares.json \
+              --clobber
+          else
+            gh release create "${ETIQUETA_RELEASE}" \
+              versoes/saida/mestre-s3.bin \
+              versoes/saida/equipe-s3.bin \
+              versoes/saida/visitantes-s3.bin \
+              versoes/saida/manifesto-firmwares.json \
+              --title "Firmwares OTA ${ETIQUETA_RELEASE}" \
+              --generate-notes
+          fi

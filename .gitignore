@@ -3,6 +3,8 @@
 **/build/
 **/managed_components/
 **/dependencies.lock
+**/__pycache__/
+*.pyc
 
 # Arquivos locais de editores e sistema
 **/.DS_Store
@@ -13,11 +15,15 @@
 .env
 *.pem
 *.key
+**/segredos_ota.h
 
 # Binarios de entrega; o manifesto de exemplo permanece versionado
 versoes/*.bin
 versoes/*.elf
 versoes/*.map
+versoes/saida/
+versoes/historico/
+versoes/.preparacao/
 
 # Restos temporarios da reorganizacao; podem ser excluidos apos fechar o VS Code
 /esp32s3_MESTRE/
