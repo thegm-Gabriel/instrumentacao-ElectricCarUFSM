@@ -5,6 +5,10 @@ acesso Wi-Fi com painel web para a equipe.
 
 O painel em `http://192.168.4.1` também mostra taxa de pacotes, intervalo,
 jitter, atraso relativo, perdas e idade da última amostra.
+Sua página principal prioriza os indicadores de condução e energia, organiza os
+sensores por contexto e mantém a qualidade do enlace em uma área técnica
+separada. O layout se adapta a computadores, tablets e celulares sem depender
+de bibliotecas ou recursos externos.
 A página `http://192.168.4.1/diagnostico` apresenta memória, tempo ativo,
 clientes Wi-Fi, estatísticas do protocolo e erros físicos da UART.
 
