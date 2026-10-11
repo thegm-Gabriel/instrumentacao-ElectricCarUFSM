@@ -241,6 +241,7 @@ static esp_err_t finalizar_transferencia(
             erro = ESP_ERR_INVALID_VERSION;
         }
     }
+    const esp_partition_t *particao_atual = esp_ota_get_running_partition();
     if (erro == ESP_OK) erro = esp_ota_set_boot_partition(particao_destino);
     if (erro != ESP_OK) {
         (void)responder(cabecalho, OTA_SATELITE_RESPOSTA_INTEGRIDADE_FALHOU,
@@ -251,13 +252,32 @@ static esp_err_t finalizar_transferencia(
 
     ESP_LOGW(TAG, "%s: firmware %s validado; reiniciando em 1 segundo",
              configuracao_atual.nome_satelite, atual.versao_destino);
-    erro = responder(cabecalho, OTA_SATELITE_RESPOSTA_OK,
-                     OTA_SATELITE_FASE_PRONTO_PARA_REINICIAR, ESP_OK,
-                     atual.bytes_recebidos);
+    esp_err_t erro_resposta = ESP_FAIL;
+    for (unsigned tentativa = 0; tentativa < 3; ++tentativa) {
+        const esp_err_t atual_resposta = responder(
+            cabecalho, OTA_SATELITE_RESPOSTA_OK,
+            OTA_SATELITE_FASE_PRONTO_PARA_REINICIAR, ESP_OK,
+            atual.bytes_recebidos);
+        if (atual_resposta == ESP_OK) erro_resposta = ESP_OK;
+        if (tentativa < 2) vTaskDelay(pdMS_TO_TICKS(50));
+    }
     portENTER_CRITICAL(&trava);
     situacao.recebendo = false;
-    situacao.ultimo_erro = erro;
+    situacao.ultimo_erro = erro_resposta;
     portEXIT_CRITICAL(&trava);
+    if (erro_resposta != ESP_OK) {
+        if (particao_atual != NULL) {
+            const esp_err_t erro_restauracao =
+                esp_ota_set_boot_partition(particao_atual);
+            if (erro_restauracao != ESP_OK) {
+                ESP_LOGE(TAG, "Falha ao restaurar a partição atual: %s",
+                         esp_err_to_name(erro_restauracao));
+            }
+        }
+        ESP_LOGE(TAG,
+                 "Imagem válida, mas confirmação não foi transmitida; reinício cancelado");
+        return erro_resposta;
+    }
     vTaskDelay(pdMS_TO_TICKS(1000));
     esp_restart();
     return ESP_OK;

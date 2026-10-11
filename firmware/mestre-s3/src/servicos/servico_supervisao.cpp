@@ -36,15 +36,22 @@ void tarefa(void*) {
         const uint32_t pilha_supervisao = uxTaskGetStackHighWaterMark(nullptr);
         const uint32_t agora_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
         portENTER_CRITICAL(&trava);
-        menor_pilha_supervisao = pilha_supervisao;
+        if (menor_pilha_supervisao == 0 ||
+            pilha_supervisao < menor_pilha_supervisao) {
+            menor_pilha_supervisao = pilha_supervisao;
+        }
         portEXIT_CRITICAL(&trava);
         for (auto& registro : modulos) {
             AcaoRecuperacaoModulo acao = nullptr;
             const char* nome = nullptr;
             portENTER_CRITICAL(&trava);
             if (registro.tarefa_monitorada != nullptr) {
-                registro.estado.bytes_pilha_livres =
+                const uint32_t pilha_atual =
                     uxTaskGetStackHighWaterMark(registro.tarefa_monitorada);
+                if (registro.estado.bytes_pilha_livres == 0 ||
+                    pilha_atual < registro.estado.bytes_pilha_livres) {
+                    registro.estado.bytes_pilha_livres = pilha_atual;
+                }
             }
             const uint32_t idade = agora_ms - registro.instante_ultimo_pulso_ms;
             registro.estado.idade_ultimo_pulso_ms = idade;

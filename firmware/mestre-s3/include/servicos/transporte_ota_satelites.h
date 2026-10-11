@@ -24,6 +24,7 @@ using ObservadorProgressoOtaSatelite = void (*)(uint32_t bytes_enviados,
 
 esp_err_t transporte_ota_satelites_iniciar();
 esp_err_t transporte_ota_satelites_encerrar();
+esp_err_t transporte_ota_satelites_solicitar_cancelamento();
 esp_err_t transporte_ota_satelites_executar(
     const ConfiguracaoTransferenciaOtaSatelite& configuracao,
     ObservadorProgressoOtaSatelite observador);

@@ -233,6 +233,7 @@ esp_err_t servico_comandos_satelite_solicitar_detalhado(
         resultado == NULL || tempo_limite == 0)
         return ESP_ERR_INVALID_ARG;
     const int64_t inicio_us = esp_timer_get_time();
+    const TickType_t inicio_total = xTaskGetTickCount();
     if (xSemaphoreTake(mutex_solicitacao, tempo_limite) != pdTRUE) {
         atualizar_informacoes_solicitacao(informacoes, 0, 0, inicio_us);
         return ESP_ERR_TIMEOUT;
@@ -259,6 +260,9 @@ esp_err_t servico_comandos_satelite_solicitar_detalhado(
     esp_err_t erro = ESP_ERR_TIMEOUT;
 
     for (unsigned tentativa = 1; tentativa <= MAXIMO_TENTATIVAS; ++tentativa) {
+        const TickType_t decorrido_total =
+            xTaskGetTickCount() - inicio_total;
+        if (decorrido_total >= tempo_limite) break;
         atualizar_informacoes_solicitacao(
             informacoes, solicitacao, (uint8_t)tentativa, inicio_us);
         ESP_LOGI(TAG, "%s: enviando comando %u ao mestre (tentativa %u/%u)",
@@ -271,11 +275,19 @@ esp_err_t servico_comandos_satelite_solicitar_detalhado(
         if (tentativa > 1) estatisticas.repeticoes++;
         portEXIT_CRITICAL(&trava);
         const TickType_t inicio = xTaskGetTickCount();
+        const TickType_t decorrido_apos_envio = inicio - inicio_total;
+        if (decorrido_apos_envio >= tempo_limite) break;
+        const TickType_t restante_total =
+            tempo_limite - decorrido_apos_envio;
+        const unsigned tentativas_restantes =
+            MAXIMO_TENTATIVAS - tentativa + 1;
+        const TickType_t janela_tentativa =
+            restante_total / tentativas_restantes;
         while (true) {
             const TickType_t decorrido = xTaskGetTickCount() - inicio;
-            if (decorrido >= tempo_limite) break;
+            if (decorrido >= janela_tentativa) break;
             if (xQueueReceive(fila_respostas, &pendente,
-                              tempo_limite - decorrido) != pdTRUE) break;
+                              janela_tentativa - decorrido) != pdTRUE) break;
             if (pendente.cabecalho.solicitacao != solicitacao ||
                 pendente.cabecalho.comando != comando) continue;
             *resultado = (codigo_resposta_comando_t)pendente.cabecalho.resultado;

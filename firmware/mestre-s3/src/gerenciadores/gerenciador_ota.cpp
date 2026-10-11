@@ -29,7 +29,10 @@ uint32_t tamanho_esperado = 0;
 int tamanho_buffer_http_tx = 0;
 ObservadorProgressoOta observador_progresso = nullptr;
 bool configurado = false;
+bool execucao_em_andamento = false;
+bool cancelamento_solicitado = false;
 SemaphoreHandle_t mutex_execucao = nullptr;
+portMUX_TYPE trava_execucao = portMUX_INITIALIZER_UNLOCKED;
 
 uint8_t valor_hexadecimal(char caractere) {
     if (caractere >= '0' && caractere <= '9') return caractere - '0';
@@ -129,11 +132,29 @@ esp_err_t gerenciador_ota_executar() {
         ESP_LOGW(ETIQUETA, "Já existe uma atualização OTA em andamento");
         return ESP_ERR_INVALID_STATE;
     }
+    portENTER_CRITICAL(&trava_execucao);
+    execucao_em_andamento = true;
+    cancelamento_solicitado = false;
+    portEXIT_CRITICAL(&trava_execucao);
+
+    const auto finalizar_execucao = []() {
+        portENTER_CRITICAL(&trava_execucao);
+        execucao_em_andamento = false;
+        cancelamento_solicitado = false;
+        portEXIT_CRITICAL(&trava_execucao);
+        xSemaphoreGive(mutex_execucao);
+    };
+    const auto cancelamento_ativo = []() {
+        portENTER_CRITICAL(&trava_execucao);
+        const bool solicitado = cancelamento_solicitado;
+        portEXIT_CRITICAL(&trava_execucao);
+        return solicitado;
+    };
 
     const esp_partition_t* particao_atual = esp_ota_get_running_partition();
     const esp_partition_t* particao_destino = esp_ota_get_next_update_partition(nullptr);
     if (particao_atual == nullptr || particao_destino == nullptr) {
-        xSemaphoreGive(mutex_execucao);
+        finalizar_execucao();
         return ESP_ERR_NOT_FOUND;
     }
 
@@ -156,7 +177,7 @@ esp_err_t gerenciador_ota_executar() {
     esp_err_t erro = esp_https_ota_begin(&ota, &manipulador);
     if (erro != ESP_OK) {
         ESP_LOGE(ETIQUETA, "Falha ao iniciar download: %s", esp_err_to_name(erro));
-        xSemaphoreGive(mutex_execucao);
+        finalizar_execucao();
         return erro;
     }
 
@@ -165,7 +186,7 @@ esp_err_t gerenciador_ota_executar() {
     if (erro != ESP_OK) {
         ESP_LOGE(ETIQUETA, "Cabeçalho da nova imagem inválido: %s", esp_err_to_name(erro));
         esp_https_ota_abort(manipulador);
-        xSemaphoreGive(mutex_execucao);
+        finalizar_execucao();
         return erro;
     }
 
@@ -176,13 +197,13 @@ esp_err_t gerenciador_ota_executar() {
         ESP_LOGE(ETIQUETA, "Versão da imagem (%s) difere do manifesto (%s)",
                  nova_imagem.version, versao_esperada.data());
         esp_https_ota_abort(manipulador);
-        xSemaphoreGive(mutex_execucao);
+        finalizar_execucao();
         return ESP_ERR_INVALID_VERSION;
     }
     if (std::strcmp(imagem_atual->version, nova_imagem.version) == 0) {
         ESP_LOGW(ETIQUETA, "A imagem recebida possui a mesma versão em execução");
         esp_https_ota_abort(manipulador);
-        xSemaphoreGive(mutex_execucao);
+        finalizar_execucao();
         return ESP_ERR_INVALID_VERSION;
     }
 
@@ -191,7 +212,7 @@ esp_err_t gerenciador_ota_executar() {
         ESP_LOGE(ETIQUETA, "Servidor informou %d bytes; manifesto informa %lu bytes",
                  tamanho_http, static_cast<unsigned long>(tamanho_esperado));
         esp_https_ota_abort(manipulador);
-        xSemaphoreGive(mutex_execucao);
+        finalizar_execucao();
         return ESP_ERR_INVALID_SIZE;
     }
     const uint32_t tamanho_total = tamanho_esperado;
@@ -200,13 +221,17 @@ esp_err_t gerenciador_ota_executar() {
                  static_cast<unsigned long>(tamanho_total),
                  static_cast<unsigned long>(particao_destino->size));
         esp_https_ota_abort(manipulador);
-        xSemaphoreGive(mutex_execucao);
+        finalizar_execucao();
         return ESP_ERR_INVALID_SIZE;
     }
 
     int ultimo_percentual = -10;
     const int64_t inicio_ms = esp_timer_get_time() / 1000;
     do {
+        if (cancelamento_ativo()) {
+            erro = ESP_ERR_INVALID_STATE;
+            break;
+        }
         erro = esp_https_ota_perform(manipulador);
         const int recebidos = esp_https_ota_get_image_len_read(manipulador);
         if (recebidos >= 0) {
@@ -230,33 +255,48 @@ esp_err_t gerenciador_ota_executar() {
         if (erro == ESP_OK) erro = ESP_ERR_HTTP_INCOMPLETE_DATA;
         ESP_LOGE(ETIQUETA, "Download OTA incompleto: %s", esp_err_to_name(erro));
         esp_https_ota_abort(manipulador);
-        xSemaphoreGive(mutex_execucao);
+        finalizar_execucao();
         return erro;
     }
     if (static_cast<uint32_t>(esp_https_ota_get_image_len_read(manipulador)) !=
         tamanho_total) {
         ESP_LOGE(ETIQUETA, "Imagem recebida com tamanho diferente do manifesto");
         esp_https_ota_abort(manipulador);
-        xSemaphoreGive(mutex_execucao);
+        finalizar_execucao();
         return ESP_ERR_INVALID_SIZE;
     }
 
+    // A integridade adicional do manifesto é verificada antes de finish(),
+    // pois finish também seleciona a nova partição para o próximo boot.
+    erro = verificar_sha256(particao_destino);
+    if (erro != ESP_OK) {
+        esp_https_ota_abort(manipulador);
+        ESP_LOGE(ETIQUETA, "Imagem OTA rejeitada antes de alterar o boot: %s",
+                 esp_err_to_name(erro));
+        finalizar_execucao();
+        return erro;
+    }
     erro = esp_https_ota_finish(manipulador);
-    if (erro == ESP_OK) erro = verificar_sha256(particao_destino);
     if (erro != ESP_OK) {
         ESP_LOGE(ETIQUETA, "Imagem OTA rejeitada: %s", esp_err_to_name(erro));
-        esp_err_t erro_restaura = esp_ota_set_boot_partition(particao_atual);
-        if (erro_restaura != ESP_OK) {
-            ESP_LOGE(ETIQUETA, "Falha crítica ao restaurar partição de boot: %s",
-                     esp_err_to_name(erro_restaura));
-        }
-        xSemaphoreGive(mutex_execucao);
+        finalizar_execucao();
         return erro;
     }
 
     ESP_LOGI(ETIQUETA,
              "Nova imagem gravada e validada. Ela será usada na próxima inicialização");
-    xSemaphoreGive(mutex_execucao);
+    finalizar_execucao();
+    return ESP_OK;
+}
+
+esp_err_t gerenciador_ota_solicitar_cancelamento() {
+    portENTER_CRITICAL(&trava_execucao);
+    if (!execucao_em_andamento) {
+        portEXIT_CRITICAL(&trava_execucao);
+        return ESP_ERR_INVALID_STATE;
+    }
+    cancelamento_solicitado = true;
+    portEXIT_CRITICAL(&trava_execucao);
     return ESP_OK;
 }
 

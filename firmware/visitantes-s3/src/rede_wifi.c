@@ -27,7 +27,8 @@ esp_err_t rede_wifi_iniciar(void)
 {
     esp_err_t erro = nvs_flash_init();
     if (erro == ESP_ERR_NVS_NO_FREE_PAGES || erro == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
+        erro = nvs_flash_erase();
+        if (erro != ESP_OK) return erro;
         erro = nvs_flash_init();
     }
     ESP_RETURN_ON_ERROR(erro, TAG, "NVS");

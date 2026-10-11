@@ -5,7 +5,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <memory>
 
 #include "cJSON.h"
 #include "esp_app_desc.h"
@@ -57,21 +56,15 @@ struct RespostaHttp {
     bool excedeu_limite = false;
 };
 
-struct LiberadorRespostaHttp {
-    void operator()(RespostaHttp* resposta) const {
-        heap_caps_free(resposta);
-    }
-};
-
-using RespostaHttpAlocada = std::unique_ptr<RespostaHttp, LiberadorRespostaHttp>;
-
 EventGroupHandle_t eventos_ota = nullptr;
 SemaphoreHandle_t mutex_estado = nullptr;
 TaskHandle_t tarefa_ota_handle = nullptr;
 SituacaoOta situacao{};
 ManifestoOta manifesto_disponivel{};
 AlvoOta alvo_autorizado = AlvoOta::Nenhum;
+RespostaHttp* resposta_http = nullptr;
 bool iniciado = false;
+bool cancelamento_em_andamento = false;
 
 void definir_estado(EstadoServicoOta estado, esp_err_t erro = ESP_OK);
 bool interpretar_versao(const char* texto, int partes[3]);
@@ -134,6 +127,31 @@ void definir_estado(EstadoServicoOta estado, esp_err_t erro) {
     xSemaphoreGive(mutex_estado);
 }
 
+bool cancelamento_foi_solicitado() {
+    xSemaphoreTake(mutex_estado, portMAX_DELAY);
+    const bool solicitado = cancelamento_em_andamento;
+    xSemaphoreGive(mutex_estado);
+    return solicitado;
+}
+
+void concluir_cancelamento(AlvoOta alvo) {
+    xSemaphoreTake(mutex_estado, portMAX_DELAY);
+    situacao.estado = EstadoServicoOta::Cancelado;
+    situacao.alvo_ativo = AlvoOta::Nenhum;
+    situacao.ultimo_erro = ESP_OK;
+    if (alvo == AlvoOta::Equipe) {
+        situacao.equipe.estado = EstadoOtaSatelite::Cancelado;
+        situacao.equipe.ultimo_erro = ESP_OK;
+    } else if (alvo == AlvoOta::Visitantes) {
+        situacao.visitantes.estado = EstadoOtaSatelite::Cancelado;
+        situacao.visitantes.ultimo_erro = ESP_OK;
+    }
+    cancelamento_em_andamento = false;
+    xSemaphoreGive(mutex_estado);
+    ESP_LOGW(ETIQUETA, "Atualização de %s cancelada com segurança",
+             servico_ota_nome_alvo(alvo));
+}
+
 esp_err_t tratar_evento_http(esp_http_client_event_t* evento) {
     if (evento->event_id != HTTP_EVENT_ON_DATA || evento->data == nullptr ||
         evento->data_len <= 0) {
@@ -188,24 +206,13 @@ bool ler_firmware_manifesto(cJSON* objeto, FirmwareManifestoOta* firmware) {
 
 esp_err_t baixar_manifesto(ManifestoOta* manifesto) {
     if (manifesto == nullptr) return ESP_ERR_INVALID_ARG;
-    auto* memoria_resposta = static_cast<RespostaHttp*>(heap_caps_calloc(
-        1, sizeof(RespostaHttp), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (memoria_resposta == nullptr) {
-        ESP_LOGW(ETIQUETA,
-                 "PSRAM sem espaço para o manifesto; tentando a memória interna");
-        memoria_resposta = static_cast<RespostaHttp*>(
-            heap_caps_calloc(1, sizeof(RespostaHttp), MALLOC_CAP_8BIT));
-    }
-    RespostaHttpAlocada resposta(memoria_resposta);
-    if (!resposta) {
-        ESP_LOGE(ETIQUETA, "Memória insuficiente para receber o manifesto OTA");
-        return ESP_ERR_NO_MEM;
-    }
+    if (resposta_http == nullptr) return ESP_ERR_INVALID_STATE;
+    std::memset(resposta_http, 0, sizeof(*resposta_http));
 
     esp_http_client_config_t configuracao_http{};
     configuracao_http.url = configuracao::ENDERECO_MANIFESTO_OTA;
     configuracao_http.event_handler = tratar_evento_http;
-    configuracao_http.user_data = resposta.get();
+    configuracao_http.user_data = resposta_http;
     configuracao_http.crt_bundle_attach = esp_crt_bundle_attach;
     configuracao_http.timeout_ms = static_cast<int>(configuracao::TEMPO_LIMITE_HTTP_MS);
     configuracao_http.buffer_size_tx = configuracao::TAMANHO_BUFFER_HTTP_TX;
@@ -230,13 +237,14 @@ esp_err_t baixar_manifesto(ManifestoOta* manifesto) {
                  codigo_http);
         return ESP_ERR_HTTP_BASE;
     }
-    if (resposta->excedeu_limite || resposta->tamanho == 0) {
+    if (resposta_http->excedeu_limite || resposta_http->tamanho == 0) {
         ESP_LOGE(ETIQUETA, "Manifesto vazio ou maior que %u bytes",
                  static_cast<unsigned>(configuracao::TAMANHO_MAXIMO_MANIFESTO_OTA));
         return ESP_ERR_INVALID_SIZE;
     }
 
-    cJSON* raiz = cJSON_ParseWithLength(resposta->dados, resposta->tamanho);
+    cJSON* raiz = cJSON_ParseWithLength(resposta_http->dados,
+                                        resposta_http->tamanho);
     if (raiz == nullptr) return ESP_ERR_INVALID_RESPONSE;
     cJSON* formato = cJSON_GetObjectItemCaseSensitive(raiz, "versao_formato");
     bool estrutura_valida = false;
@@ -457,14 +465,24 @@ esp_err_t executar_atualizacao_mestre(const FirmwareManifestoOta& firmware) {
     configuracao_gerenciador.observador_progresso = atualizar_progresso_mestre;
 
     esp_err_t erro = gerenciador_ota_iniciar(configuracao_gerenciador);
-    if (erro == ESP_OK) erro = gerenciador_ota_executar();
+    if (erro == ESP_OK && !cancelamento_foi_solicitado()) {
+        erro = gerenciador_ota_executar();
+    }
     if (erro != ESP_OK) {
+        if (cancelamento_foi_solicitado()) {
+            concluir_cancelamento(AlvoOta::Mestre);
+            return erro;
+        }
         definir_estado(EstadoServicoOta::Falha, erro);
         ESP_LOGE(ETIQUETA,
                  "A atualização do mestre falhou: %s. O firmware atual continua ativo",
                  esp_err_to_name(erro));
         return erro;
     }
+    xSemaphoreTake(mutex_estado, portMAX_DELAY);
+    situacao.conclusoes++;
+    situacao.ultimo_alvo_concluido = AlvoOta::Mestre;
+    xSemaphoreGive(mutex_estado);
     definir_estado(EstadoServicoOta::Aplicado);
     ESP_LOGW(ETIQUETA, "Firmware do mestre validado. Reinício em 3 segundos");
     vTaskDelay(pdMS_TO_TICKS(3000));
@@ -492,6 +510,7 @@ esp_err_t aguardar_confirmacao_satelite(
     const int64_t limite_ms = esp_timer_get_time() / 1000 +
                              configuracao::TEMPO_LIMITE_CONFIRMACAO_SATELITE_MS;
     do {
+        if (cancelamento_foi_solicitado()) return ESP_ERR_INVALID_STATE;
         if (versao_satelite_confirmada(alvo, firmware)) return ESP_OK;
         vTaskDelay(pdMS_TO_TICKS(
             configuracao::INTERVALO_CONFIRMACAO_SATELITE_MS));
@@ -530,9 +549,16 @@ esp_err_t executar_atualizacao_satelite(
             : OTA_SATELITE_TAMANHO_CARGA_COMPATIVEL;
     transferencia.tempo_limite_http_ms = configuracao::TEMPO_LIMITE_HTTP_MS;
     servico_telemetria_definir_ota_satelite_ativa(true);
-    esp_err_t erro = transporte_ota_satelites_executar(
-        transferencia, atualizar_progresso_satelite);
+    esp_err_t erro = cancelamento_foi_solicitado()
+                         ? ESP_ERR_INVALID_STATE
+                         : transporte_ota_satelites_executar(
+                               transferencia, atualizar_progresso_satelite);
     servico_telemetria_definir_ota_satelite_ativa(false);
+
+    if (erro != ESP_OK && cancelamento_foi_solicitado()) {
+        concluir_cancelamento(alvo);
+        return erro;
+    }
 
     xSemaphoreTake(mutex_estado, portMAX_DELAY);
     estado = alvo == AlvoOta::Equipe ? &situacao.equipe : &situacao.visitantes;
@@ -553,6 +579,10 @@ esp_err_t executar_atualizacao_satelite(
              "OTA do satélite %s transferida; aguardando a nova versão responder",
              servico_ota_nome_alvo(alvo));
     erro = aguardar_confirmacao_satelite(alvo, firmware);
+    if (erro != ESP_OK && cancelamento_foi_solicitado()) {
+        concluir_cancelamento(alvo);
+        return erro;
+    }
     xSemaphoreTake(mutex_estado, portMAX_DELAY);
     estado = alvo == AlvoOta::Equipe ? &situacao.equipe : &situacao.visitantes;
     estado->ultimo_erro = erro;
@@ -561,6 +591,8 @@ esp_err_t executar_atualizacao_satelite(
     if (erro == ESP_OK) {
         std::strncpy(estado->versao_atual, firmware.versao,
                      sizeof(estado->versao_atual) - 1);
+        situacao.conclusoes++;
+        situacao.ultimo_alvo_concluido = alvo;
     }
     const bool ainda_pendente = situacao.versao_disponivel[0] != '\0' ||
         situacao.equipe.estado == EstadoOtaSatelite::AguardandoAutorizacao ||
@@ -641,6 +673,7 @@ void executar_atualizacao_autorizada() {
     atualizar_visitantes =
         situacao.visitantes.estado == EstadoOtaSatelite::AguardandoAutorizacao;
     alvo_autorizado = AlvoOta::Nenhum;
+    cancelamento_em_andamento = false;
     xSemaphoreGive(mutex_estado);
 
     SessaoWifiOta sessao_wifi;
@@ -677,6 +710,7 @@ void cancelar_atualizacao() {
         ESP_LOGW(ETIQUETA,
                  "Atualização cancelada. Nenhuma alteração foi feita no firmware em execução");
     }
+    cancelamento_em_andamento = false;
     xSemaphoreGive(mutex_estado);
 }
 
@@ -720,6 +754,23 @@ esp_err_t servico_ota_iniciar() {
         }
         return ESP_ERR_NO_MEM;
     }
+    if (resposta_http == nullptr) {
+        resposta_http = static_cast<RespostaHttp*>(heap_caps_calloc(
+            1, sizeof(RespostaHttp), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (resposta_http == nullptr) {
+            ESP_LOGW(ETIQUETA,
+                     "PSRAM sem espaço para o manifesto; usando RAM interna");
+            resposta_http = static_cast<RespostaHttp*>(heap_caps_calloc(
+                1, sizeof(RespostaHttp), MALLOC_CAP_8BIT));
+        }
+    }
+    if (resposta_http == nullptr) {
+        vEventGroupDelete(eventos_ota);
+        eventos_ota = nullptr;
+        vSemaphoreDelete(mutex_estado);
+        mutex_estado = nullptr;
+        return ESP_ERR_NO_MEM;
+    }
 
     xEventGroupClearBits(eventos_ota, BIT_VERIFICAR | BIT_AUTORIZAR |
                                       BIT_CANCELAR | BIT_INTERVALO_ALTERADO);
@@ -740,6 +791,8 @@ esp_err_t servico_ota_iniciar() {
         eventos_ota = nullptr;
         vSemaphoreDelete(mutex_estado);
         mutex_estado = nullptr;
+        heap_caps_free(resposta_http);
+        resposta_http = nullptr;
         situacao = {};
         situacao.estado = EstadoServicoOta::Falha;
         situacao.ultimo_erro = ESP_ERR_NO_MEM;
@@ -841,10 +894,20 @@ esp_err_t servico_ota_autorizar_atualizacao_satelite(AlvoOta alvo) {
 esp_err_t servico_ota_cancelar_atualizacao() {
     if (!iniciado || eventos_ota == nullptr) return ESP_ERR_INVALID_STATE;
     xSemaphoreTake(mutex_estado, portMAX_DELAY);
-    const bool aguardando = situacao.estado == EstadoServicoOta::AguardandoAutorizacao;
+    const bool aguardando =
+        situacao.estado == EstadoServicoOta::AguardandoAutorizacao;
+    const bool executando = situacao.estado == EstadoServicoOta::Baixando;
+    if (executando) cancelamento_em_andamento = true;
     xSemaphoreGive(mutex_estado);
-    if (!aguardando) return ESP_ERR_INVALID_STATE;
-    xEventGroupSetBits(eventos_ota, BIT_CANCELAR);
+    if (!aguardando && !executando) return ESP_ERR_INVALID_STATE;
+    if (aguardando) {
+        xEventGroupSetBits(eventos_ota, BIT_CANCELAR);
+    } else {
+        (void)gerenciador_ota_solicitar_cancelamento();
+        (void)transporte_ota_satelites_solicitar_cancelamento();
+        ESP_LOGW(ETIQUETA,
+                 "Cancelamento solicitado; encerrando a operação OTA ativa");
+    }
     return ESP_OK;
 }
 

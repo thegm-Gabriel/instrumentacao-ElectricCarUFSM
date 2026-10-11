@@ -92,9 +92,21 @@ sessão Wi-Fi, etapas da atualização OTA, avisos e falhas críticas. O painel 
 mesmos GPIOs 8 e 9 do MPU6050 e detecta automaticamente os endereços `0x3C` e
 `0x3D`.
 
+Durante a partida, a tela identifica o módulo em inicialização e apresenta uma
+barra de progresso. Avisos gerados nessa fase entram em uma fila fixa e são
+mostrados em sequência quando o sistema começa a operar. Mensagens persistentes,
+como atualização disponível ou atenção de diagnóstico, ocupam a tela por uma
+janela curta e depois reaparecem como lembretes; entre essas janelas, as páginas
+de telemetria e estado continuam visíveis.
+
 O framebuffer fica em `dispositivos/tela_ssd1306.cpp`. A seleção das mensagens e
 a atualização periódica ficam em `servicos/servico_painel_local.cpp`, sem misturar
 o protocolo elétrico da tela com as regras de estado da aplicação.
+
+Eventos de partida, confirmação, Wi-Fi, atualização disponível, transferência,
+conclusão, aviso e falha possuem melodias próprias e não bloqueantes. A conclusão
+de uma OTA é numerada pelo serviço OTA, permitindo que tela e buzzer percebam
+também a atualização de um satélite mesmo quando o estado geral muda rapidamente.
 
 ## Histórico de telemetria no Google
 

@@ -97,12 +97,21 @@ esp_err_t servidor_web_iniciar(void)
     httpd_handle_t servidor = NULL;
     httpd_config_t configuracao = HTTPD_DEFAULT_CONFIG();
     configuracao.server_port = PORTA_HTTP;
-    ESP_RETURN_ON_ERROR(httpd_start(&servidor, &configuracao), TAG, "servidor HTTP");
+    esp_err_t erro = httpd_start(&servidor, &configuracao);
+    if (erro != ESP_OK) return erro;
     const httpd_uri_t rota_painel = {.uri = "/", .method = HTTP_GET, .handler = responder_painel};
     const httpd_uri_t rota_api = {.uri = "/api/telemetria", .method = HTTP_GET, .handler = responder_telemetria};
-    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(servidor, &rota_painel), TAG, "rota painel");
-    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(servidor, &rota_api), TAG, "rota API");
-    if (xTaskCreate(tarefa_dns_cativo, "dns_visitantes", 4096, NULL, 4, NULL) != pdPASS) return ESP_ERR_NO_MEM;
+    erro = httpd_register_uri_handler(servidor, &rota_painel);
+    if (erro == ESP_OK) erro = httpd_register_uri_handler(servidor, &rota_api);
+    if (erro != ESP_OK ||
+        xTaskCreate(tarefa_dns_cativo, "dns_visitantes", 4096, NULL, 4,
+                    NULL) != pdPASS) {
+        if (erro == ESP_OK) erro = ESP_ERR_NO_MEM;
+        httpd_stop(servidor);
+        ESP_LOGE(TAG, "Inicialização web incompleta; servidor encerrado: %s",
+                 esp_err_to_name(erro));
+        return erro;
+    }
     ESP_LOGI(TAG, "Painel de visitantes em http://%s", IP_PAINEL);
     return ESP_OK;
 }

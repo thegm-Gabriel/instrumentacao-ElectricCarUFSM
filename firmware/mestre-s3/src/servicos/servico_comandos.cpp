@@ -56,6 +56,12 @@ struct SolicitacaoOperacionalPendente {
     uint8_t carga[COMANDO_TAMANHO_MAXIMO_CARGA];
 };
 
+struct SolicitacaoEmAndamento {
+    uint32_t solicitacao = 0;
+    uint16_t comando = 0;
+    bool ativa = false;
+};
+
 using FuncaoComando = codigo_resposta_comando_t (*)(
     DestinoUart origem, const uint8_t* carga, uint16_t tamanho_carga,
     uint8_t* resposta, uint16_t* tamanho_resposta);
@@ -73,6 +79,7 @@ portMUX_TYPE trava_estatisticas = portMUX_INITIALIZER_UNLOCKED;
 portMUX_TYPE trava_repeticoes = portMUX_INITIALIZER_UNLOCKED;
 EstatisticasServicoComandos estatisticas{};
 RespostaRepetivel respostas_repetiveis[2]{};
+SolicitacaoEmAndamento solicitacoes_em_andamento[2]{};
 AcaoSolicitarResumo acao_solicitar_resumo = nullptr;
 
 struct RedeWifiPreparada {
@@ -749,6 +756,15 @@ void tarefa_operacoes_mestre(void*) {
         processar_solicitacao_agora(solicitacao.origem,
                                     solicitacao.cabecalho,
                                     solicitacao.carga);
+        const size_t indice = indice_destino(solicitacao.origem);
+        portENTER_CRITICAL(&trava_repeticoes);
+        if (solicitacoes_em_andamento[indice].solicitacao ==
+                solicitacao.cabecalho.solicitacao &&
+            solicitacoes_em_andamento[indice].comando ==
+                solicitacao.cabecalho.comando) {
+            solicitacoes_em_andamento[indice] = {};
+        }
+        portEXIT_CRITICAL(&trava_repeticoes);
     }
 }
 
@@ -766,8 +782,29 @@ void processar_solicitacao(DestinoUart origem,
     if (cabecalho.tamanho_carga != 0) {
         std::memcpy(pendente.carga, carga, cabecalho.tamanho_carga);
     }
+    const size_t indice = indice_destino(origem);
+    portENTER_CRITICAL(&trava_repeticoes);
+    const bool ja_em_andamento =
+        solicitacoes_em_andamento[indice].ativa &&
+        solicitacoes_em_andamento[indice].solicitacao == cabecalho.solicitacao &&
+        solicitacoes_em_andamento[indice].comando == cabecalho.comando;
+    if (!ja_em_andamento) {
+        solicitacoes_em_andamento[indice].solicitacao = cabecalho.solicitacao;
+        solicitacoes_em_andamento[indice].comando = cabecalho.comando;
+        solicitacoes_em_andamento[indice].ativa = true;
+    }
+    portEXIT_CRITICAL(&trava_repeticoes);
+    if (ja_em_andamento) {
+        portENTER_CRITICAL(&trava_estatisticas);
+        estatisticas.repeticoes++;
+        portEXIT_CRITICAL(&trava_estatisticas);
+        return;
+    }
     if (fila_operacoes == nullptr ||
         xQueueSend(fila_operacoes, &pendente, 0) != pdTRUE) {
+        portENTER_CRITICAL(&trava_repeticoes);
+        solicitacoes_em_andamento[indice] = {};
+        portEXIT_CRITICAL(&trava_repeticoes);
         ESP_LOGW(ETIQUETA,
                  "Fila de ações operacionais cheia; solicitação %lu não enfileirada",
                  static_cast<unsigned long>(cabecalho.solicitacao));

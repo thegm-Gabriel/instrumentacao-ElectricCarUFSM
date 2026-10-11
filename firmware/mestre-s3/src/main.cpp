@@ -1,4 +1,6 @@
 // Compõe os módulos do mestre e define sua política de inicialização.
+#include <cstdio>
+
 #include "dispositivos/leitor_tensao.h"
 #include "dispositivos/encoder_incremental.h"
 #include "esp_flash.h"
@@ -40,6 +42,30 @@ struct DisponibilidadeAquisicao {
 
 DisponibilidadeAquisicao aquisicao{};
 
+void atualizar_partida(const char* etapa, uint8_t percentual,
+                       esp_err_t resultado = ESP_OK) {
+    const esp_err_t erro_painel =
+        servico_painel_local_atualizar_inicializacao(
+            etapa, percentual, resultado);
+    if (erro_painel != ESP_OK && erro_painel != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(ETIQUETA, "Não foi possível atualizar a etapa '%s' na tela: %s",
+                 etapa, esp_err_to_name(erro_painel));
+    }
+}
+
+void notificar_servico_degradado(const char* servico, esp_err_t erro) {
+    char detalhe[22]{};
+    std::snprintf(detalhe, sizeof(detalhe), "%.21s", esp_err_to_name(erro));
+    const esp_err_t erro_painel = servico_painel_local_notificar(
+        TipoMensagemPainelLocal::Aviso, servico, detalhe, 5000);
+    if (erro_painel != ESP_OK && erro_painel != ESP_ERR_INVALID_STATE &&
+        erro_painel != ESP_ERR_TIMEOUT) {
+        ESP_LOGW(ETIQUETA, "Falha ao enfileirar aviso do serviço %s: %s",
+                 servico, esp_err_to_name(erro_painel));
+    }
+    (void)servico_sinalizacao_notificar(EventoSinalizacao::AvisoTemporario);
+}
+
 esp_err_t verificar_hardware_n16r8() {
     uint32_t tamanho_flash = 0;
     const esp_err_t erro_flash = esp_flash_get_size(nullptr, &tamanho_flash);
@@ -62,9 +88,9 @@ esp_err_t verificar_hardware_n16r8() {
     }
     if (!psram_iniciada ||
         tamanho_psram != configuracao::TAMANHO_PSRAM_ESPERADO_BYTES) {
-        ESP_LOGE(ETIQUETA, "PSRAM inesperada: esperado=8 MB Octal, detectado=%lu MB",
+        ESP_LOGW(ETIQUETA,
+                 "PSRAM inesperada: esperado=8 MB Octal, detectado=%lu MB; recursos opcionais usarão RAM interna",
                  static_cast<unsigned long>(tamanho_psram / (1024U * 1024U)));
-        return ESP_ERR_INVALID_SIZE;
     }
     return ESP_OK;
 }
@@ -364,6 +390,7 @@ esp_err_t inicializar_aplicacao() {
 [[noreturn]] void rejeitar_firmware_e_encerrar(esp_err_t erro,
                                                const char* mensagem) {
     ESP_LOGE(ETIQUETA, "%s: %s", mensagem, esp_err_to_name(erro));
+    atualizar_partida(mensagem, 100, erro);
     const esp_err_t erro_sinalizacao =
         servico_sinalizacao_notificar(EventoSinalizacao::FalhaCritica);
     if (erro_sinalizacao != ESP_OK && erro_sinalizacao != ESP_ERR_INVALID_STATE) {
@@ -404,12 +431,6 @@ extern "C" void app_main(void) {
         return;
     }
 
-    erro = inicializar_armazenamento();
-    if (erro != ESP_OK) {
-        rejeitar_firmware_e_encerrar(erro, "Inicialização do armazenamento interrompida");
-        return;
-    }
-
     erro = servico_sinalizacao_iniciar();
     if (erro != ESP_OK) {
         ESP_LOGW(ETIQUETA, "Sistema seguirá sem LEDs e buzzer: %s",
@@ -424,27 +445,38 @@ extern "C" void app_main(void) {
             EventoSinalizacao::AvisoTemporario);
     }
 
+    atualizar_partida("ARMAZENAMENTO NVS", 10);
+    erro = inicializar_armazenamento();
+    if (erro != ESP_OK) {
+        rejeitar_firmware_e_encerrar(erro, "Falha no armazenamento");
+        return;
+    }
+
+    atualizar_partida("SUPERVISAO", 20);
     erro = servico_supervisao_iniciar();
     if (erro != ESP_OK) {
         rejeitar_firmware_e_encerrar(erro, "Inicialização da supervisão interrompida");
         return;
     }
 
+    atualizar_partida("SENSORES E ENLACES", 35);
     erro = inicializar_aplicacao();
     if (erro != ESP_OK) {
         rejeitar_firmware_e_encerrar(erro, "Inicialização da aplicação interrompida");
         return;
     }
 
+    atualizar_partida("CARTAO E HISTORICO", 50);
     const esp_err_t erro_registro = servico_registro_telemetria_iniciar();
     aquisicao.registro_sd = erro_registro == ESP_OK;
     if (erro_registro != ESP_OK && erro_registro != ESP_ERR_NOT_SUPPORTED) {
         ESP_LOGW(ETIQUETA,
                  "Telemetria ao vivo ativa, mas histórico no SD indisponível: %s",
                  esp_err_to_name(erro_registro));
-        servico_sinalizacao_notificar(EventoSinalizacao::AvisoTemporario);
+        notificar_servico_degradado("CARTAO SD", erro_registro);
     }
 
+    atualizar_partida("TELEMETRIA", 62);
     erro = criar_tarefa_telemetria();
     if (erro != ESP_OK) {
         rejeitar_firmware_e_encerrar(erro,
@@ -467,18 +499,20 @@ extern "C" void app_main(void) {
             erro, "Não foi possível associar a tarefa à supervisão");
     }
 
+    atualizar_partida("REDE WI-FI", 74);
     const esp_err_t erro_wifi = servico_wifi_iniciar();
     if (erro_wifi != ESP_OK) {
         ESP_LOGW(ETIQUETA, "Telemetria ativa, mas Wi-Fi indisponível: %s",
                  esp_err_to_name(erro_wifi));
-        servico_sinalizacao_notificar(EventoSinalizacao::AvisoTemporario);
+        notificar_servico_degradado("WI-FI", erro_wifi);
     }
 
-    erro = servico_ota_iniciar();
-    if (erro != ESP_OK) {
+    atualizar_partida("ATUALIZACAO OTA", 84);
+    const esp_err_t erro_ota = servico_ota_iniciar();
+    if (erro_ota != ESP_OK) {
         ESP_LOGW(ETIQUETA, "Telemetria ativa, mas OTA indisponível: %s",
-                 esp_err_to_name(erro));
-        servico_sinalizacao_notificar(EventoSinalizacao::AvisoTemporario);
+                 esp_err_to_name(erro_ota));
+        notificar_servico_degradado("SERVICO OTA", erro_ota);
         if (erro_wifi == ESP_OK) {
             const esp_err_t erro_encerramento = servico_wifi_encerrar_sessao();
             if (erro_encerramento != ESP_OK) {
@@ -488,35 +522,50 @@ extern "C" void app_main(void) {
         }
     }
 
+    atualizar_partida("TERMINAL", 90);
     erro = servico_terminal_iniciar();
     if (erro != ESP_OK) {
         ESP_LOGW(ETIQUETA, "Sistema ativo, mas menu serial indisponível: %s",
                  esp_err_to_name(erro));
-        servico_sinalizacao_notificar(EventoSinalizacao::AvisoTemporario);
+        notificar_servico_degradado("TERMINAL", erro);
     }
 
+    atualizar_partida("RELATORIOS", 94);
     erro = servico_relatorios_iniciar();
     if (erro != ESP_OK) {
         ESP_LOGW(ETIQUETA,
                  "Sistema ativo, mas relatórios periódicos indisponíveis: %s",
                  esp_err_to_name(erro));
-        servico_sinalizacao_notificar(EventoSinalizacao::AvisoTemporario);
+        notificar_servico_degradado("RELATORIOS", erro);
     }
 
+    atualizar_partida("DIAGNOSTICO", 97);
     erro = servico_diagnostico_iniciar();
     if (erro != ESP_OK) {
         ESP_LOGW(ETIQUETA, "Sistema ativo, mas diagnóstico periódico indisponível: %s",
                  esp_err_to_name(erro));
-        servico_sinalizacao_notificar(EventoSinalizacao::AvisoTemporario);
+        notificar_servico_degradado("DIAGNOSTICO", erro);
     }
 
-    // Confirma a imagem somente depois que o núcleo da aplicação e as
-    // tentativas de inicialização dos serviços auxiliares foram concluídos.
+    // Wi-Fi e OTA fazem parte do caminho de recuperação remota. Uma imagem
+    // ainda pendente não pode ser confirmada se algum deles regrediu.
+    if (erro_wifi != ESP_OK || erro_ota != ESP_OK) {
+        erro = servico_ota_rejeitar_firmware_em_execucao();
+        if (erro != ESP_OK) {
+            rejeitar_firmware_e_encerrar(
+                erro, "Autoteste OTA falhou nos serviços de recuperação remota");
+            return;
+        }
+    }
     erro = servico_ota_confirmar_firmware_em_execucao();
     if (erro != ESP_OK) {
         rejeitar_firmware_e_encerrar(
             erro, "Não foi possível confirmar o firmware em execução");
         return;
     }
-    servico_sinalizacao_notificar(EventoSinalizacao::SistemaPronto);
+    atualizar_partida("SISTEMA PRONTO", 100);
+    (void)servico_painel_local_notificar(
+        TipoMensagemPainelLocal::Sucesso, "INICIALIZACAO", "SISTEMA PRONTO",
+        4000);
+    (void)servico_sinalizacao_notificar(EventoSinalizacao::SistemaPronto);
 }

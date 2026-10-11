@@ -154,10 +154,12 @@ void exibir_relatorios(const DadosTelemetriaVeiculo& dados) {
                  static_cast<unsigned long long>(total_segundos % 60u),
                  static_cast<unsigned long>(saude.motivo_ultimo_reset));
         ESP_LOGI(ETIQUETA,
-                 "[MEMÓRIA] heap livre=%lu KiB | interno=%lu KiB (maior bloco=%lu KiB) | mínimo=%lu KiB | menor pilha supervisionada=%lu bytes",
+                 "[MEMÓRIA] heap livre=%lu KiB | interno=%lu KiB (bloco=%lu KiB) | PSRAM=%lu KiB (bloco=%lu KiB) | mínimo=%lu KiB | menor pilha=%lu bytes",
                  static_cast<unsigned long>(saude.heap_livre / 1024u),
                  static_cast<unsigned long>(saude.heap_interno_livre / 1024u),
                  static_cast<unsigned long>(saude.maior_bloco_heap_interno / 1024u),
+                 static_cast<unsigned long>(saude.psram_livre / 1024u),
+                 static_cast<unsigned long>(saude.maior_bloco_psram / 1024u),
                  static_cast<unsigned long>(saude.menor_heap_livre / 1024u),
                  static_cast<unsigned long>(saude.bytes_pilha_livres));
         ESP_LOGI(ETIQUETA,

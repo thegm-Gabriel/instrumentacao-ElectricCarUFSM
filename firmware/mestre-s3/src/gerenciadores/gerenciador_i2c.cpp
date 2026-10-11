@@ -5,6 +5,7 @@
 
 #include "driver/i2c.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/semphr.h"
 #include "nucleo/configuracao_placa.h"
 
@@ -13,6 +14,9 @@ constexpr char ETIQUETA[] = "gerenciador_i2c";
 SemaphoreHandle_t mutex_barramento = nullptr;
 portMUX_TYPE trava_estatisticas = portMUX_INITIALIZER_UNLOCKED;
 EstatisticasI2c estatisticas{};
+int64_t ultimo_log_erro_us = 0;
+uint32_t logs_suprimidos = 0;
+constexpr int64_t INTERVALO_LOG_ERRO_US = 5000000;
 
 bool argumentos_validos(uint8_t endereco, const void* dados, size_t tamanho) {
     return endereco <= 0x7F && dados != nullptr && tamanho > 0 && tamanho <= INT_MAX;
@@ -47,6 +51,33 @@ void registrar_sondagem(esp_err_t resultado) {
         estatisticas.ultimo_erro = resultado;
     }
     portEXIT_CRITICAL(&trava_estatisticas);
+}
+
+bool reservar_log_erro(uint32_t* suprimidos) {
+    const int64_t agora_us = esp_timer_get_time();
+    bool registrar = false;
+    portENTER_CRITICAL(&trava_estatisticas);
+    if (ultimo_log_erro_us == 0 ||
+        agora_us - ultimo_log_erro_us >= INTERVALO_LOG_ERRO_US) {
+        ultimo_log_erro_us = agora_us;
+        *suprimidos = logs_suprimidos;
+        logs_suprimidos = 0;
+        registrar = true;
+    } else {
+        logs_suprimidos++;
+    }
+    portEXIT_CRITICAL(&trava_estatisticas);
+    return registrar;
+}
+
+void registrar_falha_operacao(const char* operacao, uint8_t endereco,
+                              esp_err_t erro) {
+    uint32_t suprimidos = 0;
+    if (!reservar_log_erro(&suprimidos)) return;
+    ESP_LOGE(ETIQUETA,
+             "Falha ao %s o endereco 0x%02X: %s (%lu mensagens repetidas suprimidas)",
+             operacao, endereco, esp_err_to_name(erro),
+             static_cast<unsigned long>(suprimidos));
 }
 }  // namespace
 
@@ -134,8 +165,7 @@ esp_err_t gerenciador_i2c_escrever(uint8_t endereco, const void* dados, size_t t
     xSemaphoreGive(mutex_barramento);
     registrar_resultado(erro, erro == ESP_OK ? tamanho : 0, 0);
     if (erro != ESP_OK) {
-        ESP_LOGE(ETIQUETA, "Falha ao escrever no endereco 0x%02X: %s", endereco,
-                 esp_err_to_name(erro));
+        registrar_falha_operacao("escrever", endereco, erro);
     }
     return erro;
 }
@@ -163,8 +193,7 @@ esp_err_t gerenciador_i2c_escrever_ler(uint8_t endereco, const void* comando,
     registrar_resultado(erro, erro == ESP_OK ? tamanho_comando : 0,
                         erro == ESP_OK ? tamanho_resposta : 0);
     if (erro != ESP_OK) {
-        ESP_LOGE(ETIQUETA, "Falha ao ler o endereco 0x%02X: %s", endereco,
-                 esp_err_to_name(erro));
+        registrar_falha_operacao("ler", endereco, erro);
     }
     return erro;
 }

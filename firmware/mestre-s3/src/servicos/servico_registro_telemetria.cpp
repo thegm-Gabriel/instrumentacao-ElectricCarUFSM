@@ -18,6 +18,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "gerenciadores/gerenciador_cartao_sd.h"
 #include "nucleo/configuracao_registro_telemetria.h"
@@ -39,7 +40,7 @@ constexpr char CABECALHO_CSV[] =
     "distancia_4_cm,distancia_5_cm,distancia_6_cm,distancia_7_cm,"
     "distancia_8_cm,potencia_w,autonomia_km,percurso_km,odometro_km,simulado\n";
 
-enum class TipoComandoRegistro : uint8_t { Amostra, Sincronizar };
+enum class TipoComandoRegistro : uint8_t { Amostra, FecharArquivo };
 
 struct ComandoRegistro {
     TipoComandoRegistro tipo = TipoComandoRegistro::Amostra;
@@ -53,6 +54,9 @@ struct RespostaHttp {
 };
 
 QueueHandle_t fila = nullptr;
+SemaphoreHandle_t arquivo_pronto_para_upload = nullptr;
+TaskHandle_t tarefa_registro_handle = nullptr;
+TaskHandle_t tarefa_upload_handle = nullptr;
 FILE* arquivo_atual = nullptr;
 char caminho_temporario[192]{};
 char nome_final_atual[96]{};
@@ -63,6 +67,7 @@ uint32_t linhas_sem_sincronizar = 0;
 uint32_t proximo_registro_ms = 0;
 EstadoRegistroTelemetria estado{};
 portMUX_TYPE trava_estado = portMUX_INITIALIZER_UNLOCKED;
+esp_err_t erro_preparacao_upload = ESP_OK;
 
 uint32_t agora_ms() {
     return static_cast<uint32_t>(esp_timer_get_time() / 1000);
@@ -134,15 +139,66 @@ esp_err_t recuperar_arquivos_interrompidos() {
         const int escritos_destino = std::snprintf(
             destino, sizeof(destino), "%s/%s",
             configuracao::DIRETORIO_TELEMETRIA, nome);
-        if (escritos_origem <= 0 ||
+        bool recuperavel = false;
+        FILE* arquivo = escritos_origem > 0 &&
+                                escritos_origem < static_cast<int>(sizeof(origem))
+                            ? std::fopen(origem, "rb")
+                            : nullptr;
+        if (arquivo != nullptr) {
+            char cabecalho[sizeof(CABECALHO_CSV)]{};
+            const size_t lidos = std::fread(
+                cabecalho, 1, sizeof(CABECALHO_CSV) - 1, arquivo);
+            if (lidos == sizeof(CABECALHO_CSV) - 1 &&
+                std::memcmp(cabecalho, CABECALHO_CSV, lidos) == 0 &&
+                std::fseek(arquivo, -1, SEEK_END) == 0) {
+                recuperavel = std::fgetc(arquivo) == '\n';
+            }
+            std::fclose(arquivo);
+        }
+        if (!recuperavel && escritos_origem > 0 &&
+            escritos_origem < static_cast<int>(sizeof(origem))) {
+            char nome_incompleto[96]{};
+            std::strncpy(nome_incompleto, entrada->d_name,
+                         sizeof(nome_incompleto) - 1);
+            char* extensao_incompleta = std::strrchr(nome_incompleto, '.');
+            const size_t prefixo = extensao_incompleta == nullptr
+                                       ? sizeof(nome_incompleto)
+                                       : static_cast<size_t>(extensao_incompleta -
+                                                             nome_incompleto);
+            if (extensao_incompleta != nullptr &&
+                prefixo + sizeof(".incompleto") <= sizeof(nome_incompleto)) {
+                std::strcpy(extensao_incompleta, ".incompleto");
+            } else {
+                extensao_incompleta = nullptr;
+            }
+            char caminho_incompleto[192]{};
+            const int escritos_incompleto = std::snprintf(
+                caminho_incompleto, sizeof(caminho_incompleto), "%s/%s",
+                configuracao::DIRETORIO_TELEMETRIA, nome_incompleto);
+            if (extensao_incompleta != nullptr && escritos_incompleto > 0 &&
+                escritos_incompleto < static_cast<int>(sizeof(caminho_incompleto)) &&
+                rename(origem, caminho_incompleto) == 0) {
+                ESP_LOGW(ETIQUETA,
+                         "CSV interrompido preservado sem upload: %s",
+                         nome_incompleto);
+                continue;
+            }
+        }
+        if (!recuperavel || escritos_origem <= 0 ||
             escritos_origem >= static_cast<int>(sizeof(origem)) ||
             escritos_destino <= 0 ||
             escritos_destino >= static_cast<int>(sizeof(destino)) ||
             rename(origem, destino) != 0) {
             resultado = ESP_FAIL;
-            ESP_LOGE(ETIQUETA,
-                     "Não foi possível recuperar o arquivo temporário %s",
-                     entrada->d_name);
+            if (recuperavel) {
+                ESP_LOGE(ETIQUETA,
+                         "Não foi possível recuperar o arquivo temporário %s",
+                         entrada->d_name);
+            } else {
+                ESP_LOGE(ETIQUETA,
+                         "Arquivo temporário incompleto preservado: %s",
+                         entrada->d_name);
+            }
         } else {
             ESP_LOGW(ETIQUETA, "CSV interrompido recuperado: %s", nome);
         }
@@ -206,17 +262,23 @@ esp_err_t fechar_arquivo_atual() {
     }
     arquivo_atual = nullptr;
 
-    char caminho_final[192]{};
-    const int escritos = std::snprintf(
-        caminho_final, sizeof(caminho_final), "%s/%s",
-        configuracao::DIRETORIO_TELEMETRIA, nome_final_atual);
-    if (escritos <= 0 ||
-        escritos >= static_cast<int>(sizeof(caminho_final)) ||
-        rename(caminho_temporario, caminho_final) != 0) {
-        ESP_LOGE(ETIQUETA, "Falha ao concluir CSV %s", caminho_temporario);
-        resultado = ESP_FAIL;
+    if (resultado == ESP_OK) {
+        char caminho_final[192]{};
+        const int escritos = std::snprintf(
+            caminho_final, sizeof(caminho_final), "%s/%s",
+            configuracao::DIRETORIO_TELEMETRIA, nome_final_atual);
+        if (escritos <= 0 ||
+            escritos >= static_cast<int>(sizeof(caminho_final)) ||
+            rename(caminho_temporario, caminho_final) != 0) {
+            ESP_LOGE(ETIQUETA, "Falha ao concluir CSV %s", caminho_temporario);
+            resultado = ESP_FAIL;
+        } else {
+            ESP_LOGI(ETIQUETA, "CSV pronto para upload: %s", nome_final_atual);
+        }
     } else {
-        ESP_LOGI(ETIQUETA, "CSV pronto para upload: %s", nome_final_atual);
+        ESP_LOGE(ETIQUETA,
+                 "CSV não foi publicado porque a sincronização com o SD falhou: %s",
+                 caminho_temporario);
     }
     caminho_temporario[0] = '\0';
     nome_final_atual[0] = '\0';
@@ -268,7 +330,16 @@ esp_err_t gravar_amostra(const ComandoRegistro& comando) {
     size_t tamanho = 0;
     esp_err_t erro = formatar_linha_csv(comando, linha, sizeof(linha), &tamanho);
     if (erro != ESP_OK) return erro;
-    if (std::fwrite(linha, 1, tamanho, arquivo_atual) != tamanho) return ESP_FAIL;
+    if (std::fwrite(linha, 1, tamanho, arquivo_atual) != tamanho) {
+        ESP_LOGE(ETIQUETA,
+                 "Falha ao gravar no SD; o arquivo temporário será preservado");
+        (void)std::fclose(arquivo_atual);
+        arquivo_atual = nullptr;
+        caminho_temporario[0] = '\0';
+        nome_final_atual[0] = '\0';
+        linhas_sem_sincronizar = 0;
+        return ESP_FAIL;
+    }
 
     linhas_sem_sincronizar++;
     portENTER_CRITICAL(&trava_estado);
@@ -488,8 +559,7 @@ esp_err_t mover_para_enviados(const char* nome) {
 }
 
 esp_err_t sincronizar_com_google() {
-    esp_err_t erro = fechar_arquivo_atual();
-    if (erro != ESP_OK) return erro;
+    esp_err_t erro = ESP_OK;
     if (configuracao::ENDERECO_GOOGLE_TELEMETRIA[0] == '\0' ||
         configuracao::TOKEN_GOOGLE_TELEMETRIA[0] == '\0') {
         ESP_LOGW(
@@ -505,22 +575,30 @@ esp_err_t sincronizar_com_google() {
         if (erro != ESP_OK) return erro;
     }
 
-    DIR* diretorio = opendir(configuracao::DIRETORIO_TELEMETRIA);
-    if (diretorio == nullptr) {
-        erro = ESP_FAIL;
-    } else {
+    while (erro == ESP_OK) {
+        char nome[96]{};
+        DIR* diretorio = opendir(configuracao::DIRETORIO_TELEMETRIA);
+        if (diretorio == nullptr) {
+            erro = ESP_FAIL;
+            break;
+        }
         while (dirent* entrada = readdir(diretorio)) {
-            if (!termina_com(entrada->d_name, ".csv")) continue;
-            erro = enviar_com_repeticao(entrada->d_name);
-            if (erro != ESP_OK) break;
-            erro = mover_para_enviados(entrada->d_name);
+            if (termina_com(entrada->d_name, ".csv")) {
+                std::strncpy(nome, entrada->d_name, sizeof(nome) - 1);
+                break;
+            }
+        }
+        closedir(diretorio);
+        if (nome[0] == '\0') break;
+        erro = enviar_com_repeticao(nome);
+        if (erro == ESP_OK) {
+            erro = mover_para_enviados(nome);
             if (erro != ESP_OK) break;
             portENTER_CRITICAL(&trava_estado);
             estado.arquivos_enviados++;
             portEXIT_CRITICAL(&trava_estado);
-            ESP_LOGI(ETIQUETA, "Upload confirmado: %s", entrada->d_name);
+            ESP_LOGI(ETIQUETA, "Upload confirmado: %s", nome);
         }
-        closedir(diretorio);
     }
 
     if (sessao_propria) {
@@ -539,17 +617,45 @@ void tarefa_registro(void*) {
         if (comando.tipo == TipoComandoRegistro::Amostra) {
             erro = gravar_amostra(comando);
         } else {
+            erro = fechar_arquivo_atual();
             portENTER_CRITICAL(&trava_estado);
-            estado.sincronizacao_em_andamento = true;
+            erro_preparacao_upload = erro;
             portEXIT_CRITICAL(&trava_estado);
-            erro = sincronizar_com_google();
-            portENTER_CRITICAL(&trava_estado);
-            estado.sincronizacao_em_andamento = false;
-            portEXIT_CRITICAL(&trava_estado);
+            xSemaphoreGive(arquivo_pronto_para_upload);
         }
         definir_ultimo_erro(erro);
         if (erro != ESP_OK) {
             ESP_LOGE(ETIQUETA, "Operação de registro falhou: %s",
+                     esp_err_to_name(erro));
+        }
+    }
+}
+
+void tarefa_upload(void*) {
+    while (true) {
+        (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        ComandoRegistro comando{};
+        comando.tipo = TipoComandoRegistro::FecharArquivo;
+        esp_err_t erro = xQueueSend(fila, &comando, pdMS_TO_TICKS(1000)) == pdTRUE
+                             ? ESP_OK
+                             : ESP_ERR_TIMEOUT;
+        if (erro == ESP_OK &&
+            xSemaphoreTake(arquivo_pronto_para_upload,
+                           pdMS_TO_TICKS(10000)) != pdTRUE) {
+            erro = ESP_ERR_TIMEOUT;
+        }
+        if (erro == ESP_OK) {
+            portENTER_CRITICAL(&trava_estado);
+            erro = erro_preparacao_upload;
+            portEXIT_CRITICAL(&trava_estado);
+        }
+        if (erro == ESP_OK) erro = sincronizar_com_google();
+        definir_ultimo_erro(erro);
+        portENTER_CRITICAL(&trava_estado);
+        estado.sincronizacao_em_andamento = false;
+        portEXIT_CRITICAL(&trava_estado);
+        if (erro != ESP_OK) {
+            ESP_LOGE(ETIQUETA, "Sincronização com o Google falhou: %s",
                      esp_err_to_name(erro));
         }
     }
@@ -581,11 +687,31 @@ esp_err_t servico_registro_telemetria_iniciar() {
     sessao = esp_random();
     fila = xQueueCreate(configuracao::CAPACIDADE_FILA_REGISTRO,
                         sizeof(ComandoRegistro));
-    if (fila == nullptr) return ESP_ERR_NO_MEM;
-    if (xTaskCreate(tarefa_registro, "registro_csv", 10240, nullptr, 3,
-                    nullptr) != pdPASS) {
-        vQueueDelete(fila);
+    arquivo_pronto_para_upload = xSemaphoreCreateBinary();
+    if (fila == nullptr || arquivo_pronto_para_upload == nullptr) {
+        if (fila != nullptr) vQueueDelete(fila);
+        if (arquivo_pronto_para_upload != nullptr)
+            vSemaphoreDelete(arquivo_pronto_para_upload);
         fila = nullptr;
+        arquivo_pronto_para_upload = nullptr;
+        return ESP_ERR_NO_MEM;
+    }
+    if (xTaskCreate(tarefa_registro, "registro_csv", 10240, nullptr, 3,
+                    &tarefa_registro_handle) != pdPASS ||
+        xTaskCreate(tarefa_upload, "upload_csv", 10240, nullptr, 3,
+                    &tarefa_upload_handle) != pdPASS) {
+        if (tarefa_registro_handle != nullptr) {
+            vTaskDelete(tarefa_registro_handle);
+            tarefa_registro_handle = nullptr;
+        }
+        if (tarefa_upload_handle != nullptr) {
+            vTaskDelete(tarefa_upload_handle);
+            tarefa_upload_handle = nullptr;
+        }
+        vQueueDelete(fila);
+        vSemaphoreDelete(arquivo_pronto_para_upload);
+        fila = nullptr;
+        arquivo_pronto_para_upload = nullptr;
         return ESP_ERR_NO_MEM;
     }
 
@@ -626,7 +752,9 @@ esp_err_t servico_registro_telemetria_registrar(
 }
 
 esp_err_t servico_registro_telemetria_solicitar_sincronizacao() {
-    if (!estado.iniciado || fila == nullptr) return ESP_ERR_INVALID_STATE;
+    if (!estado.iniciado || tarefa_upload_handle == nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
     portENTER_CRITICAL(&trava_estado);
     if (estado.sincronizacao_em_andamento) {
         portEXIT_CRITICAL(&trava_estado);
@@ -634,13 +762,8 @@ esp_err_t servico_registro_telemetria_solicitar_sincronizacao() {
     }
     estado.sincronizacao_em_andamento = true;
     portEXIT_CRITICAL(&trava_estado);
-    ComandoRegistro comando{};
-    comando.tipo = TipoComandoRegistro::Sincronizar;
-    if (xQueueSend(fila, &comando, 0) == pdTRUE) return ESP_OK;
-    portENTER_CRITICAL(&trava_estado);
-    estado.sincronizacao_em_andamento = false;
-    portEXIT_CRITICAL(&trava_estado);
-    return ESP_ERR_NO_MEM;
+    xTaskNotifyGive(tarefa_upload_handle);
+    return ESP_OK;
 }
 
 EstadoRegistroTelemetria servico_registro_telemetria_obter_estado() {

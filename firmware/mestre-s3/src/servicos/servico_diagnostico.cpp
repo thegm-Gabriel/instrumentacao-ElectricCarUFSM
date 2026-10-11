@@ -84,6 +84,9 @@ ResumoSaudeSistema calcular_resumo() {
     resumo.heap_interno_livre = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     resumo.maior_bloco_heap_interno =
         heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+    resumo.psram_livre = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    resumo.maior_bloco_psram =
+        heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
     resumo.motivo_ultimo_reset = static_cast<uint32_t>(esp_reset_reason());
     resumo.erros_sensores = sensores.adc.total + sensores.mpu6050.total +
                             sensores.encoder.total;

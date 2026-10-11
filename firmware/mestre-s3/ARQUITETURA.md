@@ -87,6 +87,19 @@ Os satélites devolvem uma confirmação curta para cada quadro válido. O servi
 telemetria mede, separadamente, RTT atual, médio e máximo e a idade da última
 resposta dos módulos da equipe e dos visitantes.
 
+Na OTA dos satélites, HTTPS e UART formam um pipeline produtor–consumidor. Três
+buffers de 4 KiB são alocados uma única vez, preferencialmente na PSRAM, e
+reutilizados durante toda a execução. O callback HTTP somente preenche e enfileira
+blocos; uma tarefa persistente monta o quadro em RAM interna, transmite e aguarda
+a confirmação. Assim, a rede pode preencher o próximo bloco enquanto a UART
+confirma o anterior, sem alocação por bloco e sem usar PSRAM como memória DMA.
+Quando a PSRAM não está disponível, a inicialização tenta a RAM interna e informa
+a degradação no registro.
+
+O buffer de recepção do manifesto também é reservado uma única vez na
+inicialização do serviço OTA e reutilizado nas verificações periódicas. Dessa
+forma, apenas as estruturas transitórias do analisador JSON permanecem dinâmicas.
+
 A apresentação ao vivo usa um retrato a 4 Hz. Em paralelo,
 `servico_registro_telemetria` reduz esse mesmo retrato para 1 Hz e o entrega por
 fila a uma única tarefa proprietária dos CSVs. O arquivo ativo é sincronizado a
@@ -122,6 +135,12 @@ framebuffer usando exclusivamente a API do `gerenciador_i2c`. O
 de sinalização e apresenta inicialização, saúde, Wi-Fi e OTA. A tela compartilha o
 barramento do MPU6050 e só recebe um novo quadro quando o conteúdo realmente muda.
 Uma falha do painel é isolada e não interrompe a telemetria.
+
+O painel também mantém uma fila de mensagens de tamanho fixo. A inicialização
+publica etapa e percentual sem espera artificial; avisos são copiados para a fila
+e exibidos depois da partida. Estados persistentes usam janelas recorrentes, de
+forma que um alerta continua sendo lembrado sem monopolizar permanentemente a
+tela. Nenhuma mensagem faz alocação dinâmica durante a operação.
 
 `servicos/servico_supervisao.cpp` acompanha pulsos da tarefa de telemetria e dos
 dois canais UART. Cada alvo possui tempo limite compatível com o maior intervalo

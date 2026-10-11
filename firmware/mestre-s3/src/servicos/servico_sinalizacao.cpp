@@ -122,6 +122,7 @@ int64_t aviso_temporario_ate_ms = 0;
 int64_t proximo_alarme_falha_ms = 0;
 int64_t proximo_alarme_ota_falha_ms = 0;
 int64_t ultimo_log_erro_hardware_ms = -5000;
+uint32_t conclusoes_ota_observadas = 0;
 
 int64_t agora_ms() {
     return esp_timer_get_time() / 1000;
@@ -389,6 +390,19 @@ void tratar_evento(EventoSinalizacao evento, int64_t instante_ms) {
     }
 }
 
+void detectar_conclusao_ota(EstadoSinalizacao estado_atual,
+                            int64_t instante_ms) {
+    const SituacaoOta ota = servico_ota_obter_situacao();
+    if (ota.conclusoes == conclusoes_ota_observadas) return;
+    conclusoes_ota_observadas = ota.conclusoes;
+    ESP_LOGI(ETIQUETA, "Conclusão OTA detectada para %s",
+             servico_ota_nome_alvo(ota.ultimo_alvo_concluido));
+    if (!falha_critica_travada &&
+        estado_atual != EstadoSinalizacao::OtaConcluido) {
+        iniciar_melodia(MELODIA_OTA_CONCLUIDO, instante_ms);
+    }
+}
+
 void tarefa_sinalizacao(void*) {
     EstadoSinalizacao estado_anterior = EstadoSinalizacao::Desligado;
     EstadoSinalizacao estado_atual = EstadoSinalizacao::Inicializando;
@@ -399,6 +413,7 @@ void tarefa_sinalizacao(void*) {
         const int64_t instante_ms = agora_ms();
         EventoSinalizacao evento{};
         bool evento_recebido = false;
+        bool servicos_avaliados = false;
         while (xQueueReceive(fila_eventos, &evento, 0) == pdTRUE) {
             tratar_evento(evento, instante_ms);
             evento_recebido = true;
@@ -408,8 +423,12 @@ void tarefa_sinalizacao(void*) {
             estado_atual = determinar_estado_automatico();
             proxima_avaliacao_servicos_ms =
                 instante_ms + INTERVALO_AVALIACAO_SERVICOS_MS;
+            servicos_avaliados = true;
         }
         tratar_transicao(estado_anterior, estado_atual, instante_ms);
+        if (servicos_avaliados) {
+            detectar_conclusao_ota(estado_atual, instante_ms);
+        }
         if (estado_atual == EstadoSinalizacao::Falha &&
             sequenciador.melodia == nullptr &&
             instante_ms >= proximo_alarme_falha_ms) {
@@ -458,6 +477,7 @@ esp_err_t servico_sinalizacao_iniciar() {
     aviso_temporario_ate_ms = 0;
     proximo_alarme_falha_ms = 0;
     proximo_alarme_ota_falha_ms = 0;
+    conclusoes_ota_observadas = servico_ota_obter_situacao().conclusoes;
     portENTER_CRITICAL(&trava_situacao);
     situacao = {};
     situacao.iniciado = true;

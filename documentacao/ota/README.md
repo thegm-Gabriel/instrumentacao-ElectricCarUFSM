@@ -21,9 +21,20 @@ partição inativa, compara o SHA-256 completo, seleciona a nova imagem e reinic
 imagem nova só é confirmada depois que Wi-Fi, UART e servidor web inicializam; se
 isso falhar, o bootloader retorna à versão anterior.
 
+No mestre, o download dos firmwares dos satélites usa três buffers fixos de 4 KiB
+na PSRAM. Enquanto uma tarefa transmite e confirma um bloco pela UART, o cliente
+HTTPS pode preencher o seguinte. Os buffers são criados uma vez ao iniciar o
+serviço e reutilizados, evitando fragmentação e mantendo o quadro entregue ao
+driver UART na RAM interna. Se a PSRAM não puder ser usada, há fallback para RAM
+interna.
+
 Durante a transferência, o terminal e a SSD1306 mostram o mesmo estado mantido
 pelo serviço OTA: alvo, versão, bytes confirmados, porcentagem, taxa em MB/s e tempo
 restante. A última faixa da OLED é usada como barra de progresso.
+
+Atualização disponível, conclusão e falha possuem indicação sonora própria. Um
+aviso pendente não monopoliza a OLED: ele aparece inicialmente e volta em
+intervalos regulares, permitindo visualizar as páginas normais entre os lembretes.
 
 ## Primeira gravação por cabo
 

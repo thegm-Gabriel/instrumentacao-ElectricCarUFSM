@@ -62,9 +62,11 @@ struct SituacaoOta {
     char versao_disponivel[32] = {};
     uint32_t verificacoes = 0;
     uint32_t falhas = 0;
+    uint32_t conclusoes = 0;
     uint32_t intervalo_verificacao_minutos = 0;
     esp_err_t ultimo_erro = ESP_OK;
     AlvoOta alvo_ativo = AlvoOta::Nenhum;
+    AlvoOta ultimo_alvo_concluido = AlvoOta::Nenhum;
     ProgressoTransferenciaOta progresso;
     SituacaoOtaSatelite equipe;
     SituacaoOtaSatelite visitantes;
