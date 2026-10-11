@@ -45,3 +45,8 @@ cativo. O DNS local direciona `painel.equipe`, `painel.diagnostico` e
 `painel.mestre` ao mesmo servidor enquanto o dispositivo estiver conectado à
 rede `UFSM-Carro-Equipe`. O cabeçalho HTTP `Host` seleciona a página correta;
 endereços desconhecidos são redirecionados para `painel.equipe`.
+
+Os nomes pertencem somente à rede local criada pelo ESP e devem ser abertos com
+`http://`. Eles não são domínios públicos e não funcionam fora desse ponto de
+acesso. Navegadores configurados para forçar HTTPS ou DNS seguro podem impedir a
+resolução; nesse caso, libere HTTP para a rede local e tente novamente.

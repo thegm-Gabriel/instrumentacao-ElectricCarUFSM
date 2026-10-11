@@ -1,30 +1,78 @@
-# Saidas do PlatformIO e ESP-IDF
+# Este repositório mantém fontes, documentação, esquemas, configurações padrão e
+# exemplos. As regras abaixo excluem somente arquivos locais, reproduzíveis ou
+# sensíveis.
+
+# Compilação e ferramentas do ESP-IDF/PlatformIO
 **/.pio/
 **/build/
 **/managed_components/
 **/dependencies.lock
+**/compile_commands.json
+**/sdkconfig.old
+**/sdkconfig.*
+!**/sdkconfig.defaults
+*.bin
+*.elf
+*.map
+*.hex
+*.uf2
+
+# Ambientes, caches e cobertura
 **/__pycache__/
-*.pyc
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
-# Arquivos locais de editores e sistema
-**/.DS_Store
-**/Thumbs.db
+# Editores e sistemas operacionais
+.vscode/*
+!.vscode/extensions.json
+.idea/
 *.code-workspace
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+.DS_Store
+Thumbs.db
+Desktop.ini
 
-# Segredos e credenciais
+# Credenciais e configurações exclusivas da máquina
 .env
+.env.*
+!.env.example
 *.pem
 *.key
+*.p12
+*.pfx
 **/segredos_ota.h
 
-# Binarios de entrega; o manifesto de exemplo permanece versionado
-versoes/*.bin
-versoes/*.elf
-versoes/*.map
-versoes/saida/
-versoes/historico/
-versoes/.preparacao/
+# Logs, despejos e arquivos temporários
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+*.dmp
+core
+core.*
+/.tmp*/
+/tmp/
+/temp/
+/output/
 
-# Restos temporarios da reorganizacao; podem ser excluidos apos fechar o VS Code
+# Binários preparados para publicação. Os manifestos de exemplo e o estado das
+# versões permanecem no repositório.
+/versoes/saida/
+/versoes/historico/
+/versoes/.preparacao/
+
+# Diretórios antigos preservados apenas em máquinas que ainda não concluíram a
+# reorganização do firmware.
 /esp32s3_MESTRE/
 /firmware/master-s3/

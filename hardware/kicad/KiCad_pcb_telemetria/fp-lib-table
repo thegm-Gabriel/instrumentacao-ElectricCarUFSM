@@ -1,0 +1,4 @@
+(fp_lib_table
+	(version 7)
+	(lib (name "PLACAS_ESP32_CUSTOM") (type "KiCad") (uri "C:/Users/theba/OneDrive/Desktop/PLACAS_ESP32_CUSTOM.pretty") (options "") (descr ""))
+)

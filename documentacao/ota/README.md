@@ -9,6 +9,12 @@ atualização, o operador escolhe no terminal qual alvo autorizar. O mestre atua
 sua própria partição por HTTPS. Para um satélite, ele baixa a imagem por HTTPS e a
 retransmite pela UART em blocos confirmados individualmente.
 
+Na operação **Atualizar todos**, a ordem é equipe, visitantes e, por último,
+mestre. Um alvo sem atualização pendente é ignorado. Se um satélite falhar, o
+mestre encerra a sequência e preserva seu próprio firmware para que o operador
+possa consultar o diagnóstico e repetir ou executar cada atualização
+individualmente.
+
 O protocolo OTA dos satélites usa sessão, sequência, deslocamento e CRC-32. Blocos
 sem confirmação são repetidos sem regravação duplicada. O satélite grava somente a
 partição inativa, compara o SHA-256 completo, seleciona a nova imagem e reinicia. A
@@ -44,12 +50,18 @@ No terminal de 115200 baud, escolha `2 - Atualização OTA`. O submenu permite:
 3 - Autorizar atualização do mestre
 4 - Autorizar atualização do satélite da equipe
 5 - Autorizar atualização do satélite de visitantes
-6 - Cancelar atualizações pendentes
-7 - Alterar intervalo das verificações
+6 - Atualizar todos: satélites e depois mestre
+7 - Cancelar atualizações pendentes
+8 - Alterar intervalo das verificações
+9 - Alterar intervalo da telemetria durante OTA
 ```
 
 O mestre só oferece OTA ao satélite que esteja respondendo, anuncie a capacidade
 OTA e tenha uma versão menor que a descrita no manifesto.
+
+As mesmas autorizações estão disponíveis em `http://painel.mestre` quando o
+operador está conectado ao ponto de acesso do módulo da equipe. A página exige
+confirmação para ações que alteram estado e acompanha o resultado pela UART.
 
 ## Preparar um release
 
