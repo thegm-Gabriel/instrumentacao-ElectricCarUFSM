@@ -1,3 +1,4 @@
+// Declara a leitura calibrada do canal ADC de tensão.
 #pragma once
 
 #include <cstdint>

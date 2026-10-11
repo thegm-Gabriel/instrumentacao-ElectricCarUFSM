@@ -1,3 +1,4 @@
+// Define o formato, CRC e validações dos pacotes de telemetria.
 #pragma once
 
 #include <stddef.h>
@@ -6,11 +7,11 @@
 #define TELEMETRIA_INICIO_1 0xAAu
 #define TELEMETRIA_INICIO_2 0x55u
 #define TELEMETRIA_INICIO_CONFIRMACAO_2 0x56u
-#define TELEMETRIA_VERSAO_PROTOCOLO 3u
+#define TELEMETRIA_VERSAO_PROTOCOLO 4u
 #define TELEMETRIA_TIPO_DADOS 1u
 #define TELEMETRIA_TIPO_CONFIRMACAO 2u
-#define TELEMETRIA_TAMANHO_CARGA_DADOS 81u
-#define TAMANHO_PACOTE_TELEMETRIA 88u
+#define TELEMETRIA_TAMANHO_CARGA_DADOS 98u
+#define TAMANHO_PACOTE_TELEMETRIA 105u
 #define TAMANHO_CONFIRMACAO_TELEMETRIA 20u
 
 #define CAPACIDADE_SATELITE_PAINEL_WEB (1u << 0)
@@ -18,6 +19,18 @@
 #define CAPACIDADE_SATELITE_METRICAS_LINK (1u << 2)
 #define CAPACIDADE_SATELITE_COMANDOS (1u << 3)
 #define CAPACIDADE_SATELITE_OTA_UART (1u << 4)
+#define CAPACIDADE_SATELITE_OTA_BLOCO_4096 (1u << 5)
+
+#define TELEMETRIA_MPU_ATIVO (1u << 0)
+#define TELEMETRIA_MPU_CALIBRADO (1u << 1)
+#define TELEMETRIA_MPU_EIXO_COMPATIVEL (1u << 2)
+#define TELEMETRIA_MPU_SENTIDO_DESLOCAMENTO 3u
+#define TELEMETRIA_MPU_SENTIDO_MASCARA (3u << TELEMETRIA_MPU_SENTIDO_DESLOCAMENTO)
+#define TELEMETRIA_MPU_SENTIDO_NEUTRO 0u
+#define TELEMETRIA_MPU_SENTIDO_FRENTE 1u
+#define TELEMETRIA_MPU_SENTIDO_TRAS 2u
+#define TELEMETRIA_MPU_EIXO_DESLOCAMENTO 5u
+#define TELEMETRIA_MPU_EIXO_MASCARA (3u << TELEMETRIA_MPU_EIXO_DESLOCAMENTO)
 
 typedef enum {
     SATELITE_TELEMETRIA_DESCONHECIDO = 0,
@@ -61,6 +74,15 @@ typedef struct __attribute__((packed)) {
     uint16_t autonomia_decimos_km;
     uint32_t percurso_metros;
     uint32_t odometro_metros;
+    int16_t aceleracao_x_milesimos_g;
+    int16_t aceleracao_y_milesimos_g;
+    int16_t aceleracao_z_milesimos_g;
+    int16_t giroscopio_x_centesimos_graus_s;
+    int16_t giroscopio_y_centesimos_graus_s;
+    int16_t giroscopio_z_centesimos_graus_s;
+    int16_t aceleracao_longitudinal_milesimos_g;
+    int16_t temperatura_mpu_centesimos_c;
+    uint8_t estado_mpu;
     uint16_t crc16;
 } pacote_telemetria_t;
 
@@ -90,12 +112,12 @@ typedef enum {
 
 #ifdef __cplusplus
 static_assert(sizeof(pacote_telemetria_t) == TAMANHO_PACOTE_TELEMETRIA,
-              "O pacote de telemetria v3 deve ter 88 bytes");
+              "O pacote de telemetria v4 deve ter 105 bytes");
 static_assert(sizeof(confirmacao_telemetria_t) == TAMANHO_CONFIRMACAO_TELEMETRIA,
               "A confirmacao de telemetria deve ter 20 bytes");
 #else
 _Static_assert(sizeof(pacote_telemetria_t) == TAMANHO_PACOTE_TELEMETRIA,
-               "O pacote de telemetria v3 deve ter 88 bytes");
+               "O pacote de telemetria v4 deve ter 105 bytes");
 _Static_assert(sizeof(confirmacao_telemetria_t) == TAMANHO_CONFIRMACAO_TELEMETRIA,
                "A confirmacao de telemetria deve ter 20 bytes");
 #endif
@@ -184,6 +206,12 @@ static inline int protocolo_telemetria_conteudo_valido(
 {
     if (pacote == NULL) return 0;
     const uint8_t marcha = pacote->marcha & 0x7Fu;
+    const uint8_t sentido_mpu =
+        (pacote->estado_mpu & TELEMETRIA_MPU_SENTIDO_MASCARA) >>
+        TELEMETRIA_MPU_SENTIDO_DESLOCAMENTO;
+    const uint8_t eixo_mpu =
+        (pacote->estado_mpu & TELEMETRIA_MPU_EIXO_MASCARA) >>
+        TELEMETRIA_MPU_EIXO_DESLOCAMENTO;
     return pacote->tensao_adc_bruta <= 4095u && marcha <= 3u &&
            pacote->velocidade_centesimos_kmh <= 25000u &&
            pacote->acelerador_decimos_percentual <= 1000u &&
@@ -193,5 +221,9 @@ static inline int protocolo_telemetria_conteudo_valido(
            pacote->latitude_micrograus >= -90000000 &&
            pacote->latitude_micrograus <= 90000000 &&
            pacote->longitude_micrograus >= -180000000 &&
-           pacote->longitude_micrograus <= 180000000;
+           pacote->longitude_micrograus <= 180000000 &&
+           (pacote->estado_mpu & 0x80u) == 0u && eixo_mpu <= 2u &&
+           sentido_mpu <= TELEMETRIA_MPU_SENTIDO_TRAS &&
+           pacote->temperatura_mpu_centesimos_c >= -4000 &&
+           pacote->temperatura_mpu_centesimos_c <= 8500;
 }

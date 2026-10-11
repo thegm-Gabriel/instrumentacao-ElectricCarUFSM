@@ -1,3 +1,4 @@
+// Detecta tarefas sem atividade e executa recuperações localizadas.
 #include "servicos/servico_supervisao.h"
 
 #include <array>
@@ -40,13 +41,22 @@ void tarefa(void*) {
         for (auto& registro : modulos) {
             AcaoRecuperacaoModulo acao = nullptr;
             const char* nome = nullptr;
-            TaskHandle_t tarefa_monitorada = nullptr;
             portENTER_CRITICAL(&trava);
-            tarefa_monitorada = registro.tarefa_monitorada;
+            if (registro.tarefa_monitorada != nullptr) {
+                registro.estado.bytes_pilha_livres =
+                    uxTaskGetStackHighWaterMark(registro.tarefa_monitorada);
+            }
             const uint32_t idade = agora_ms - registro.instante_ultimo_pulso_ms;
             registro.estado.idade_ultimo_pulso_ms = idade;
-            if (registro.estado.registrado && !registro.estado.em_recuperacao &&
+            if (registro.estado.registrado && registro.estado.em_recuperacao &&
                 idade > registro.estado.tempo_limite_ms) {
+                registro.estado.em_recuperacao = false;
+                registro.estado.recuperacoes_com_falha++;
+                registro.estado.ultimo_resultado = ESP_ERR_TIMEOUT;
+                registro.instante_ultimo_pulso_ms = agora_ms;
+            } else if (registro.estado.registrado &&
+                       !registro.estado.em_recuperacao &&
+                       idade > registro.estado.tempo_limite_ms) {
                 registro.estado.em_recuperacao = true;
                 registro.estado.falhas_detectadas++;
                 registro.instante_ultimo_pulso_ms = agora_ms;
@@ -54,27 +64,21 @@ void tarefa(void*) {
                 nome = registro.estado.nome;
             }
             portEXIT_CRITICAL(&trava);
-
-            if (tarefa_monitorada != nullptr) {
-                const uint32_t palavras = uxTaskGetStackHighWaterMark(tarefa_monitorada);
-                portENTER_CRITICAL(&trava);
-                if (registro.tarefa_monitorada == tarefa_monitorada) {
-                    registro.estado.palavras_pilha_livres = palavras;
-                }
-                portEXIT_CRITICAL(&trava);
-            }
             if (acao == nullptr) continue;
 
             ESP_LOGE(ETIQUETA, "%s sem atividade; iniciando recuperação localizada", nome);
             const esp_err_t resultado = acao();
             portENTER_CRITICAL(&trava);
             registro.estado.ultimo_resultado = resultado;
-            registro.estado.em_recuperacao = false;
-            if (resultado == ESP_OK) registro.estado.recuperacoes_ok++;
-            else registro.estado.recuperacoes_com_falha++;
+            if (resultado != ESP_OK) {
+                registro.estado.em_recuperacao = false;
+                registro.estado.recuperacoes_com_falha++;
+            }
             portEXIT_CRITICAL(&trava);
             if (resultado == ESP_OK) {
-                ESP_LOGI(ETIQUETA, "%s recuperado com sucesso", nome);
+                ESP_LOGI(ETIQUETA,
+                         "Ação de recuperação de %s executada; aguardando novo pulso",
+                         nome);
             } else {
                 ESP_LOGE(ETIQUETA, "Falha ao recuperar %s: %s", nome,
                          esp_err_to_name(resultado));
@@ -115,29 +119,46 @@ esp_err_t servico_supervisao_registrar(ModuloSupervisionado modulo, const char* 
     return ESP_OK;
 }
 
-void servico_supervisao_alimentar(ModuloSupervisionado modulo) {
+esp_err_t servico_supervisao_desregistrar(ModuloSupervisionado modulo) {
     RegistroModulo* registro = localizar(modulo);
-    if (registro == nullptr) return;
+    if (registro == nullptr) return ESP_ERR_INVALID_ARG;
     portENTER_CRITICAL(&trava);
-    if (registro->estado.registrado) {
+    *registro = {};
+    portEXIT_CRITICAL(&trava);
+    return ESP_OK;
+}
+
+esp_err_t servico_supervisao_alimentar(ModuloSupervisionado modulo) {
+    RegistroModulo* registro = localizar(modulo);
+    if (registro == nullptr) return ESP_ERR_INVALID_ARG;
+    portENTER_CRITICAL(&trava);
+    const bool registrado = registro->estado.registrado;
+    if (registrado) {
         registro->instante_ultimo_pulso_ms =
             static_cast<uint32_t>(esp_timer_get_time() / 1000);
         registro->estado.idade_ultimo_pulso_ms = 0;
-        if (!registro->estado.em_recuperacao) {
-            registro->estado.ultimo_resultado = ESP_OK;
+        if (registro->estado.em_recuperacao) {
+            registro->estado.em_recuperacao = false;
+            registro->estado.recuperacoes_ok++;
         }
+        registro->estado.ultimo_resultado = ESP_OK;
     }
     portEXIT_CRITICAL(&trava);
+    return registrado ? ESP_OK : ESP_ERR_INVALID_STATE;
 }
 
-void servico_supervisao_associar_tarefa(ModuloSupervisionado modulo,
-                                        TaskHandle_t tarefa) {
+esp_err_t servico_supervisao_associar_tarefa(ModuloSupervisionado modulo,
+                                             TaskHandle_t tarefa) {
     RegistroModulo* registro = localizar(modulo);
-    if (registro == nullptr) return;
+    if (registro == nullptr || tarefa == nullptr) return ESP_ERR_INVALID_ARG;
     portENTER_CRITICAL(&trava);
-    registro->tarefa_monitorada = tarefa;
-    registro->estado.palavras_pilha_livres = 0;
+    const bool registrado = registro->estado.registrado;
+    if (registrado) {
+        registro->tarefa_monitorada = tarefa;
+        registro->estado.bytes_pilha_livres = 0;
+    }
     portEXIT_CRITICAL(&trava);
+    return registrado ? ESP_OK : ESP_ERR_INVALID_STATE;
 }
 
 EstadoModuloSupervisionado servico_supervisao_obter_estado(
@@ -158,10 +179,10 @@ uint32_t servico_supervisao_obter_menor_pilha_livre() {
     portENTER_CRITICAL(&trava);
     if (menor_pilha_supervisao != 0) menor = menor_pilha_supervisao;
     for (const auto& registro : modulos) {
-        const uint32_t palavras = registro.estado.palavras_pilha_livres;
-        if (registro.estado.registrado && palavras != 0 &&
-            (menor == 0 || palavras < menor)) {
-            menor = palavras;
+        const uint32_t bytes = registro.estado.bytes_pilha_livres;
+        if (registro.estado.registrado && bytes != 0 &&
+            (menor == 0 || bytes < menor)) {
+            menor = bytes;
         }
     }
     portEXIT_CRITICAL(&trava);

@@ -1,3 +1,4 @@
+// Implementa a renderização compacta de informações no SSD1306.
 #include "dispositivos/tela_ssd1306.h"
 
 #include <cctype>
@@ -312,10 +313,6 @@ esp_err_t tela_ssd1306_exibir_linhas_com_progresso(
     uint16_t percentual_decimos) {
     if (percentual_decimos > 1000) return ESP_ERR_INVALID_ARG;
     return exibir_conteudo(linhas, quantidade_linhas, percentual_decimos);
-}
-
-esp_err_t tela_ssd1306_limpar() {
-    return tela_ssd1306_exibir_linhas(nullptr, 0);
 }
 
 EstadoTelaSsd1306 tela_ssd1306_obter_estado() {

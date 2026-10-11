@@ -1,47 +1,72 @@
+// Implementa a montagem transacional de cartão microSD FAT pelo barramento SPI2.
 #include "gerenciadores/gerenciador_cartao_sd.h"
 
-#include <cstring>
-
+#include "driver/sdspi_host.h"
+#include "driver/spi_common.h"
 #include "esp_log.h"
+#include "esp_vfs_fat.h"
+#include "sdmmc_cmd.h"
 
 namespace {
 constexpr char ETIQUETA[] = "gerenciador_sd";
 bool montado = false;
+sdmmc_card_t* cartao = nullptr;
 }
 
-esp_err_t gerenciador_cartao_sd_iniciar(const ConfiguracaoCartaoSd& configuracao_sd) {
-    if (configuracao_sd.ponto_montagem == nullptr || configuracao_sd.ponto_montagem[0] != '/' ||
-        configuracao_sd.pino_cs == GPIO_NUM_NC || configuracao_sd.frequencia_hz == 0) {
-        ESP_LOGE(ETIQUETA, "Configuracao do cartao SD invalida");
+esp_err_t gerenciador_cartao_sd_iniciar(
+    const ConfiguracaoCartaoSd& configuracao) {
+    if (montado) return ESP_OK;
+    if (configuracao.ponto_montagem == nullptr ||
+        configuracao.ponto_montagem[0] != '/' ||
+        configuracao.pino_clk == GPIO_NUM_NC ||
+        configuracao.pino_mosi == GPIO_NUM_NC ||
+        configuracao.pino_miso == GPIO_NUM_NC ||
+        configuracao.pino_cs == GPIO_NUM_NC ||
+        configuracao.frequencia_hz == 0 ||
+        configuracao.maximo_arquivos_abertos == 0) {
         return ESP_ERR_INVALID_ARG;
     }
-    ESP_LOGW(ETIQUETA, "Cartao SD ainda não implementado; faltam barramento e pinos");
-    montado = false;
-    return ESP_ERR_NOT_SUPPORTED;
-}
 
-esp_err_t gerenciador_cartao_sd_salvar(const char* caminho_relativo, const void* dados,
-                                       size_t tamanho, bool acrescentar) {
-    (void)acrescentar;
-    if (caminho_relativo == nullptr || dados == nullptr || tamanho == 0 ||
-        caminho_relativo[0] == '/' || std::strstr(caminho_relativo, "..") != nullptr) {
-        ESP_LOGE(ETIQUETA, "Gravacao rejeitada: caminho ou dados invalidos");
-        return ESP_ERR_INVALID_ARG;
-    }
-    if (!montado) {
-        ESP_LOGE(ETIQUETA, "Gravacao solicitada sem cartao montado");
-        return ESP_ERR_INVALID_STATE;
-    }
-    return ESP_ERR_NOT_SUPPORTED;
-}
+    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+    host.max_freq_khz = configuracao.frequencia_hz / 1000U;
 
-esp_err_t gerenciador_cartao_sd_finalizar() {
-    if (!montado) {
-        ESP_LOGE(ETIQUETA, "Finalizacao solicitada sem cartao montado");
-        return ESP_ERR_INVALID_STATE;
-    }
-    montado = false;
-    return ESP_ERR_NOT_SUPPORTED;
-}
+    spi_bus_config_t barramento{};
+    barramento.mosi_io_num = configuracao.pino_mosi;
+    barramento.miso_io_num = configuracao.pino_miso;
+    barramento.sclk_io_num = configuracao.pino_clk;
+    barramento.quadwp_io_num = GPIO_NUM_NC;
+    barramento.quadhd_io_num = GPIO_NUM_NC;
+    barramento.max_transfer_sz = 4096;
 
-bool gerenciador_cartao_sd_esta_montado() { return montado; }
+    esp_err_t erro = spi_bus_initialize(
+        static_cast<spi_host_device_t>(host.slot), &barramento,
+        SPI_DMA_CH_AUTO);
+    if (erro != ESP_OK) {
+        ESP_LOGE(ETIQUETA, "Falha ao iniciar SPI do cartão: %s",
+                 esp_err_to_name(erro));
+        return erro;
+    }
+
+    sdspi_device_config_t dispositivo = SDSPI_DEVICE_CONFIG_DEFAULT();
+    dispositivo.host_id = static_cast<spi_host_device_t>(host.slot);
+    dispositivo.gpio_cs = configuracao.pino_cs;
+
+    esp_vfs_fat_sdmmc_mount_config_t montagem{};
+    montagem.format_if_mount_failed = false;
+    montagem.max_files = configuracao.maximo_arquivos_abertos;
+    montagem.allocation_unit_size = 16U * 1024U;
+
+    erro = esp_vfs_fat_sdspi_mount(configuracao.ponto_montagem, &host,
+                                   &dispositivo, &montagem, &cartao);
+    if (erro != ESP_OK) {
+        spi_bus_free(static_cast<spi_host_device_t>(host.slot));
+        cartao = nullptr;
+        ESP_LOGE(ETIQUETA, "Falha ao montar cartão SD: %s",
+                 esp_err_to_name(erro));
+        return erro;
+    }
+
+    montado = true;
+    ESP_LOGI(ETIQUETA, "Cartão SD montado em %s", configuracao.ponto_montagem);
+    return ESP_OK;
+}

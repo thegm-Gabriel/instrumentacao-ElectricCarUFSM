@@ -1,0 +1,51 @@
+--- original
++++ formatado
+@@ -16,32 +16,15 @@
+ 
+ \begin{document}
+ 
+-\title{\textit{Análise e Desenvolvimento de um Veículo Elétrico de Pequeno Porte\\
+-}}
+-
+-\author{\IEEEauthorblockN{Gabriel Muttoni}
++\title{Análise e Desenvolvimento de um Veículo Elétrico de Pequeno Porte}
++
++\author{
++\IEEEauthorblockN{Gabriel Muttoni, Paulo César Vargas Luz, Adylson Hahn, Érick Ramon Biscaglia}
+ \IEEEauthorblockA{\textit{Engenharia Elétrica} \\
+ \textit{Universidade Federal de Santa Maria}\\
+-Cachoeira do Sul, Brasil \\
+-gabriel.muttoni@acad.ufsm.br}
+-\and
+-\IEEEauthorblockN{Paulo César Vargas Luz}
+-\IEEEauthorblockA{\textit{Engenharia Elétrica} \\
+-\textit{Universidade Federal de Santa Maria}\\
+-Cachoeira do Sul, Brasil \\
+-paulo.c.luz@ufsm.br}
+-\and
+-\IEEEauthorblockN{Adylson Hahn}
+-\IEEEauthorblockA{\textit{Engenharia Elétrica} \\
+-\textit{Universidade Federal de Santa Maria}\\
+-Cachoeira do Sul, Brasil \\
+-adylson.hahn@acad.ufsm.br}
+-\and
+-\IEEEauthorblockN{Érick Ramon Biscaglia}
+-\IEEEauthorblockA{\textit{Engenharia Elétrica} \\
+-\textit{Universidade Federal de Santa Maria}\\
+-Cachoeira do Sul, Brasil \\
+-erick.biscaglia@acad.ufsm.br}
++\textit{Cachoeira do Sul, Brasil} \\
++gabriel.muttoni@acad.ufsm.br\quad paulo.c.luz@ufsm.br\\
++adylson.hahn@acad.ufsm.br\quad erick.biscaglia@acad.ufsm.br}
+ }
+ 
+ \maketitle
+@@ -316,7 +299,7 @@
+ 
+ \bibitem{b4} S. J. Chapman, \textit{Electric Machinery Fundamentals}, 5th ed. New York, NY, USA: McGraw-Hill Education, 2012.
+ 
+-\bibitem{b5} Ministério da Educação, Conselho Nacional de Educação, "Resolução CNE/CES nº 2, de 24 de abril de 2019," Diário Oficial da União, Brasília, DF, Brasil, 2019.
++\bibitem{b5} Ministério da Educação, Conselho Nacional de Educação, "Resolução CNE/CES nº 2, de 24 de abril de 2019," \textit{Diário Oficial da União}, Brasília, DF, Brasil, 2019.
+ 
+ \bibitem{b6} S. Freeman \textit{et al.}, "Active learning increases student performance in science, engineering, and mathematics," \textit{Proceedings of the National Academy of Sciences}, vol. 111, no. 23, pp. 8410--8415, 2014.
+ 

@@ -1,3 +1,4 @@
+// Implementa inicialização e sessões temporizadas do driver Wi-Fi.
 #include "gerenciadores/gerenciador_wifi.h"
 
 #include <algorithm>
@@ -31,6 +32,11 @@ portMUX_TYPE trava_estado = portMUX_INITIALIZER_UNLOCKED;
 SemaphoreHandle_t mutex_operacao = nullptr;
 bool desconexao_planejada = false;
 bool driver_wifi_inicializado = false;
+
+TickType_t tempo_restante(TickType_t inicio, TickType_t limite) {
+    const TickType_t decorrido = xTaskGetTickCount() - inicio;
+    return decorrido >= limite ? 0 : limite - decorrido;
+}
 
 void liberar_inicializacao_parcial() {
     if (tratador_ip != nullptr) {
@@ -88,6 +94,7 @@ void tratar_evento(void*, esp_event_base_t base, int32_t identificador, void* da
         estado.conectado = false;
         estado.rssi_dbm = 0;
         estado.canal = 0;
+        desconexao_planejada = false;
         portEXIT_CRITICAL(&trava_estado);
         xEventGroupClearBits(eventos_wifi, BIT_ATIVO | BIT_CONECTADO);
         xEventGroupSetBits(eventos_wifi, BIT_DESCONECTADO);
@@ -98,6 +105,7 @@ void tratar_evento(void*, esp_event_base_t base, int32_t identificador, void* da
         const auto* evento = static_cast<const wifi_event_sta_disconnected_t*>(dados);
         portENTER_CRITICAL(&trava_estado);
         const bool planejada = desconexao_planejada;
+        desconexao_planejada = false;
         estado.conectado = false;
         estado.rssi_dbm = 0;
         estado.canal = 0;
@@ -202,15 +210,16 @@ esp_err_t ativar_radio(TickType_t tempo_limite) {
     return erro;
 }
 
-void cancelar_associacao() {
+void cancelar_associacao(TickType_t tempo_limite) {
     definir_desconexao_planejada(true);
     xEventGroupClearBits(eventos_wifi, BIT_DESCONECTADO);
     const esp_err_t erro = esp_wifi_disconnect();
-    if (erro == ESP_OK) {
+    if (erro == ESP_OK && tempo_limite > 0) {
         xEventGroupWaitBits(eventos_wifi, BIT_DESCONECTADO, pdTRUE, pdFALSE,
-                            pdMS_TO_TICKS(1000));
+                            std::min(tempo_limite, pdMS_TO_TICKS(1000)));
+    } else if (erro != ESP_OK) {
+        definir_desconexao_planejada(false);
     }
-    definir_desconexao_planejada(false);
 }
 }  // namespace
 
@@ -293,13 +302,20 @@ esp_err_t gerenciador_wifi_conectar(const char* ssid, const char* senha,
         mutex_operacao == nullptr) {
         return ESP_ERR_INVALID_STATE;
     }
+    const TickType_t inicio = xTaskGetTickCount();
     if (xSemaphoreTake(mutex_operacao, tempo_limite) != pdTRUE) return ESP_ERR_TIMEOUT;
 
-    esp_err_t erro = ativar_radio(tempo_limite);
+    TickType_t restante = tempo_restante(inicio, tempo_limite);
+    esp_err_t erro = restante == 0 ? ESP_ERR_TIMEOUT : ativar_radio(restante);
     if (erro == ESP_OK) {
-        cancelar_associacao();
-        wifi_config_t parametros = criar_configuracao(ssid, senha);
-        erro = esp_wifi_set_config(WIFI_IF_STA, &parametros);
+        cancelar_associacao(tempo_restante(inicio, tempo_limite));
+        restante = tempo_restante(inicio, tempo_limite);
+        if (restante == 0) {
+            erro = ESP_ERR_TIMEOUT;
+        } else {
+            wifi_config_t parametros = criar_configuracao(ssid, senha);
+            erro = esp_wifi_set_config(WIFI_IF_STA, &parametros);
+        }
     }
 
     if (erro == ESP_OK) {
@@ -314,13 +330,26 @@ esp_err_t gerenciador_wifi_conectar(const char* ssid, const char* senha,
     }
 
     if (erro == ESP_OK) {
+        restante = tempo_restante(inicio, tempo_limite);
+        if (restante == 0) erro = ESP_ERR_TIMEOUT;
+    }
+
+    if (erro == ESP_OK) {
         const EventBits_t bits = xEventGroupWaitBits(
-            eventos_wifi, BIT_CONECTADO | BIT_FALHA, pdFALSE, pdFALSE, tempo_limite);
-        if ((bits & BIT_CONECTADO) == 0) erro = ESP_ERR_TIMEOUT;
+            eventos_wifi, BIT_CONECTADO | BIT_FALHA, pdFALSE, pdFALSE, restante);
+        if ((bits & BIT_CONECTADO) != 0) {
+            erro = ESP_OK;
+        } else if ((bits & BIT_FALHA) != 0) {
+            const EstadoWifi falha = gerenciador_wifi_obter_estado();
+            erro = falha.ultimo_erro == ESP_OK ? ESP_ERR_WIFI_NOT_CONNECT
+                                               : falha.ultimo_erro;
+        } else {
+            erro = ESP_ERR_TIMEOUT;
+        }
     }
     if (erro != ESP_OK) {
         definir_erro(erro);
-        cancelar_associacao();
+        cancelar_associacao(tempo_restante(inicio, tempo_limite));
     }
     xSemaphoreGive(mutex_operacao);
     return erro;
@@ -330,6 +359,7 @@ esp_err_t gerenciador_wifi_desativar(TickType_t tempo_limite) {
     if (!gerenciador_wifi_obter_estado().inicializado || mutex_operacao == nullptr) {
         return ESP_ERR_INVALID_STATE;
     }
+    const TickType_t inicio = xTaskGetTickCount();
     if (xSemaphoreTake(mutex_operacao, tempo_limite) != pdTRUE) return ESP_ERR_TIMEOUT;
 
     const EstadoWifi atual = gerenciador_wifi_obter_estado();
@@ -338,32 +368,17 @@ esp_err_t gerenciador_wifi_desativar(TickType_t tempo_limite) {
         return ESP_OK;
     }
 
-    cancelar_associacao();
+    cancelar_associacao(tempo_restante(inicio, tempo_limite));
     esp_err_t erro = esp_wifi_stop();
     if (erro == ESP_OK) {
+        const TickType_t restante = tempo_restante(inicio, tempo_limite);
         xEventGroupWaitBits(eventos_wifi, BIT_DESCONECTADO, pdTRUE, pdFALSE,
-                            std::min(tempo_limite, pdMS_TO_TICKS(1500)));
+                            std::min(restante, pdMS_TO_TICKS(1500)));
     } else {
         definir_erro(erro);
     }
     xSemaphoreGive(mutex_operacao);
     return erro;
-}
-
-esp_err_t gerenciador_wifi_atualizar_sinal() {
-    const EstadoWifi atual = gerenciador_wifi_obter_estado();
-    if (!atual.conectado) return ESP_ERR_INVALID_STATE;
-    wifi_ap_record_t ponto_acesso{};
-    const esp_err_t erro = esp_wifi_sta_get_ap_info(&ponto_acesso);
-    if (erro != ESP_OK) {
-        definir_erro(erro);
-        return erro;
-    }
-    portENTER_CRITICAL(&trava_estado);
-    estado.rssi_dbm = ponto_acesso.rssi;
-    estado.canal = ponto_acesso.primary;
-    portEXIT_CRITICAL(&trava_estado);
-    return ESP_OK;
 }
 
 bool gerenciador_wifi_esta_conectado() {

@@ -1,3 +1,4 @@
+// Declara filas, recepção e recuperação dos dois canais UART.
 #pragma once
 
 #include <cstddef>
@@ -5,12 +6,7 @@
 
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
-
-enum class DestinoUart : uint8_t {
-    Equipe,
-    Visitantes,
-    Todos,
-};
+#include "nucleo/destino_enlace.h"
 
 struct EstatisticasUart {
     bool inicializado = false;
@@ -35,10 +31,18 @@ struct EstatisticasUart {
 };
 
 esp_err_t gerenciador_uart_iniciar();
-esp_err_t gerenciador_uart_enviar(DestinoUart destino, const void* dados, size_t tamanho,
-                                  TickType_t tempo_limite = pdMS_TO_TICKS(20));
+esp_err_t gerenciador_uart_encerrar();
+// Copia um quadro binário para a fila de transmissão. ESP_OK confirma apenas
+// o enfileiramento; a confirmação fim a fim pertence ao protocolo chamador.
+esp_err_t gerenciador_uart_enfileirar(
+    DestinoUart destino, const void* dados, size_t tamanho,
+    TickType_t tempo_limite = pdMS_TO_TICKS(20));
+// Envia e aguarda a saída física do quadro. É usado por transferências
+// confirmadas para evitar cópia e latência adicionais na fila assíncrona.
+esp_err_t gerenciador_uart_enviar(
+    DestinoUart destino, const void* dados, size_t tamanho,
+    TickType_t tempo_limite = pdMS_TO_TICKS(250));
 int gerenciador_uart_receber(DestinoUart origem, void* buffer, size_t capacidade,
                              TickType_t tempo_limite);
-esp_err_t gerenciador_uart_limpar_recepcao(DestinoUart origem);
 esp_err_t gerenciador_uart_recuperar(DestinoUart destino);
 EstatisticasUart gerenciador_uart_obter_estatisticas(DestinoUart destino);

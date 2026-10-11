@@ -1,3 +1,4 @@
+// Declara a apresentação de linhas e progresso na tela SSD1306.
 #pragma once
 
 #include <cstddef>
@@ -23,5 +24,4 @@ esp_err_t tela_ssd1306_exibir_linhas(const char* const* linhas,
 esp_err_t tela_ssd1306_exibir_linhas_com_progresso(
     const char* const* linhas, std::size_t quantidade_linhas,
     uint16_t percentual_decimos);
-esp_err_t tela_ssd1306_limpar();
 EstadoTelaSsd1306 tela_ssd1306_obter_estado();

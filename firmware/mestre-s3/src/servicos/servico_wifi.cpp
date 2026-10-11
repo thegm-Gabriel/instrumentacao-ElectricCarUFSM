@@ -1,3 +1,4 @@
+// Gerencia perfis persistidos e sessões autorizadas de Wi-Fi.
 #include "servicos/servico_wifi.h"
 
 #include <algorithm>
@@ -123,6 +124,10 @@ PerfilWifi obter_principal(const ConfiguracaoPerfis& configuracao_perfis) {
     return criar_perfil(configuracao::WIFI_PRINCIPAL_SSID,
                         configuracao::WIFI_PRINCIPAL_SENHA);
 }
+
+// Persistência é mantida como um bloco interno coeso: não é outro serviço e não
+// conhece a máquina de estados das sessões de conexão.
+namespace persistencia {
 
 esp_err_t ler_texto_nvs(nvs_handle_t armazenamento, const char* chave,
                         char* destino, size_t capacidade) {
@@ -315,6 +320,8 @@ esp_err_t salvar_perfis(const ConfiguracaoPerfis& origem) {
     return erro;
 }
 
+}  // namespace persistencia
+
 int64_t agora_ms() {
     return esp_timer_get_time() / 1000;
 }
@@ -405,7 +412,7 @@ esp_err_t servico_wifi_iniciar() {
     if (copiar_estado_servico().iniciado) return ESP_OK;
 
     ConfiguracaoPerfis carregados{};
-    esp_err_t erro = carregar_perfis(&carregados);
+    esp_err_t erro = persistencia::carregar_perfis(&carregados);
     if (erro != ESP_OK) return erro;
 
     const PerfilWifi principal_compilada = criar_perfil(
@@ -414,11 +421,13 @@ esp_err_t servico_wifi_iniciar() {
                                               principal_compilada.senha)) {
         principal_firmware_cache = principal_compilada;
         PerfilWifi cache_existente{};
-        const esp_err_t erro_cache = carregar_cache_principal(&cache_existente);
+        const esp_err_t erro_cache =
+            persistencia::carregar_cache_principal(&cache_existente);
         if (erro_cache != ESP_OK ||
             std::strcmp(cache_existente.ssid, principal_firmware_cache.ssid) != 0 ||
             std::strcmp(cache_existente.senha, principal_firmware_cache.senha) != 0) {
-            const esp_err_t erro_salvar = salvar_cache_principal(principal_firmware_cache);
+            const esp_err_t erro_salvar =
+                persistencia::salvar_cache_principal(principal_firmware_cache);
             if (erro_salvar != ESP_OK) {
                 ESP_LOGW(ETIQUETA,
                          "Não foi possível preservar a rede principal na NVS: %s",
@@ -426,7 +435,7 @@ esp_err_t servico_wifi_iniciar() {
             }
         }
     } else {
-        erro = carregar_cache_principal(&principal_firmware_cache);
+        erro = persistencia::carregar_cache_principal(&principal_firmware_cache);
         if (erro == ESP_OK) {
             ESP_LOGI(ETIQUETA,
                      "Rede principal recuperada da NVS para este firmware OTA");
@@ -531,17 +540,18 @@ esp_err_t servico_wifi_abrir_sessao() {
     return ultimo_erro;
 }
 
-void servico_wifi_encerrar_sessao() {
-    if (mutex_alteracoes == nullptr) return;
+esp_err_t servico_wifi_encerrar_sessao() {
+    if (mutex_alteracoes == nullptr) return ESP_ERR_INVALID_STATE;
     BloqueioAlteracoes bloqueio;
-    if (!bloqueio.adquirido()) return;
-    if (!copiar_estado_servico().iniciado) return;
+    if (!bloqueio.adquirido()) return ESP_ERR_TIMEOUT;
+    if (!copiar_estado_servico().iniciado) return ESP_ERR_INVALID_STATE;
     const esp_err_t erro = gerenciador_wifi_desativar(TEMPO_DESLIGAMENTO);
     definir_sessao(false, false);
     if (erro != ESP_OK) {
         ESP_LOGE(ETIQUETA, "Falha ao encerrar sessão Wi-Fi: %s",
                  esp_err_to_name(erro));
     }
+    return erro;
 }
 
 esp_err_t servico_wifi_conectar_rede_informada(const char* ssid,
@@ -597,7 +607,7 @@ esp_err_t servico_wifi_salvar_rede_usuario(const char* ssid, const char* senha) 
     for (uint8_t indice = 0; indice < nova.quantidade; ++indice) {
         if (std::strcmp(nova.redes[indice].ssid, ssid) == 0) {
             nova.redes[indice] = criar_perfil(ssid, senha);
-            const esp_err_t erro = salvar_perfis(nova);
+            const esp_err_t erro = persistencia::salvar_perfis(nova);
             if (erro == ESP_OK) {
                 publicar_perfis(nova);
                 ESP_LOGI(ETIQUETA,
@@ -609,7 +619,7 @@ esp_err_t servico_wifi_salvar_rede_usuario(const char* ssid, const char* senha) 
 
     if (nova.quantidade >= nova.redes.size()) return ESP_ERR_NO_MEM;
     nova.redes[nova.quantidade++] = criar_perfil(ssid, senha);
-    const esp_err_t erro = salvar_perfis(nova);
+    const esp_err_t erro = persistencia::salvar_perfis(nova);
     if (erro == ESP_OK) {
         publicar_perfis(nova);
         ESP_LOGI(ETIQUETA, "Rede secundária '%s' salva (%u de %u)", ssid,
@@ -632,7 +642,7 @@ esp_err_t servico_wifi_excluir_rede_usuario(std::size_t indice) {
         nova.redes[atual] = nova.redes[atual + 1];
     }
     nova.redes[--nova.quantidade] = {};
-    const esp_err_t erro = salvar_perfis(nova);
+    const esp_err_t erro = persistencia::salvar_perfis(nova);
     if (erro == ESP_OK) {
         publicar_perfis(nova);
         if (existe_perfil_autorizado_uma_vez &&
@@ -684,7 +694,7 @@ esp_err_t servico_wifi_alterar_rede_principal(const char* ssid,
     ConfiguracaoPerfis nova = copiar_perfis();
     nova.principal_alterada = true;
     nova.principal = nova_principal;
-    const esp_err_t erro = salvar_perfis(nova);
+    const esp_err_t erro = persistencia::salvar_perfis(nova);
     if (erro == ESP_OK) {
         publicar_perfis(nova);
         ESP_LOGI(ETIQUETA, "Rede principal alterada para '%s'", ssid);
@@ -713,7 +723,7 @@ esp_err_t servico_wifi_restaurar_rede_principal(
     ConfiguracaoPerfis nova = copiar_perfis();
     nova.principal_alterada = false;
     nova.principal = {};
-    const esp_err_t erro = salvar_perfis(nova);
+    const esp_err_t erro = persistencia::salvar_perfis(nova);
     if (erro == ESP_OK) {
         publicar_perfis(nova);
         ESP_LOGI(ETIQUETA,
@@ -734,7 +744,7 @@ esp_err_t servico_wifi_definir_conexao_automatica(
 
     ConfiguracaoPerfis nova = copiar_perfis();
     nova.automatico = habilitar;
-    const esp_err_t erro = salvar_perfis(nova);
+    const esp_err_t erro = persistencia::salvar_perfis(nova);
     if (erro == ESP_OK) {
         publicar_perfis(nova);
         ESP_LOGI(ETIQUETA, "Conexão automática às redes secundárias %s",
@@ -756,7 +766,7 @@ esp_err_t servico_wifi_definir_politica(
 
     ConfiguracaoPerfis nova = copiar_perfis();
     nova.politica = politica;
-    const esp_err_t erro = salvar_perfis(nova);
+    const esp_err_t erro = persistencia::salvar_perfis(nova);
     if (erro == ESP_OK) {
         publicar_perfis(nova);
         ESP_LOGI(ETIQUETA,

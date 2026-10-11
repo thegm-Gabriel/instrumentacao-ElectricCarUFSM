@@ -1,3 +1,4 @@
+// Calcula o CRC-32 usado nos quadros variáveis de comandos e OTA.
 #pragma once
 
 #include <stddef.h>

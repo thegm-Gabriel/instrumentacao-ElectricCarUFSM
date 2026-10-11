@@ -1,6 +1,6 @@
-#include "gerenciadores/gerenciador_ota_satelites.h"
+// Baixa firmware e o retransmite com confirmação pela UART.
+#include "servicos/transporte_ota_satelites.h"
 
-#include <cctype>
 #include <cstring>
 
 #include "esp_crt_bundle.h"
@@ -10,6 +10,8 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "gerenciadores/gerenciador_ota.h"
+#include "gerenciadores/gerenciador_uart.h"
 #include "nucleo/configuracao_placa.h"
 #include "protocolo_ota_satelites.h"
 
@@ -39,34 +41,19 @@ struct ContextoDownload {
     int64_t inicio_ms;
     uint8_t sha256[OTA_SATELITE_TAMANHO_SHA256];
     uint8_t bloco[OTA_SATELITE_TAMANHO_MAXIMO_CARGA];
+    uint8_t quadro[OTA_SATELITE_TAMANHO_MAXIMO_QUADRO];
     size_t ocupacao_bloco;
     bool transferencia_iniciada;
     esp_err_t erro;
 };
 
 QueueHandle_t fila_respostas = nullptr;
+ContextoDownload contexto_download{};
 bool transferencia_em_andamento = false;
 portMUX_TYPE trava_estado = portMUX_INITIALIZER_UNLOCKED;
 
 const char* nome_destino(DestinoUart destino) {
     return destino == DestinoUart::Equipe ? "equipe" : "visitantes";
-}
-
-bool converter_sha256(const char* texto, uint8_t destino[OTA_SATELITE_TAMANHO_SHA256]) {
-    if (texto == nullptr || std::strlen(texto) != 64) return false;
-    for (size_t indice = 0; indice < OTA_SATELITE_TAMANHO_SHA256; ++indice) {
-        const char alto = texto[indice * 2];
-        const char baixo = texto[indice * 2 + 1];
-        if (!std::isxdigit(static_cast<unsigned char>(alto)) ||
-            !std::isxdigit(static_cast<unsigned char>(baixo))) return false;
-        auto valor = [](char caractere) -> uint8_t {
-            if (caractere >= '0' && caractere <= '9') return caractere - '0';
-            caractere = static_cast<char>(std::tolower(static_cast<unsigned char>(caractere)));
-            return static_cast<uint8_t>(caractere - 'a' + 10);
-        };
-        destino[indice] = static_cast<uint8_t>((valor(alto) << 4) | valor(baixo));
-    }
-    return true;
 }
 
 void limpar_respostas_pendentes() {
@@ -79,17 +66,17 @@ esp_err_t enviar_e_confirmar(ContextoDownload& contexto, uint8_t tipo,
                              const void* carga, uint16_t tamanho_carga,
                              uint32_t deslocamento_esperado,
                              fase_ota_satelite_t fase_esperada) {
-    uint8_t quadro[OTA_SATELITE_TAMANHO_MAXIMO_QUADRO];
     const size_t tamanho = protocolo_ota_satelites_montar_quadro(
-        quadro, sizeof(quadro), tipo, contexto.sessao, sequencia,
+        contexto.quadro, sizeof(contexto.quadro), tipo, contexto.sessao, sequencia,
         deslocamento, carga, tamanho_carga);
     if (tamanho == 0) return ESP_ERR_INVALID_SIZE;
 
     for (unsigned tentativa = 1; tentativa <= MAXIMO_TENTATIVAS; ++tentativa) {
         const esp_err_t erro_envio = gerenciador_uart_enviar(
-            contexto.configuracao.destino, quadro, tamanho, pdMS_TO_TICKS(250));
+            contexto.configuracao.destino, contexto.quadro, tamanho,
+            pdMS_TO_TICKS(250));
         if (erro_envio != ESP_OK) {
-            ESP_LOGW(ETIQUETA, "%s: tentativa %u/%u falhou ao enfileirar bloco %lu: %s",
+            ESP_LOGW(ETIQUETA, "%s: tentativa %u/%u falhou ao transmitir bloco %lu: %s",
                      nome_destino(contexto.configuracao.destino), tentativa,
                      MAXIMO_TENTATIVAS, static_cast<unsigned long>(sequencia),
                      esp_err_to_name(erro_envio));
@@ -208,13 +195,14 @@ esp_err_t tratar_evento_http(esp_http_client_event_t* evento) {
     const uint8_t* dados = static_cast<const uint8_t*>(evento->data);
     size_t restantes = static_cast<size_t>(evento->data_len);
     while (restantes > 0 && contexto.erro == ESP_OK) {
-        const size_t espaco = sizeof(contexto.bloco) - contexto.ocupacao_bloco;
+        const size_t espaco = contexto.configuracao.tamanho_bloco -
+                              contexto.ocupacao_bloco;
         const size_t copiar = restantes < espaco ? restantes : espaco;
         std::memcpy(contexto.bloco + contexto.ocupacao_bloco, dados, copiar);
         contexto.ocupacao_bloco += copiar;
         dados += copiar;
         restantes -= copiar;
-        if (contexto.ocupacao_bloco == sizeof(contexto.bloco)) {
+        if (contexto.ocupacao_bloco == contexto.configuracao.tamanho_bloco) {
             contexto.erro = enviar_bloco(contexto, contexto.bloco,
                                           contexto.ocupacao_bloco);
             contexto.ocupacao_bloco = 0;
@@ -225,24 +213,37 @@ esp_err_t tratar_evento_http(esp_http_client_event_t* evento) {
 
 void cancelar_no_satelite(ContextoDownload& contexto) {
     if (!contexto.transferencia_iniciada) return;
-    uint8_t quadro[OTA_SATELITE_TAMANHO_MAXIMO_QUADRO];
     const size_t tamanho = protocolo_ota_satelites_montar_quadro(
-        quadro, sizeof(quadro), OTA_SATELITE_TIPO_CANCELAR, contexto.sessao,
+        contexto.quadro, sizeof(contexto.quadro), OTA_SATELITE_TIPO_CANCELAR,
+        contexto.sessao,
         contexto.sequencia, contexto.bytes_confirmados, nullptr, 0);
     if (tamanho != 0) {
-        (void)gerenciador_uart_enviar(contexto.configuracao.destino, quadro, tamanho,
-                                      pdMS_TO_TICKS(100));
+        (void)gerenciador_uart_enviar(
+            contexto.configuracao.destino, contexto.quadro, tamanho,
+            pdMS_TO_TICKS(100));
     }
 }
 }  // namespace
 
-esp_err_t gerenciador_ota_satelites_iniciar() {
+esp_err_t transporte_ota_satelites_iniciar() {
     if (fila_respostas != nullptr) return ESP_OK;
     fila_respostas = xQueueCreate(8, sizeof(RespostaRecebida));
     return fila_respostas == nullptr ? ESP_ERR_NO_MEM : ESP_OK;
 }
 
-esp_err_t gerenciador_ota_satelites_executar(
+esp_err_t transporte_ota_satelites_encerrar() {
+    portENTER_CRITICAL(&trava_estado);
+    const bool ocupado = transferencia_em_andamento;
+    portEXIT_CRITICAL(&trava_estado);
+    if (ocupado) return ESP_ERR_INVALID_STATE;
+    if (fila_respostas != nullptr) {
+        vQueueDelete(fila_respostas);
+        fila_respostas = nullptr;
+    }
+    return ESP_OK;
+}
+
+esp_err_t transporte_ota_satelites_executar(
     const ConfiguracaoTransferenciaOtaSatelite& configuracao,
     ObservadorProgressoOtaSatelite observador) {
     const bool destino_valido = configuracao.destino == DestinoUart::Equipe ||
@@ -252,6 +253,8 @@ esp_err_t gerenciador_ota_satelites_executar(
         configuracao.versao[0] == '\0' ||
         std::strlen(configuracao.versao) >= OTA_SATELITE_TAMANHO_VERSAO ||
         configuracao.tamanho_bytes == 0 || configuracao.tempo_limite_http_ms == 0 ||
+        (configuracao.tamanho_bloco != OTA_SATELITE_TAMANHO_CARGA_COMPATIVEL &&
+         configuracao.tamanho_bloco != OTA_SATELITE_TAMANHO_MAXIMO_CARGA) ||
         !destino_valido ||
         std::strncmp(configuracao.endereco_https, "https://", 8) != 0 ||
         configuracao.endereco_https[8] == '\0') {
@@ -265,13 +268,15 @@ esp_err_t gerenciador_ota_satelites_executar(
     transferencia_em_andamento = true;
     portEXIT_CRITICAL(&trava_estado);
 
-    ContextoDownload contexto{};
+    contexto_download = {};
+    ContextoDownload& contexto = contexto_download;
     contexto.configuracao = configuracao;
     contexto.observador = observador;
     contexto.sessao = esp_random();
     if (contexto.sessao == 0) contexto.sessao = 1;
     contexto.sequencia = 1;
-    contexto.erro = converter_sha256(configuracao.sha256, contexto.sha256)
+    contexto.erro = gerenciador_ota_converter_sha256(
+                         configuracao.sha256, contexto.sha256)
                          ? ESP_OK : ESP_ERR_INVALID_ARG;
     limpar_respostas_pendentes();
 
@@ -281,7 +286,7 @@ esp_err_t gerenciador_ota_satelites_executar(
     http.user_data = &contexto;
     http.crt_bundle_attach = esp_crt_bundle_attach;
     http.timeout_ms = static_cast<int>(configuracao.tempo_limite_http_ms);
-    http.buffer_size = 2048;
+    http.buffer_size = configuracao.tamanho_bloco;
     http.buffer_size_tx = 2048;
     http.max_redirection_count = 8;
     http.keep_alive_enable = true;
@@ -291,8 +296,10 @@ esp_err_t gerenciador_ota_satelites_executar(
                                            ? esp_http_client_init(&http) : nullptr;
     if (cliente == nullptr && contexto.erro == ESP_OK) contexto.erro = ESP_ERR_NO_MEM;
     if (contexto.erro == ESP_OK) {
-        ESP_LOGW(ETIQUETA, "%s: baixando firmware %s e retransmitindo pela UART",
-                 nome_destino(configuracao.destino), configuracao.versao);
+        ESP_LOGW(ETIQUETA,
+                 "%s: baixando firmware %s e retransmitindo pela UART em blocos de %u bytes",
+                 nome_destino(configuracao.destino), configuracao.versao,
+                 static_cast<unsigned>(configuracao.tamanho_bloco));
         const esp_err_t erro_http = esp_http_client_perform(cliente);
         if (erro_http != ESP_OK && contexto.erro == ESP_OK) contexto.erro = erro_http;
         const int codigo_http = esp_http_client_get_status_code(cliente);
@@ -323,9 +330,9 @@ esp_err_t gerenciador_ota_satelites_executar(
     return contexto.erro;
 }
 
-void gerenciador_ota_satelites_registrar_resposta(DestinoUart origem,
-                                                  const uint8_t* quadro,
-                                                  size_t tamanho) {
+void transporte_ota_satelites_registrar_resposta(DestinoUart origem,
+                                                 const uint8_t* quadro,
+                                                 size_t tamanho) {
     if (fila_respostas == nullptr || quadro == nullptr ||
         !protocolo_ota_satelites_validar_quadro(quadro, tamanho)) return;
     RespostaRecebida resposta{};

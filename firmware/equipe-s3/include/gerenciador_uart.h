@@ -1,3 +1,4 @@
+// Declara a inicialização e o envio protegido pela UART da equipe.
 #pragma once
 
 #include <stdbool.h>

@@ -1,3 +1,4 @@
+// Declara a política visual e sonora dos estados do sistema.
 #pragma once
 
 #include <cstdint>

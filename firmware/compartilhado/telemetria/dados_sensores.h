@@ -1,3 +1,4 @@
+// Reúne os tipos compartilhados das leituras brutas dos sensores.
 #pragma once
 
 #include "dados_telemetria_veiculo.h"

@@ -1,3 +1,4 @@
+// Implementa a aquisição do ADC usado para medir tensão.
 #include "dispositivos/leitor_tensao.h"
 
 #include "esp_adc/adc_oneshot.h"

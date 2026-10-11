@@ -1,3 +1,4 @@
+// Declara o ciclo de vida do driver Wi-Fi em modo estação.
 #pragma once
 
 #include <cstdint>
@@ -27,7 +28,6 @@ bool gerenciador_wifi_credenciais_validas(const char* ssid, const char* senha);
 esp_err_t gerenciador_wifi_conectar(const char* ssid, const char* senha,
                                     TickType_t tempo_limite);
 esp_err_t gerenciador_wifi_desativar(TickType_t tempo_limite);
-esp_err_t gerenciador_wifi_atualizar_sinal();
 bool gerenciador_wifi_esta_conectado();
 // Getter puro: não consulta o driver nem aguarda mutexes de operação.
 EstadoWifi gerenciador_wifi_obter_estado();

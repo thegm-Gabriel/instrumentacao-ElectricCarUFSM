@@ -1,3 +1,4 @@
+// Declara a interface compartilhada de comandos executados nos satélites.
 #pragma once
 
 #include <stddef.h>

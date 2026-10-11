@@ -1,3 +1,4 @@
+// Declara o estado de telemetria compartilhado no satélite da equipe.
 #pragma once
 
 #include <stdbool.h>
@@ -34,6 +35,15 @@ typedef struct {
     uint16_t autonomia_decimos_km;
     uint32_t percurso_metros;
     uint32_t odometro_metros;
+    int16_t aceleracao_x_milesimos_g;
+    int16_t aceleracao_y_milesimos_g;
+    int16_t aceleracao_z_milesimos_g;
+    int16_t giroscopio_x_centesimos_graus_s;
+    int16_t giroscopio_y_centesimos_graus_s;
+    int16_t giroscopio_z_centesimos_graus_s;
+    int16_t aceleracao_longitudinal_milesimos_g;
+    int16_t temperatura_mpu_centesimos_c;
+    uint8_t estado_mpu;
     uint32_t pacotes_validos;
     uint32_t pacotes_invalidos;
     uint32_t falhas_crc;

@@ -20,7 +20,10 @@ idf_component_register(
         esp_https_ota
         esp_netif
         esp_psram
+        esp_driver_pcnt
+        esp_driver_spi
         esp_wifi
+        fatfs
         json
         mbedtls
         nvs_flash

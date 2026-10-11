@@ -1,3 +1,4 @@
+// Declara a recepção de telemetria, comandos e OTA pela UART.
 #pragma once
 
 #include "esp_err.h"

@@ -1,3 +1,4 @@
+// Mantém o ponto de acesso e o estado da rede Wi-Fi dos visitantes.
 #include "rede_wifi.h"
 
 #include <string.h>

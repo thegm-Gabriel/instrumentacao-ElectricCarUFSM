@@ -1,3 +1,4 @@
+// Centraliza limites, credenciais e política padrão do Wi-Fi.
 #pragma once
 
 #include <cstddef>

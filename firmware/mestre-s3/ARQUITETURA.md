@@ -9,20 +9,40 @@ O código ativo está dividido por responsabilidade:
   OTA, sinalização e menu do terminal serial.
 - `main.cpp`: inicialização e coordenação periódica. Não acessa periféricos diretamente.
 
+As dependências devem seguir somente essa direção: `nucleo` e protocolos
+compartilhados → gerenciadores → dispositivos → serviços → apresentação e
+`main.cpp`; cada camada à direita só pode depender das camadas à esquerda.
+Cabeçalhos públicos de serviços não devem agregar tipos concretos de
+outros serviços ou gerenciadores. O retrato de diagnóstico, por isso, publica
+tipos neutros próprios e é preenchido apenas na implementação.
+Dependências entre serviços devem ser unidirecionais; quando dois serviços
+precisarem colaborar sem uma hierarquia natural, `main.cpp` registra um callback
+ou compõe a operação, evitando referências recíprocas.
+
+Inicializações que possuem mais de uma etapa são transacionais: em caso de
+falha, tarefas, filas, mutexes, registros de supervisão e drivers criados pela
+operação são liberados em ordem inversa. Chamadas de inicialização concluídas
+são idempotentes. Funções assíncronas usam nomes que deixam o contrato claro;
+por exemplo, `gerenciador_uart_enfileirar` confirma a cópia para a fila, enquanto
+ACK, timeout e repetição pertencem aos protocolos de telemetria, comandos e OTA.
+
+Os gerenciadores preservam o código de erro do ESP-IDF. Os serviços decidem
+tentativa, degradação e recuperação, e `main.cpp` decide se a falha impede a
+execução. Resultados esperados, como endereço I2C sem ACK durante uma sondagem,
+não entram no mesmo contador de falhas do barramento. O diagnóstico registra
+totais, falhas consecutivas e instantes da primeira e da última ocorrência dos
+sensores, sem alocação dinâmica.
+
 ## Estado atual
 
-UART, I2C e OTA possuem implementação funcional. I2S e cartão SD possuem contratos,
-validação de argumentos, estados e códigos de erro, mas ainda retornam
-`ESP_ERR_NOT_SUPPORTED`. Eles devem ser completados depois que forem definidos:
-
-- I2S: direção, formato, DMA e pinos de clock/dados.
-- SD: SPI ou SDMMC, pinagem, ponto de montagem e política de gravação.
+UART, I2C, PCNT, cartão SD e OTA possuem implementação funcional. I2S não faz
+parte do componente ativo e só deve ser adicionado quando houver um caso de uso.
 
 O OTA usa Wi-Fi em modo estação, HTTPS com o pacote de certificados do ESP-IDF,
 manifesto único no GitHub Release, SHA-256, duas partições de aplicação e rollback.
 A orquestração e a autorização ficam em `servicos/servico_ota.cpp`. A gravação do
 mestre fica no gerenciador OTA; o download e o transporte confirmado para os
-satélites ficam em `gerenciador_ota_satelites`. `servico_enlace_satelites` é o único
+satélites ficam em `transporte_ota_satelites`. `servico_enlace_satelites` é o único
 proprietário da inicialização e da supervisão das UARTs dos satélites. Ele consome
 os quadros de retorno e encaminha cada tipo ao serviço correto. O
 `servico_telemetria` apenas monta e publica os dados e acompanha as confirmações;
@@ -38,9 +58,9 @@ protegido por senha. `gerenciadores/gerenciador_wifi.cpp` cuida apenas da conex�
 da troca de credenciais no ESP-IDF. Assim, terminal e telemetria podem usar a mesma
 API sem duplicar regras.
 
-`servicos/servico_diagnostico.cpp` reúne as estatísticas dos módulos e publica uma
-classificação de saúde atualizada periodicamente. Seus getters apenas devolvem o
-último retrato calculado. `servicos/servico_relatorios.cpp` é responsável pela
+`servicos/servico_diagnostico.cpp` reúne as estatísticas dos módulos, publica uma
+classificação de saúde atualizada periodicamente e oferece um agregado único para
+as interfaces de observabilidade. `servicos/servico_relatorios.cpp` é responsável pela
 formatação, periodicidade e pausa dos relatórios e consulta diagnóstico, comandos
 e demais serviços sem criar dependências de retorno entre eles. O terminal apenas
 apresenta e edita essas opções. O `main.cpp` inicializa a
@@ -59,15 +79,36 @@ conhece UART nem páginas web. O `main.cpp` escolhe essa fonte por configuraçã
 entrega o mesmo modelo ao `servico_telemetria` usado pelos sensores reais.
 
 A transmissão UART usa uma fila independente por destino. O protocolo compartilhado
-v3 identifica versão, tipo e tamanho da carga e protege o quadro com CRC-16. Assim,
+v4 identifica versão, tipo e tamanho da carga, transporta as grandezas processadas
+do MPU6050 e protege o quadro com CRC-16. Assim,
 o ciclo de aquisição não aguarda a conclusão física de cada transmissão e os
 receptores conseguem distinguir corrupção, incompatibilidade e conteúdo inválido.
 Os satélites devolvem uma confirmação curta para cada quadro válido. O serviço de
 telemetria mede, separadamente, RTT atual, médio e máximo e a idade da última
 resposta dos módulos da equipe e dos visitantes.
 
+A apresentação ao vivo usa um retrato a 4 Hz. Em paralelo,
+`servico_registro_telemetria` reduz esse mesmo retrato para 1 Hz e o entrega por
+fila a uma única tarefa proprietária dos CSVs. O arquivo ativo é sincronizado a
+cada dez segundos, fechado a cada cinco minutos e recuperado após reinicialização.
+O upload é iniciado explicitamente no fim da sessão, abre uma sessão Wi-Fi
+temporária, exige confirmação nominal do Google e só então move o CSV para
+`enviados`. O gerenciador do cartão conhece apenas SPI e montagem FAT; toda a
+política permanece no serviço.
+
 Os gerenciadores retornam `esp_err_t`. O código chamador deve sempre verificar o
 resultado antes de usar os dados ou avançar para a próxima etapa.
+
+`gerenciador_contador_pulsos` mantém duas instâncias genéricas do periférico PCNT
+e conta as quatro transições de cada par A/B. Os dispositivos
+`encoder_incremental` representam os encoders físicos esquerdo e direito e
+conhecem pinos, P/R e contagens por giro. `servico_odometro` aplica a geometria e
+a relação mecânica de cada roda, usa a média das duas distâncias para calcular
+velocidade, percurso e distância total e persiste o odômetro periodicamente na
+NVS. O percurso é reiniciado com o firmware; a distância total é recuperada após
+reinicializações. O serviço também limita saltos incompatíveis com a velocidade
+máxima configurada e diagnostica divergência persistente entre as rodas, sem
+alterar a média usada pelo odômetro.
 
 `gerenciadores/gerenciador_indicadores.cpp` contém apenas o acesso aos quatro LEDs
 e ao PWM do buzzer passivo. `servicos/servico_sinalizacao.cpp` interpreta os

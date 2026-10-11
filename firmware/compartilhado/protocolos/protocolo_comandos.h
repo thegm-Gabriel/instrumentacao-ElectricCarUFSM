@@ -1,3 +1,4 @@
+// Define quadros, códigos e validações do protocolo de comandos.
 #pragma once
 
 #include <stddef.h>
@@ -21,6 +22,7 @@
 #define CAPACIDADE_COMANDO_WIFI (1u << 6)
 #define CAPACIDADE_COMANDO_CONTROLE_OTA (1u << 7)
 #define CAPACIDADE_COMANDO_TERMINAL (1u << 8)
+#define CAPACIDADE_COMANDO_CONTROLE_OPERACIONAL (1u << 9)
 
 typedef enum {
     NO_COMANDO_DESCONHECIDO = 0,
@@ -48,8 +50,33 @@ typedef enum {
     COMANDO_AUTORIZAR_OTA_EQUIPE = 22,
     COMANDO_AUTORIZAR_OTA_VISITANTES = 23,
     COMANDO_CANCELAR_OTA = 24,
+    COMANDO_AUTORIZAR_OTA_TODOS = 25,
     COMANDO_SOLICITAR_RESUMO_TERMINAL = 30,
+    COMANDO_EXECUTAR_ACAO_MESTRE = 31,
+    COMANDO_OBTER_CONFIGURACAO_MESTRE = 32,
+    COMANDO_OBTER_REDE_WIFI_SALVA = 33,
+    COMANDO_CONSULTAR_SATELITE = 34,
 } codigo_comando_t;
+
+// Uma única ação estruturada transporta as operações do menu serial sem
+// reproduzir na UART o estado interativo do terminal físico.
+typedef enum {
+    ACAO_MESTRE_ALTERNAR_RELATORIOS = 1,
+    ACAO_MESTRE_ZERAR_PERCURSO = 2,
+    ACAO_MESTRE_SINCRONIZAR_GOOGLE = 3,
+    ACAO_MESTRE_DEFINIR_INTERVALO_RELATORIO = 4,
+    ACAO_MESTRE_DEFINIR_INTERVALO_OTA = 5,
+    ACAO_MESTRE_DEFINIR_INTERVALO_TELEMETRIA_OTA = 6,
+    ACAO_MESTRE_PREPARAR_REDE_WIFI = 7,
+    ACAO_MESTRE_CONECTAR_REDE_WIFI_PREPARADA = 8,
+    ACAO_MESTRE_SALVAR_REDE_WIFI_PREPARADA = 9,
+    ACAO_MESTRE_CONECTAR_REDE_WIFI_SALVA = 10,
+    ACAO_MESTRE_EXCLUIR_REDE_WIFI_SALVA = 11,
+    ACAO_MESTRE_DEFINIR_WIFI_AUTOMATICO = 12,
+    ACAO_MESTRE_ALTERAR_REDE_WIFI_PRINCIPAL = 13,
+    ACAO_MESTRE_RESTAURAR_REDE_WIFI_PRINCIPAL = 14,
+    ACAO_MESTRE_DEFINIR_POLITICA_WIFI = 15,
+} acao_mestre_t;
 
 typedef enum {
     RESPOSTA_COMANDO_OK = 0,
@@ -157,6 +184,65 @@ typedef struct __attribute__((packed)) {
     char rede[33];
 } resposta_comando_wifi_t;
 
+typedef struct __attribute__((packed)) {
+    uint8_t acao;
+    uint8_t alvo;
+    uint16_t reservado;
+    uint32_t valor;
+    uint32_t valor_2;
+    uint32_t valor_3;
+    uint32_t valor_4;
+    char texto[108];
+} solicitacao_acao_mestre_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t relatorios_pausados;
+    uint8_t quantidade_redes_wifi;
+    uint8_t wifi_automatico;
+    uint8_t cartao_disponivel;
+    uint32_t intervalos_relatorios_ms[4];
+    uint32_t intervalo_ota_minutos;
+    uint32_t intervalo_telemetria_ota_ms;
+    uint32_t amostras_sd;
+    uint32_t arquivos_pendentes;
+    uint32_t arquivos_enviados;
+    uint8_t tentativas_wifi;
+    uint8_t reservado[3];
+    uint32_t tempo_tentativa_wifi_ms;
+    uint32_t intervalo_tentativas_wifi_ms;
+    uint32_t tempo_limite_wifi_ms;
+} resposta_configuracao_mestre_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t indice;
+} solicitacao_rede_wifi_salva_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t indice;
+    char ssid[33];
+} resposta_rede_wifi_salva_t;
+
+typedef enum {
+    CONSULTA_SATELITE_PING = 1,
+    CONSULTA_SATELITE_VERSAO = 2,
+} tipo_consulta_satelite_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t alvo;
+    uint8_t tipo;
+    uint16_t reservado;
+} solicitacao_consulta_satelite_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t alvo;
+    uint8_t tipo;
+    uint16_t reservado;
+    uint32_t rtt_ms;
+    uint32_t tempo_ativo_ms;
+    uint32_t capacidades;
+    char versao[32];
+} resposta_consulta_satelite_t;
+
 // Confirma que uma ação com efeito colateral foi aceita pelo mestre. O efeito
 // continua de forma assíncrona e deve ser acompanhado pela consulta de estado.
 typedef struct __attribute__((packed)) {
@@ -181,6 +267,12 @@ static_assert(sizeof(resposta_comando_ota_detalhada_t) ==
               "A resposta OTA detalhada deve ocupar 128 bytes");
 static_assert(sizeof(resposta_comando_acao_t) == 8,
               "A confirmação de ação deve ter 8 bytes");
+static_assert(sizeof(solicitacao_acao_mestre_t) ==
+                  COMANDO_TAMANHO_MAXIMO_CARGA,
+              "A solicitação operacional deve ocupar 128 bytes");
+static_assert(sizeof(resposta_configuracao_mestre_t) <=
+                  COMANDO_TAMANHO_MAXIMO_CARGA,
+              "A configuração deve caber na carga de comando");
 #else
 _Static_assert(sizeof(cabecalho_quadro_comando_t) == 16,
                "O cabeçalho de comando deve ter 16 bytes");
@@ -191,6 +283,12 @@ _Static_assert(sizeof(resposta_comando_ota_detalhada_t) ==
                "A resposta OTA detalhada deve ocupar 128 bytes");
 _Static_assert(sizeof(resposta_comando_acao_t) == 8,
                "A confirmação de ação deve ter 8 bytes");
+_Static_assert(sizeof(solicitacao_acao_mestre_t) ==
+                   COMANDO_TAMANHO_MAXIMO_CARGA,
+               "A solicitação operacional deve ocupar 128 bytes");
+_Static_assert(sizeof(resposta_configuracao_mestre_t) <=
+                   COMANDO_TAMANHO_MAXIMO_CARGA,
+               "A configuração deve caber na carga de comando");
 #endif
 
 static inline int protocolo_comandos_no_valido(uint8_t no)

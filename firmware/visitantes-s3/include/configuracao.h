@@ -1,3 +1,5 @@
+// Centraliza pinagem, rede e limites do satélite dos visitantes.
+// Centraliza pinagem, rede e limites do satélite dos visitantes.
 #pragma once
 
 #include "driver/gpio.h"

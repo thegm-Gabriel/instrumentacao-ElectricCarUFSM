@@ -1,3 +1,4 @@
+// Declara a interface compartilhada da atualização OTA dos satélites.
 #pragma once
 
 #include <stdbool.h>

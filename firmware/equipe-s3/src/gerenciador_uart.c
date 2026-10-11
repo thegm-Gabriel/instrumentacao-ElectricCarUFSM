@@ -1,3 +1,4 @@
+// Inicializa a UART e serializa transmissões do satélite da equipe.
 #include "gerenciador_uart.h"
 
 #include <limits.h>

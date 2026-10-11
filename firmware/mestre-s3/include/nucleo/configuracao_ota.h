@@ -1,3 +1,4 @@
+// Centraliza parâmetros de segurança, rede e intervalo da OTA.
 #pragma once
 
 #include <cstddef>
@@ -11,6 +12,8 @@ constexpr char ENDERECO_MANIFESTO_OTA[] =
     "releases/latest/download/manifesto-firmwares.json";
 
 constexpr uint32_t TEMPO_LIMITE_HTTP_MS = 20000;
+constexpr uint32_t TEMPO_LIMITE_CONFIRMACAO_SATELITE_MS = 15000;
+constexpr uint32_t INTERVALO_CONFIRMACAO_SATELITE_MS = 250;
 constexpr int TAMANHO_BUFFER_HTTP_TX = 4096;
 constexpr uint32_t INTERVALO_VERIFICACAO_OTA_PADRAO_MIN = 15;
 constexpr uint32_t INTERVALO_VERIFICACAO_OTA_MINIMO_MIN = 1;

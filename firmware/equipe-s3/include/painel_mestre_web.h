@@ -1,3 +1,4 @@
+// Declara a geração da página web de acompanhamento do mestre.
 #pragma once
 
 // Conteúdo estático da página de controle remoto. O transporte HTTP e a

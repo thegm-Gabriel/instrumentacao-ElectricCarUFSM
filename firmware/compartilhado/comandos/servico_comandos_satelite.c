@@ -1,3 +1,4 @@
+// Implementa o atendimento de comandos binários recebidos pelo satélite.
 #include "servico_comandos_satelite.h"
 
 #include <string.h>

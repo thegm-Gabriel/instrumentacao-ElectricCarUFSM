@@ -1,3 +1,4 @@
+// Mantém o ponto de acesso e o estado da rede Wi-Fi da equipe.
 #include "rede_wifi.h"
 
 #include <string.h>
@@ -43,6 +44,26 @@ esp_err_t rede_wifi_iniciar(void)
     IP4_ADDR(&ip_info.netmask, 255, 255, 255, 0);
     ESP_RETURN_ON_ERROR(esp_netif_dhcps_stop(interface_ap), TAG, "parar DHCP");
     ESP_RETURN_ON_ERROR(esp_netif_set_ip_info(interface_ap, &ip_info), TAG, "IP do AP");
+
+    esp_netif_dns_info_t servidor_dns = {0};
+    servidor_dns.ip.type = ESP_IPADDR_TYPE_V4;
+    servidor_dns.ip.u_addr.ip4 = ip_info.ip;
+    ESP_RETURN_ON_ERROR(
+        esp_netif_set_dns_info(interface_ap, ESP_NETIF_DNS_MAIN,
+                               &servidor_dns),
+        TAG, "configurar DNS local");
+    uint8_t oferecer_dns = 0x02;
+    ESP_RETURN_ON_ERROR(
+        esp_netif_dhcps_option(interface_ap, ESP_NETIF_OP_SET,
+                               ESP_NETIF_DOMAIN_NAME_SERVER, &oferecer_dns,
+                               sizeof(oferecer_dns)),
+        TAG, "anunciar DNS pelo DHCP");
+    ESP_RETURN_ON_ERROR(
+        esp_netif_dhcps_option(interface_ap, ESP_NETIF_OP_SET,
+                               ESP_NETIF_CAPTIVEPORTAL_URI,
+                               (void *)URL_LOCAL_EQUIPE,
+                               strlen(URL_LOCAL_EQUIPE)),
+        TAG, "anunciar painel cativo");
     ESP_RETURN_ON_ERROR(esp_netif_dhcps_start(interface_ap), TAG, "iniciar DHCP");
 
     wifi_init_config_t configuracao_inicial = WIFI_INIT_CONFIG_DEFAULT();
@@ -72,6 +93,8 @@ esp_err_t rede_wifi_iniciar(void)
     ESP_RETURN_ON_ERROR(esp_wifi_get_max_tx_power(&potencia_aplicada), TAG,
                         "consultar potência do rádio");
     ESP_LOGI(TAG, "AP '%s' ativo em " IPSTR, WIFI_SSID, IP2STR(&ip_info.ip));
+    ESP_LOGI(TAG, "Painéis anunciados em %s, %s e %s", URL_LOCAL_EQUIPE,
+             URL_LOCAL_MESTRE, URL_LOCAL_DIAGNOSTICO);
     ESP_LOGI(TAG,
              "Rádio AP: canal=%u, largura=%u MHz, potência máxima=%d.%02d dBm",
              (unsigned)WIFI_CANAL, (unsigned)WIFI_LARGURA_CANAL_MHZ,

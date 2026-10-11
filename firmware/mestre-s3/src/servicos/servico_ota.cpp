@@ -1,3 +1,4 @@
+// Orquestra descoberta, autorização e execução das atualizações OTA.
 #include "servicos/servico_ota.h"
 
 #include <cctype>
@@ -13,12 +14,13 @@
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "gerenciadores/gerenciador_ota.h"
-#include "gerenciadores/gerenciador_ota_satelites.h"
+#include "servicos/transporte_ota_satelites.h"
 #include "nvs.h"
 #include "nucleo/configuracao_ota.h"
 #include "nucleo/configuracao_wifi.h"
@@ -85,7 +87,11 @@ public:
     }
     ~SessaoWifiOta() {
         if (ativo_) {
-            servico_wifi_encerrar_sessao();
+            const esp_err_t erro = servico_wifi_encerrar_sessao();
+            if (erro != ESP_OK) {
+                ESP_LOGW(ETIQUETA, "Falha ao encerrar a sessão Wi-Fi da OTA: %s",
+                         esp_err_to_name(erro));
+            }
         }
     }
     SessaoWifiOta(const SessaoWifiOta&) = delete;
@@ -246,11 +252,16 @@ esp_err_t baixar_manifesto(ManifestoOta* manifesto) {
             std::strlen(manifesto->equipe.versao) < OTA_SATELITE_TAMANHO_VERSAO &&
             std::strlen(manifesto->visitantes.versao) < OTA_SATELITE_TAMANHO_VERSAO;
     }
-    int partes_versao[3]{};
+    int partes_mestre[3]{};
+    int partes_equipe[3]{};
+    int partes_visitantes[3]{};
     estrutura_valida = estrutura_valida &&
-        interpretar_versao(manifesto->mestre.versao, partes_versao) &&
-        interpretar_versao(manifesto->equipe.versao, partes_versao) &&
-        interpretar_versao(manifesto->visitantes.versao, partes_versao);
+        interpretar_versao(manifesto->mestre.versao, partes_mestre) &&
+        interpretar_versao(manifesto->equipe.versao, partes_equipe) &&
+        interpretar_versao(manifesto->visitantes.versao, partes_visitantes) &&
+        partes_equipe[0] <= UINT8_MAX && partes_equipe[1] <= UINT8_MAX &&
+        partes_equipe[2] <= UINT8_MAX && partes_visitantes[0] <= UINT8_MAX &&
+        partes_visitantes[1] <= UINT8_MAX && partes_visitantes[2] <= UINT8_MAX;
     cJSON_Delete(raiz);
 
     if (!estrutura_valida) {
@@ -425,7 +436,13 @@ void atualizar_progresso_mestre(uint32_t bytes, uint32_t total,
     xSemaphoreGive(mutex_estado);
 }
 
-void executar_atualizacao_mestre(const FirmwareManifestoOta& firmware) {
+esp_err_t executar_atualizacao_mestre(const FirmwareManifestoOta& firmware) {
+    xSemaphoreTake(mutex_estado, portMAX_DELAY);
+    situacao.estado = EstadoServicoOta::Baixando;
+    situacao.alvo_ativo = AlvoOta::Mestre;
+    situacao.progresso = {};
+    situacao.progresso.tamanho_total = firmware.tamanho_bytes;
+    xSemaphoreGive(mutex_estado);
     ESP_LOGW(ETIQUETA,
              "Atualização do mestre para %s autorizada. Iniciando download seguro",
              firmware.versao);
@@ -446,16 +463,44 @@ void executar_atualizacao_mestre(const FirmwareManifestoOta& firmware) {
         ESP_LOGE(ETIQUETA,
                  "A atualização do mestre falhou: %s. O firmware atual continua ativo",
                  esp_err_to_name(erro));
-        return;
+        return erro;
     }
     definir_estado(EstadoServicoOta::Aplicado);
     ESP_LOGW(ETIQUETA, "Firmware do mestre validado. Reinício em 3 segundos");
     vTaskDelay(pdMS_TO_TICKS(3000));
     esp_restart();
+    return ESP_OK;
 }
 
-void executar_atualizacao_satelite(AlvoOta alvo,
-                                   const FirmwareManifestoOta& firmware) {
+bool versao_satelite_confirmada(AlvoOta alvo,
+                                const FirmwareManifestoOta& firmware) {
+    int esperada[3]{};
+    if (!interpretar_versao(firmware.versao, esperada)) return false;
+    const SateliteTelemetria satelite = alvo == AlvoOta::Equipe
+                                            ? SateliteTelemetria::Equipe
+                                            : SateliteTelemetria::Visitantes;
+    const EstatisticasLinkTelemetria link =
+        servico_telemetria_obter_estatisticas_link(satelite);
+    return link.respondeu && link.idade_ultima_confirmacao_ms <= 5000u &&
+           link.versao_maior == esperada[0] &&
+           link.versao_menor == esperada[1] &&
+           link.versao_correcao == esperada[2];
+}
+
+esp_err_t aguardar_confirmacao_satelite(
+    AlvoOta alvo, const FirmwareManifestoOta& firmware) {
+    const int64_t limite_ms = esp_timer_get_time() / 1000 +
+                             configuracao::TEMPO_LIMITE_CONFIRMACAO_SATELITE_MS;
+    do {
+        if (versao_satelite_confirmada(alvo, firmware)) return ESP_OK;
+        vTaskDelay(pdMS_TO_TICKS(
+            configuracao::INTERVALO_CONFIRMACAO_SATELITE_MS));
+    } while (esp_timer_get_time() / 1000 < limite_ms);
+    return ESP_ERR_TIMEOUT;
+}
+
+esp_err_t executar_atualizacao_satelite(
+    AlvoOta alvo, const FirmwareManifestoOta& firmware) {
     xSemaphoreTake(mutex_estado, portMAX_DELAY);
     SituacaoOtaSatelite* estado = alvo == AlvoOta::Equipe
                                       ? &situacao.equipe : &situacao.visitantes;
@@ -475,9 +520,17 @@ void executar_atualizacao_satelite(AlvoOta alvo,
     transferencia.versao = firmware.versao;
     transferencia.sha256 = firmware.sha256;
     transferencia.tamanho_bytes = firmware.tamanho_bytes;
+    const EstatisticasLinkTelemetria link =
+        servico_telemetria_obter_estatisticas_link(
+            alvo == AlvoOta::Equipe ? SateliteTelemetria::Equipe
+                                    : SateliteTelemetria::Visitantes);
+    transferencia.tamanho_bloco =
+        (link.capacidades & CAPACIDADE_SATELITE_OTA_BLOCO_4096) != 0
+            ? OTA_SATELITE_TAMANHO_MAXIMO_CARGA
+            : OTA_SATELITE_TAMANHO_CARGA_COMPATIVEL;
     transferencia.tempo_limite_http_ms = configuracao::TEMPO_LIMITE_HTTP_MS;
     servico_telemetria_definir_ota_satelite_ativa(true);
-    const esp_err_t erro = gerenciador_ota_satelites_executar(
+    esp_err_t erro = transporte_ota_satelites_executar(
         transferencia, atualizar_progresso_satelite);
     servico_telemetria_definir_ota_satelite_ativa(false);
 
@@ -486,7 +539,7 @@ void executar_atualizacao_satelite(AlvoOta alvo,
     estado->ultimo_erro = erro;
     estado->estado = erro == ESP_OK ? EstadoOtaSatelite::Reiniciando
                                     : EstadoOtaSatelite::Falha;
-    situacao.estado = erro == ESP_OK ? EstadoServicoOta::Aplicado
+    situacao.estado = erro == ESP_OK ? EstadoServicoOta::Baixando
                                      : EstadoServicoOta::Falha;
     situacao.ultimo_erro = erro;
     if (erro != ESP_OK) situacao.falhas++;
@@ -494,26 +547,84 @@ void executar_atualizacao_satelite(AlvoOta alvo,
     if (erro != ESP_OK) {
         ESP_LOGE(ETIQUETA, "OTA do satélite %s falhou: %s; firmware anterior preservado",
                  servico_ota_nome_alvo(alvo), esp_err_to_name(erro));
-        return;
+        return erro;
     }
-    ESP_LOGW(ETIQUETA, "OTA do satélite %s concluída; ele está reiniciando",
+    ESP_LOGW(ETIQUETA,
+             "OTA do satélite %s transferida; aguardando a nova versão responder",
              servico_ota_nome_alvo(alvo));
-    vTaskDelay(pdMS_TO_TICKS(3000));
+    erro = aguardar_confirmacao_satelite(alvo, firmware);
     xSemaphoreTake(mutex_estado, portMAX_DELAY);
     estado = alvo == AlvoOta::Equipe ? &situacao.equipe : &situacao.visitantes;
-    estado->estado = EstadoOtaSatelite::Concluido;
+    estado->ultimo_erro = erro;
+    estado->estado = erro == ESP_OK ? EstadoOtaSatelite::Concluido
+                                    : EstadoOtaSatelite::Falha;
+    if (erro == ESP_OK) {
+        std::strncpy(estado->versao_atual, firmware.versao,
+                     sizeof(estado->versao_atual) - 1);
+    }
     const bool ainda_pendente = situacao.versao_disponivel[0] != '\0' ||
         situacao.equipe.estado == EstadoOtaSatelite::AguardandoAutorizacao ||
         situacao.visitantes.estado == EstadoOtaSatelite::AguardandoAutorizacao;
-    situacao.estado = ainda_pendente ? EstadoServicoOta::AguardandoAutorizacao
-                                     : EstadoServicoOta::Atualizado;
-    situacao.alvo_ativo = AlvoOta::Nenhum;
+    situacao.estado = erro != ESP_OK
+                          ? EstadoServicoOta::Falha
+                          : ainda_pendente
+                                ? EstadoServicoOta::AguardandoAutorizacao
+                                : EstadoServicoOta::Atualizado;
+    situacao.ultimo_erro = erro;
+    if (erro != ESP_OK) situacao.falhas++;
+    if (erro == ESP_OK) situacao.alvo_ativo = AlvoOta::Nenhum;
     xSemaphoreGive(mutex_estado);
+    if (erro != ESP_OK) {
+        ESP_LOGE(ETIQUETA,
+                 "O satélite %s não confirmou a versão %s após reiniciar; sequência interrompida",
+                 servico_ota_nome_alvo(alvo), firmware.versao);
+        return erro;
+    }
+    ESP_LOGI(ETIQUETA, "Satélite %s confirmou a versão %s",
+             servico_ota_nome_alvo(alvo), firmware.versao);
+    return ESP_OK;
+}
+
+esp_err_t executar_atualizacao_todos(
+    const ManifestoOta& manifesto, bool atualizar_equipe,
+    bool atualizar_visitantes, bool atualizar_mestre) {
+    ESP_LOGW(ETIQUETA,
+             "Atualização conjunta autorizada: satélites primeiro, mestre por último");
+    esp_err_t erro = ESP_OK;
+    if (atualizar_equipe) {
+        erro = executar_atualizacao_satelite(AlvoOta::Equipe,
+                                             manifesto.equipe);
+    }
+    if (erro == ESP_OK && atualizar_visitantes) {
+        erro = executar_atualizacao_satelite(AlvoOta::Visitantes,
+                                             manifesto.visitantes);
+    }
+    if (erro != ESP_OK) {
+        ESP_LOGE(ETIQUETA,
+                 "Atualização conjunta interrompida antes do mestre: %s",
+                 esp_err_to_name(erro));
+        return erro;
+    }
+    if (atualizar_mestre) {
+        return executar_atualizacao_mestre(manifesto.mestre);
+    }
+
+    xSemaphoreTake(mutex_estado, portMAX_DELAY);
+    situacao.estado = EstadoServicoOta::Atualizado;
+    situacao.alvo_ativo = AlvoOta::Nenhum;
+    situacao.ultimo_erro = ESP_OK;
+    xSemaphoreGive(mutex_estado);
+    ESP_LOGI(ETIQUETA,
+             "Atualização conjunta concluída; o mestre já estava atualizado");
+    return ESP_OK;
 }
 
 void executar_atualizacao_autorizada() {
     ManifestoOta manifesto{};
     AlvoOta alvo = AlvoOta::Nenhum;
+    bool atualizar_mestre = false;
+    bool atualizar_equipe = false;
+    bool atualizar_visitantes = false;
     xSemaphoreTake(mutex_estado, portMAX_DELAY);
     alvo = alvo_autorizado;
     if (situacao.estado != EstadoServicoOta::AguardandoAutorizacao ||
@@ -524,6 +635,11 @@ void executar_atualizacao_autorizada() {
         return;
     }
     manifesto = manifesto_disponivel;
+    atualizar_mestre = situacao.versao_disponivel[0] != '\0';
+    atualizar_equipe =
+        situacao.equipe.estado == EstadoOtaSatelite::AguardandoAutorizacao;
+    atualizar_visitantes =
+        situacao.visitantes.estado == EstadoOtaSatelite::AguardandoAutorizacao;
     alvo_autorizado = AlvoOta::Nenhum;
     xSemaphoreGive(mutex_estado);
 
@@ -534,15 +650,10 @@ void executar_atualizacao_autorizada() {
         ESP_LOGE(ETIQUETA, "A atualização não começou porque o Wi-Fi está indisponível");
         return;
     }
-    definir_estado(EstadoServicoOta::Baixando);
-    xSemaphoreTake(mutex_estado, portMAX_DELAY);
-    situacao.alvo_ativo = alvo;
-    situacao.progresso = {};
-    if (alvo == AlvoOta::Mestre) {
-        situacao.progresso.tamanho_total = manifesto.mestre.tamanho_bytes;
-    }
-    xSemaphoreGive(mutex_estado);
-    if (alvo == AlvoOta::Mestre) {
+    if (alvo == AlvoOta::Todos) {
+        executar_atualizacao_todos(manifesto, atualizar_equipe,
+                                   atualizar_visitantes, atualizar_mestre);
+    } else if (alvo == AlvoOta::Mestre) {
         executar_atualizacao_mestre(manifesto.mestre);
     } else if (alvo == AlvoOta::Equipe) {
         executar_atualizacao_satelite(alvo, manifesto.equipe);
@@ -625,7 +736,13 @@ esp_err_t servico_ota_iniciar() {
     if (xTaskCreate(tarefa_ota, "servico_ota", 14336, nullptr, 4,
                     &tarefa_ota_handle) != pdPASS) {
         tarefa_ota_handle = nullptr;
-        definir_estado(EstadoServicoOta::Falha, ESP_ERR_NO_MEM);
+        vEventGroupDelete(eventos_ota);
+        eventos_ota = nullptr;
+        vSemaphoreDelete(mutex_estado);
+        mutex_estado = nullptr;
+        situacao = {};
+        situacao.estado = EstadoServicoOta::Falha;
+        situacao.ultimo_erro = ESP_ERR_NO_MEM;
         return ESP_ERR_NO_MEM;
     }
     iniciado = true;
@@ -661,6 +778,38 @@ esp_err_t servico_ota_autorizar_atualizacao() {
     if (!aguardando) {
         ESP_LOGW(ETIQUETA,
                  "Não há atualização pendente para autorizar. Verifique primeiro se existe uma nova versão");
+        return ESP_ERR_INVALID_STATE;
+    }
+    xEventGroupSetBits(eventos_ota, BIT_AUTORIZAR);
+    return ESP_OK;
+}
+
+esp_err_t servico_ota_autorizar_atualizacao_todos() {
+    if (!iniciado || eventos_ota == nullptr) return ESP_ERR_INVALID_STATE;
+    xSemaphoreTake(mutex_estado, portMAX_DELAY);
+    const auto alvo_disponivel = [](EstadoOtaSatelite estado) {
+        return estado == EstadoOtaSatelite::Atualizado ||
+               estado == EstadoOtaSatelite::AguardandoAutorizacao ||
+               estado == EstadoOtaSatelite::Concluido;
+    };
+    const bool algum_pendente = situacao.versao_disponivel[0] != '\0' ||
+        situacao.equipe.estado == EstadoOtaSatelite::AguardandoAutorizacao ||
+        situacao.visitantes.estado == EstadoOtaSatelite::AguardandoAutorizacao;
+    const bool aguardando =
+        situacao.estado == EstadoServicoOta::AguardandoAutorizacao &&
+        algum_pendente && alvo_disponivel(situacao.equipe.estado) &&
+        alvo_disponivel(situacao.visitantes.estado) &&
+        alvo_autorizado == AlvoOta::Nenhum;
+    if (aguardando) alvo_autorizado = AlvoOta::Todos;
+    const EstadoOtaSatelite estado_equipe = situacao.equipe.estado;
+    const EstadoOtaSatelite estado_visitantes = situacao.visitantes.estado;
+    xSemaphoreGive(mutex_estado);
+    if (!aguardando) {
+        ESP_LOGW(
+            ETIQUETA,
+            "Atualização conjunta recusada: equipe=%s, visitantes=%s; ambos devem estar acessíveis e suportar OTA",
+            servico_ota_nome_estado_satelite(estado_equipe),
+            servico_ota_nome_estado_satelite(estado_visitantes));
         return ESP_ERR_INVALID_STATE;
     }
     xEventGroupSetBits(eventos_ota, BIT_AUTORIZAR);
@@ -765,6 +914,7 @@ const char* servico_ota_nome_estado_satelite(EstadoOtaSatelite estado) {
 
 const char* servico_ota_nome_alvo(AlvoOta alvo) {
     switch (alvo) {
+        case AlvoOta::Todos: return "todos";
         case AlvoOta::Mestre: return "mestre";
         case AlvoOta::Equipe: return "equipe";
         case AlvoOta::Visitantes: return "visitantes";

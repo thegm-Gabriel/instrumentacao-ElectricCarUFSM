@@ -12,7 +12,7 @@ o mestre antigo.
 
 O mestre usa o módulo ESP32-S3-WROOM-1-N16R8. Como a PSRAM é Octal, reserve os
 GPIOs 33 a 37 para a interface interna de memória e não os use em periféricos. A
- pinagem atual usa GPIO 4, 8 a 18, portanto não há conflito com a PSRAM.
+ pinagem atual usa GPIO 4 a 18 e 21, portanto não há conflito com a PSRAM.
 
 ## LEDs e buzzer do mestre
 
@@ -35,6 +35,28 @@ dentro do limite do GPIO.
 
 Os pinos podem ser alterados em
 `firmware/mestre-s3/include/nucleo/configuracao_placa.h` sem mudar o serviço.
+
+## Encoders incrementais do mestre
+
+Cada encoder E38S6G5-600B-G24N é alimentado por uma fonte externa compatível (12 V
+é recomendado) e suas saídas NPN de coletor aberto recebem pull-ups externos de
+4,7 kΩ para **3,3 V**. O GND da fonte e o GND do ESP32-S3 devem ser comuns.
+
+| Encoder/sinal | ESP32-S3 mestre | Observação |
+|---|---:|---|
+| Esquerdo A | GPIO 5 | Pull-up de 4,7 kΩ para 3,3 V |
+| Esquerdo B | GPIO 6 | Pull-up de 4,7 kΩ para 3,3 V |
+| Direito A | GPIO 7 | Pull-up de 4,7 kΩ para 3,3 V |
+| Direito B | GPIO 21 | Pull-up de 4,7 kΩ para 3,3 V |
+| GND/preto de ambos | GND | Comum à fonte dos encoders |
+| Alimentação/vermelho | Fonte externa | Não ligar ao GPIO |
+| Blindagem | GND | Preferencialmente apenas no lado do controlador |
+
+Nunca faça o pull-up de A ou B para 12/24 V. O periférico PCNT conta todas as
+bordas dos dois canais de cada encoder (2400 contagens por giro para 600 P/R) sem
+polling da CPU e soma a distância nos dois sentidos. O odômetro usa a média das
+distâncias esquerda e direita. Diâmetros, relações de transmissão e intervalo de persistência ficam em
+`firmware/mestre-s3/include/nucleo/configuracao_placa.h`.
 
 ## Tela SSD1306 I²C do mestre
 
@@ -73,3 +95,20 @@ do ESP32-S3.
 
 Atualmente os módulos da equipe e de visitantes apenas recebem telemetria, mas os
 fios de retorno já podem ficar previstos para uso futuro.
+
+## Cartão microSD do mestre
+
+O registro histórico usa um módulo microSD em 3,3 V pelo barramento SPI2. Os
+GPIOs 33 a 37 continuam reservados para a PSRAM Octal.
+
+| Sinal do módulo | ESP32-S3 mestre |
+|---|---:|
+| CLK | GPIO 38 |
+| MOSI / DI | GPIO 39 |
+| MISO / DO | GPIO 40 |
+| CS | GPIO 41 |
+| VCC | 3,3 V |
+| GND | GND |
+
+Esses pinos são uma definição de firmware e precisam ser conferidos com a placa
+e o módulo usados antes de fabricar o chicote.

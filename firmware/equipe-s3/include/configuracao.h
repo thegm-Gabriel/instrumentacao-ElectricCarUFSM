@@ -1,3 +1,4 @@
+// Centraliza pinagem, rede e limites do satélite da equipe.
 #pragma once
 
 #include "driver/gpio.h"
@@ -35,6 +36,11 @@
 #define UART_TAMANHO_BUFFER_TX 2048
 #define UART_TEMPO_LIMITE_TX_MS 20
 
-#define IP_PAINEL "192.168.4.1"
+#define NOME_LOCAL_EQUIPE "painel.equipe"
+#define NOME_LOCAL_MESTRE "painel.mestre"
+#define NOME_LOCAL_DIAGNOSTICO "painel.diagnostico"
+#define URL_LOCAL_EQUIPE "http://painel.equipe/"
+#define URL_LOCAL_MESTRE "http://painel.mestre/"
+#define URL_LOCAL_DIAGNOSTICO "http://painel.diagnostico/"
 #define PORTA_HTTP 80
 #define PORTA_DNS 53

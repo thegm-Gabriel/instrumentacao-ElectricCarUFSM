@@ -1,3 +1,4 @@
+// Implementa filas, eventos, transmissão e recuperação das UARTs.
 #include "gerenciadores/gerenciador_uart.h"
 
 #include <cstring>
@@ -33,7 +34,7 @@ struct CanalUart {
 
 struct MensagemTx {
     size_t tamanho;
-    uint8_t dados[configuracao::TAMANHO_MAXIMO_MENSAGEM_UART];
+    uint8_t dados[configuracao::TAMANHO_MAXIMO_MENSAGEM_UART_ASSINCRONA];
 };
 
 CanalUart canais[] = {
@@ -64,6 +65,42 @@ void registrar_erro(CanalUart& canal, esp_err_t erro, bool transmissao) {
         canal.estatisticas.ultimo_erro_recepcao = erro;
     }
     portEXIT_CRITICAL(&trava_estatisticas);
+}
+
+esp_err_t liberar_canal(CanalUart& canal) {
+    if (canal.tarefa_eventos != nullptr) {
+        vTaskDelete(canal.tarefa_eventos);
+        canal.tarefa_eventos = nullptr;
+    }
+    if (canal.tarefa_tx != nullptr) {
+        vTaskDelete(canal.tarefa_tx);
+        canal.tarefa_tx = nullptr;
+    }
+
+    esp_err_t resultado = ESP_OK;
+    if (canal.estatisticas.inicializado || canal.fila_eventos != nullptr) {
+        const esp_err_t erro = uart_driver_delete(canal.porta);
+        if (erro != ESP_OK && erro != ESP_ERR_INVALID_STATE) resultado = erro;
+    }
+    canal.fila_eventos = nullptr;  // Pertencia ao driver UART.
+    if (canal.fila_tx != nullptr) {
+        vQueueDelete(canal.fila_tx);
+        canal.fila_tx = nullptr;
+    }
+    if (canal.mutex_rx != nullptr) {
+        vSemaphoreDelete(canal.mutex_rx);
+        canal.mutex_rx = nullptr;
+    }
+    if (canal.mutex_tx != nullptr) {
+        vSemaphoreDelete(canal.mutex_tx);
+        canal.mutex_tx = nullptr;
+    }
+    portENTER_CRITICAL(&trava_estatisticas);
+    canal.estatisticas.inicializado = false;
+    canal.estatisticas.ocupacao_fila_tx = 0;
+    if (resultado != ESP_OK) canal.estatisticas.ultimo_erro_envio = resultado;
+    portEXIT_CRITICAL(&trava_estatisticas);
+    return resultado;
 }
 
 void tarefa_eventos_uart(void* argumento) {
@@ -132,52 +169,52 @@ void tarefa_eventos_uart(void* argumento) {
     }
 }
 
+esp_err_t transmitir_canal(CanalUart& canal, const void* dados, size_t tamanho,
+                           TickType_t tempo_limite) {
+    if (!canal.estatisticas.inicializado) {
+        registrar_erro(canal, ESP_ERR_INVALID_STATE, true);
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (xSemaphoreTake(canal.mutex_tx, tempo_limite) != pdTRUE) {
+        registrar_erro(canal, ESP_ERR_TIMEOUT, true);
+        return ESP_ERR_TIMEOUT;
+    }
+    const int escritos = uart_write_bytes(canal.porta, dados, tamanho);
+    esp_err_t resultado = escritos == static_cast<int>(tamanho)
+                              ? uart_wait_tx_done(canal.porta, tempo_limite)
+                              : ESP_FAIL;
+    xSemaphoreGive(canal.mutex_tx);
+
+    portENTER_CRITICAL(&trava_estatisticas);
+    if (resultado == ESP_OK) {
+        canal.estatisticas.envios_ok++;
+        canal.estatisticas.bytes_enviados += tamanho;
+        canal.estatisticas.ultimo_erro_envio = ESP_OK;
+    } else {
+        canal.estatisticas.erros_envio++;
+        canal.estatisticas.ultimo_erro_envio = resultado;
+    }
+    portEXIT_CRITICAL(&trava_estatisticas);
+    if (resultado != ESP_OK) {
+        ESP_LOGE(ETIQUETA, "%s: falha física ao transmitir %u bytes: %s",
+                 canal.nome, static_cast<unsigned>(tamanho),
+                 esp_err_to_name(resultado));
+    }
+    return resultado;
+}
+
 void tarefa_transmissao_uart(void* argumento) {
     auto& canal = *static_cast<CanalUart*>(argumento);
     MensagemTx mensagem{};
     while (true) {
         if (xQueueReceive(canal.fila_tx, &mensagem, portMAX_DELAY) != pdTRUE) continue;
-
-        if (xSemaphoreTake(canal.mutex_tx, pdMS_TO_TICKS(250)) != pdTRUE) {
-            const uint16_t ocupacao =
-                static_cast<uint16_t>(uxQueueMessagesWaiting(canal.fila_tx));
-            portENTER_CRITICAL(&trava_estatisticas);
-            canal.estatisticas.ocupacao_fila_tx = ocupacao;
-            canal.estatisticas.mensagens_descartadas++;
-            canal.estatisticas.erros_envio++;
-            canal.estatisticas.ultimo_erro_envio = ESP_ERR_TIMEOUT;
-            portEXIT_CRITICAL(&trava_estatisticas);
-            continue;
-        }
-
-        const int escritos = uart_write_bytes(canal.porta, mensagem.dados, mensagem.tamanho);
-        esp_err_t resultado = ESP_OK;
-        if (escritos != static_cast<int>(mensagem.tamanho)) {
-            resultado = ESP_FAIL;
-        } else {
-            resultado = uart_wait_tx_done(canal.porta, pdMS_TO_TICKS(100));
-        }
-        xSemaphoreGive(canal.mutex_tx);
-
+        (void)transmitir_canal(canal, mensagem.dados, mensagem.tamanho,
+                              pdMS_TO_TICKS(250));
         const uint16_t ocupacao =
             static_cast<uint16_t>(uxQueueMessagesWaiting(canal.fila_tx));
         portENTER_CRITICAL(&trava_estatisticas);
         canal.estatisticas.ocupacao_fila_tx = ocupacao;
-        if (resultado == ESP_OK) {
-            canal.estatisticas.envios_ok++;
-            canal.estatisticas.bytes_enviados += mensagem.tamanho;
-            canal.estatisticas.ultimo_erro_envio = ESP_OK;
-        } else {
-            canal.estatisticas.erros_envio++;
-            canal.estatisticas.ultimo_erro_envio = resultado;
-        }
         portEXIT_CRITICAL(&trava_estatisticas);
-
-        if (resultado != ESP_OK) {
-            ESP_LOGE(ETIQUETA, "%s: falha física ao transmitir %u bytes: %s",
-                     canal.nome, static_cast<unsigned>(mensagem.tamanho),
-                     esp_err_to_name(resultado));
-        }
     }
 }
 
@@ -192,6 +229,7 @@ esp_err_t configurar_canal(CanalUart& canal) {
     if (canal.mutex_rx == nullptr || canal.mutex_tx == nullptr || canal.fila_tx == nullptr) {
         ESP_LOGE(ETIQUETA, "%s: memoria insuficiente para recursos UART", canal.nome);
         registrar_erro(canal, ESP_ERR_NO_MEM, true);
+        liberar_canal(canal);
         return ESP_ERR_NO_MEM;
     }
 
@@ -286,19 +324,30 @@ esp_err_t enviar_canal(CanalUart& canal, const void* dados, size_t tamanho,
 }  // namespace
 
 esp_err_t gerenciador_uart_iniciar() {
+    for (auto& canal : canais) {
+        const esp_err_t erro = configurar_canal(canal);
+        if (erro != ESP_OK) {
+            for (auto& configurado : canais) liberar_canal(configurado);
+            return erro;
+        }
+    }
+    ESP_LOGI(ETIQUETA, "Interfaces UART prontas");
+    return ESP_OK;
+}
+
+esp_err_t gerenciador_uart_encerrar() {
     esp_err_t primeiro_erro = ESP_OK;
     for (auto& canal : canais) {
-        esp_err_t erro = configurar_canal(canal);
-        if (erro != ESP_OK && primeiro_erro == ESP_OK) primeiro_erro = erro;
+        const esp_err_t erro = liberar_canal(canal);
+        if (primeiro_erro == ESP_OK && erro != ESP_OK) primeiro_erro = erro;
     }
-    if (primeiro_erro == ESP_OK) ESP_LOGI(ETIQUETA, "Interfaces UART prontas");
     return primeiro_erro;
 }
 
-esp_err_t gerenciador_uart_enviar(DestinoUart destino, const void* dados, size_t tamanho,
-                                  TickType_t tempo_limite) {
+esp_err_t gerenciador_uart_enfileirar(DestinoUart destino, const void* dados,
+                                      size_t tamanho, TickType_t tempo_limite) {
     if (dados == nullptr || tamanho == 0 ||
-        tamanho > configuracao::TAMANHO_MAXIMO_MENSAGEM_UART) {
+        tamanho > configuracao::TAMANHO_MAXIMO_MENSAGEM_UART_ASSINCRONA) {
         ESP_LOGE(ETIQUETA, "Envio rejeitado: argumento invalido");
         return ESP_ERR_INVALID_ARG;
     }
@@ -313,6 +362,25 @@ esp_err_t gerenciador_uart_enviar(DestinoUart destino, const void* dados, size_t
         return ESP_ERR_INVALID_ARG;
     }
     return enviar_canal(*canal, dados, tamanho, tempo_limite);
+}
+
+esp_err_t gerenciador_uart_enviar(DestinoUart destino, const void* dados,
+                                  size_t tamanho, TickType_t tempo_limite) {
+    if (dados == nullptr || tamanho == 0 ||
+        tamanho > configuracao::TAMANHO_MAXIMO_MENSAGEM_UART) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (destino == DestinoUart::Todos) {
+        const esp_err_t equipe = transmitir_canal(
+            canais[0], dados, tamanho, tempo_limite);
+        const esp_err_t visitantes = transmitir_canal(
+            canais[1], dados, tamanho, tempo_limite);
+        return equipe != ESP_OK ? equipe : visitantes;
+    }
+    CanalUart* canal = encontrar_canal(destino);
+    return canal == nullptr
+               ? ESP_ERR_INVALID_ARG
+               : transmitir_canal(*canal, dados, tamanho, tempo_limite);
 }
 
 int gerenciador_uart_receber(DestinoUart origem, void* buffer, size_t capacidade,
@@ -348,31 +416,6 @@ int gerenciador_uart_receber(DestinoUart origem, void* buffer, size_t capacidade
     portEXIT_CRITICAL(&trava_estatisticas);
     if (recebidos < 0) ESP_LOGE(ETIQUETA, "%s: leitura falhou", canal->nome);
     return recebidos;
-}
-
-esp_err_t gerenciador_uart_limpar_recepcao(DestinoUart origem) {
-    CanalUart* canal = encontrar_canal(origem);
-    if (canal == nullptr) return ESP_ERR_INVALID_ARG;
-    if (!canal->estatisticas.inicializado || canal->mutex_rx == nullptr) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    if (xSemaphoreTake(canal->mutex_rx, pdMS_TO_TICKS(250)) != pdTRUE) {
-        registrar_erro(*canal, ESP_ERR_TIMEOUT, false);
-        return ESP_ERR_TIMEOUT;
-    }
-    const esp_err_t erro = uart_flush_input(canal->porta);
-    if (erro == ESP_OK && canal->fila_eventos != nullptr) {
-        xQueueReset(canal->fila_eventos);
-    }
-    xSemaphoreGive(canal->mutex_rx);
-    if (erro != ESP_OK) {
-        registrar_erro(*canal, erro, false);
-    } else {
-        portENTER_CRITICAL(&trava_estatisticas);
-        canal->estatisticas.ultimo_erro_recepcao = ESP_OK;
-        portEXIT_CRITICAL(&trava_estatisticas);
-    }
-    return erro;
 }
 
 esp_err_t gerenciador_uart_recuperar(DestinoUart destino) {

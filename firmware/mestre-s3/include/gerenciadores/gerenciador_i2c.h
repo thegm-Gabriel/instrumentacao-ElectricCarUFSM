@@ -1,3 +1,4 @@
+// Declara operações serializadas e diagnosticáveis no barramento I2C.
 #pragma once
 
 #include <cstddef>

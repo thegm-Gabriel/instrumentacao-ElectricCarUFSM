@@ -1,0 +1,314 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+\usepackage{url}
+\usepackage[utf8]{inputenc} % Garante o suporte a acentos diretos
+\usepackage[brazil]{babel}  % Ajusta a hifenização e termos para português
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{float}
+
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+
+\begin{document}
+
+\title{Análise e Desenvolvimento de um Veículo Elétrico de Pequeno Porte}
+
+\author{
+\IEEEauthorblockN{Gabriel Muttoni, Paulo César Vargas Luz, Adylson Hahn, Érick Ramon Biscaglia}
+\IEEEauthorblockA{\textit{Engenharia Elétrica} \\
+\textit{Universidade Federal de Santa Maria}\\
+\textit{Cachoeira do Sul, Brasil} \\
+gabriel.muttoni@acad.ufsm.br\quad paulo.c.luz@ufsm.br\\
+adylson.hahn@acad.ufsm.br\quad erick.biscaglia@acad.ufsm.br}
+}
+
+\maketitle
+
+
+
+\begin{abstract}
+\bfseries
+Este trabalho apresenta o desenvolvimento de um veículo elétrico de pequeno porte como plataforma experimental para a mobilidade elétrica. O projeto envolveu a modelagem e o dimensionamento do sistema de tração, o desenvolvimento do chassi, a integração eletromecânica e a validação experimental. Foi desenvolvida uma ferramenta baseada em Python para estimar a potência necessária e orientar a seleção de componentes. A construção do protótipo, a integração dos subsistemas e os testes do conjunto motor-controlador foram realizados com sucesso. Os resultados confirmam a viabilidade da metodologia adotada e o potencial da plataforma para estudos em sistemas de tração e eletrônica de potência.
+\end{abstract}
+
+\renewcommand{\IEEEkeywordsname}{Palavras-chave}
+\begin{IEEEkeywords}
+Veículo elétrico, Mobilidade elétrica, Sistema de tração elétrica, Eletrônica de potência.
+\end{IEEEkeywords}
+
+
+
+
+\section{Introdução}
+
+A mobilidade elétrica tem se consolidado como alternativa aos veículos de combustão interna, impulsionada pela necessidade de redução de emissões e aumento da eficiência energética [1], [2]. Nesse contexto, veículos elétricos vêm ganhando destaque em aplicações urbanas e de pesquisa, incorporando avanços em armazenamento de energia, eletrônica de potência e sistemas de controle [3]. Além de seu impacto ambiental, esses sistemas constituem plataformas relevantes para desenvolvimento e validação de tecnologias emergentes em engenharia [2], [3].
+
+Sob esse aspecto, diversas tecnologias são integradas, com destaque para sistemas de armazenamento de energia, eletrônica de potência e controle de motores elétricos [1], [3]. Esses elementos atuam de forma interligada, exigindo conhecimento multidisciplinar em áreas como máquinas elétricas, conversores estáticos, modelagem dinâmica e sistemas de controle [3]. O avanço dessas tecnologias tem ampliado a complexidade dos veículos elétricos, tornando seu desenvolvimento um campo proeminente para inovação tecnológica.
+
+Nesta perspectiva, surge a necessidade de formação em engenharia com abordagem interdisciplinar e prática. O desenvolvimento dessas tecnologias requer a integração entre teoria e aplicação em problemas reais, envolvendo modelagem, experimentação e validação de sistemas eletromecânicos e de controle [1], [3]. Nesse contexto, tornam-se essenciais ambientes laboratoriais e recursos didáticos que permitam ao estudante vivenciar o ciclo completo de projeto [3], [4].
+
+Alinhadas a essa necessidade, as Diretrizes Curriculares Nacionais (DCNs) de Engenharia reforçam uma formação por competências, com integração entre teoria e prática e foco na resolução de problemas reais [5]. Nesse cenário, metodologias ativas de ensino-aprendizagem, como aprendizagem baseada em projetos e problemas, têm sido amplamente adotadas por promover maior protagonismo discente e integração entre áreas do conhecimento [5], [6].
+
+Convergindo com os requisitos tecnológicos e pedagógicos citados, este trabalho apresenta o desenvolvimento de um protótipo de veículo elétrico de pequeno porte (Fig.~\ref{fig:prototipo_ufsm}). O sistema foi projetado e implementado por discentes do curso de Engenharia Elétrica da Universidade Federal de Santa Maria (UFSM), \textit{campus} Cachoeira do Sul, constituindo uma plataforma experimental direcionada à resolução de problemas reais e à consolidação de uma formação por competências [5], [6].
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.80\columnwidth]{carro.png}
+    \caption{Protótipo de veículo elétrico desenvolvido na UFSM.}
+    \label{fig:prototipo_ufsm}
+\end{figure}
+
+
+\section{Metodologia}
+
+Este trabalho tem como objetivo desenvolver um veículo elétrico de pequeno porte como plataforma experimental para o ensino e pesquisa em mobilidade elétrica, integrando aspectos de modelagem, projeto, construção e validação de sistemas eletromecânicos.
+
+A metodologia adotada baseia-se em uma abordagem de engenharia aplicada. O processo compreende a modelagem matemática do veículo, o dimensionamento do sistema de tração e o desenvolvimento de uma ferramenta computacional para estimativa de potência. Os resultados obtidos direcionam a seleção dos subsistemas. Posteriormente, realiza-se a implementação dos mesmos ao veículo, seguida pelos testes experimentais e validação de funcionalidade e aplicabilidade. A Fig.~\ref{fig:fluxograma} ilustra a metodologia proposta.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\columnwidth]{fluxograma.png}
+    \caption{Fluxograma detalhado da metodologia proposta.}
+    \label{fig:fluxograma}
+\end{figure}
+
+\subsection{Modelagem Matemática}
+
+A modelagem matemática tem como objetivo representar o movimento do veículo elétrico a fim de estimar a potência necessária ao seu deslocamento. Essa etapa fornece a base quantitativa para o dimensionamento dos demais subsistemas.
+O modelo depende de parâmetros físicos do veículo e das condições de operação, como massa total, resistências impostas ao movimento e perfil de condução. A formulação é baseada no equilíbrio de forças, considerando forças de rolamento (\ref{eq:forca_rol}), força aerodinâmica (\ref{eq:forca_aer}) e força inercial (\ref{eq:forca_acc}). A saída principal é a potência requerida ao longo do ciclo de operação, sendo avaliada pela consistência física e coerência com a literatura \cite{b7}, dadas por
+
+\begin{equation}
+    F_{\text{rol}} = \mu \cdot m \cdot g,
+    \label{eq:forca_rol}
+\end{equation}
+
+\begin{equation}
+    F_{\text{aer}} = \frac{1}{2} \cdot \rho \cdot C_d \cdot A \cdot v^2,
+    \label{eq:forca_aer}
+\end{equation}
+
+\begin{equation}
+    F_{\text{acc}} = m \cdot a.
+    \label{eq:forca_acc}
+\end{equation}
+
+Nas equações mencionadas, a variável $\mu$ representa o coeficiente de resistência ao rolamento, $m$ denota a massa total do sistema, $g$ representa a aceleração da gravidade ($9{,}81\text{ m/s}^2$), $\rho$ representa a densidade do ar ($1{,}18\text{ kg/m}^3$), $C_d$ corresponde ao coeficiente de arrasto, $A$ define a área frontal exposta, $v$ expressa a velocidade linear instantânea e $a$ a aceleração longitudinal pretendida. 
+
+Deste modo, a força total requerida (\ref{eq:forca_total}) é dada pela soma algébrica das parcelas citadas:
+
+\begin{equation}
+    F_{\text{total}} = F_{\text{rol}} + F_{\text{aer}} + F_{\text{acc}}.
+    \label{eq:forca_total}
+\end{equation}
+
+Com a força total calculada, torna-se possível parametrizar a potência mecânica líquida (\ref{eq:potencia_mec}) necessária para deslocar o veículo em regime permanente, calculada pelo produto da força total pela velocidade linear, conforme expresso abaixo:
+
+\begin{equation}
+    P_{\text{mec}} = F_{\text{total}} \cdot v.
+    \label{eq:potencia_mec}
+\end{equation}
+
+Com base nesse equacionamento, será desenvolvido um script em Python, visando obter o valor de potência requerido de acordo com a aceleração e velocidade final desejadas.
+
+
+\subsection{Definição do Sistema de Tração}
+
+Esta etapa tem por objetivo dimensionar e selecionar os componentes responsáveis pela propulsão e pela transmissão mecânica do veículo. Nesse contexto, pode-se optar pela utilização de componentes individuais ou de conjuntos comerciais integrados, estes últimos geralmente associados a uma menor possibilidade de customização. Independentemente da configuração adotada, devem ser atendidos os requisitos mínimos de potência e torque definidos na etapa de modelagem.
+
+
+\subsection{Definição do Chassi}
+
+O objetivo desta etapa é projetar a estrutura mecânica do veículo, garantindo suporte adequado aos sistemas e integridade estrutural sob carregamentos estáticos e dinâmicos. Ela depende da massa total, distribuição de componentes e condições de operação. O resultado dessa etapa é a definição da geometria do chassi, materiais e pontos de fixação. A avaliação pode ser realizada por meio de simulações em softwares dedicados, envolvendo a análise dos esforços mecânicos.
+
+\subsection{Implementação}
+
+A implementação consiste na integração física dos subsistemas definidos anteriormente, transformando os modelos teóricos em um protótipo funcional. A atividade envolve a interligação dos sistemas elétricos, mecânicos e de controle. Esta etapa pode ser desenvolvida exclusivamente pelos alunos envolvidos no projeto ou em parceria com colaboradores externos.
+
+\subsection{Testes Laboratoriais}
+
+Os testes laboratoriais têm por objetivo validar o desempenho do sistema em ambiente controlado. São realizadas medições de grandezas elétricas e mecânicas, como corrente, tensão, potência e velocidade. Ao final desta etapa é gerado relatório operacional, com aquisições de formas de onda de tensão, corrente e outras variáveis.
+
+\subsection{Testes de Usabilidade}
+
+Esta etapa avalia o comportamento do veículo em condições reais de operação, considerando aspectos de dirigibilidade, estabilidade e consumo energético. Os testes podem ser realizados em diferentes condições e contextos de utilização, incluindo terrenos distintos e atividades com diferentes públicos. Como exemplos, destacam-se visitas de escolas à universidade, feiras de divulgação científica e aulas práticas em disciplinas correlatas.
+
+
+\section{Resultados}
+
+\subsection{Modelagem Matemática}
+
+A modelagem matemática foi empregada para estimar a potência requerida pelo veículo em diferentes condições de operação. 
+
+Para a determinação da potência requerida pelo veículo, foram definidos os parâmetros de cálculo apresentados a seguir: coeficiente de resistência ao rolamento de 0,015, área frontal de 1 m², aceleração de 0,8 m/s², massa total de 190 kg (considerando o peso do condutor e da estrutura) e densidade do ar de 1,18 kg/m³, adotada para uma altitude aproximada de 68 m.
+
+A Fig.~\ref{fig:grafico_potencia} apresenta a relação entre a velocidade do veículo e a potência requerida, evidenciando o aumento da demanda de potência com o acréscimo da velocidade. Para fins de dimensionamento do projeto, estabeleceu-se a velocidade máxima de 10 km/h como condição ideal de operação, uma vez que o desenvolvimento do veículo não tem como objetivo o desempenho em velocidade, mas sim a utilização como plataforma de estudos.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\columnwidth]{grafico_potencia.png}
+    \caption{Gráfico de potência gerado pelo script em Python.}
+    \label{fig:grafico_potencia}
+\end{figure}
+
+Observa-se que, na condição de operação definida para o projeto, correspondente à velocidade de 10 km/h, a potência requerida é de aproximadamente 600 W. Esse resultado fornece uma referência para o dimensionamento do sistema de tração, permitindo estabelecer os requisitos mínimos de potência dos componentes responsáveis pela propulsão do veículo.
+
+\subsection{Sistema de Tração}
+
+Com base nos resultados da modelagem matemática, optou-se por uma solução comercial amplamente utilizada em veículos elétricos leves, adequando-se ao caráter experimental do projeto: um motor do tipo \textit{Brushless Direct Current} (BLDC) com potência nominal de 600~W. 
+
+O conjunto possui diferencial integrado (Fig.~\ref{fig:motor_bldc}), reduzindo a complexidade da transmissão mecânica, número de componentes e perdas geradas por atrito.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.6\columnwidth]{motorcarro.png}
+    \caption{Motor BLDC de 600~W com diferencial integrado.}
+    \label{fig:motor_bldc}
+\end{figure}
+
+Além de realizar a transmissão da potência mecânica às rodas, o diferencial integrado permite acomodar diferenças de velocidade entre elas durante curvas, contribuindo para o funcionamento adequado do veículo nessas condições.
+
+\subsection{Concepção Mecânica e Estrutural}
+
+O projeto estrutural foi desenvolvido inicialmente utilizando-se o software de modelagem tridimensional Blender, no qual foram avaliadas diferentes configurações de chassi quanto à distribuição dos componentes, robustez estrutural e facilidade de construção.
+
+Após a definição da estrutura do chassi, obteve-se o modelo apresentado na Fig.~\ref{fig:estrutura}, contemplando os pontos de fixação das rodas dianteiras, do sistema de tração traseira, do assento do motorista e do conjunto de baterias.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\columnwidth]{modelagemCarroBlender.jpeg}
+    \caption{Modelo tridimensional do chassi desenvolvido no software Blender.}
+    \label{fig:estrutura}
+\end{figure}
+
+Com base no modelo virtual, o chassi (Fig.~\ref{fig:chassi}) foi construído utilizando aproximadamente 15~m de tubos de aço carbono de seção quadrada (Metalon). Após as etapas de corte, soldagem e acabamento, obteve-se uma estrutura com massa aproximada de 15~kg.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=.95\columnwidth]{confeccao_chassi.png}
+    \caption{Estrutura do Carro Elétrico finalizada.}
+    \label{fig:chassi}
+\end{figure}
+
+A construção do chassi representou uma etapa fundamental para o desenvolvimento do protótipo, possibilitando a realização das etapas subsequentes de montagem.
+
+\subsection{Implementação do Sistema Elétrico}
+
+Após a conclusão do sistema de tração e da estrutura mecânica, foi implementado o sistema elétrico do veículo, composto por um controlador eletrônico (\textit{driver}) responsável por converter a tensão contínua proveniente do banco de baterias em um sistema trifásico, controlando o acionamento do motor BLDC. A Fig.~\ref{fig:driver} apresenta o controlador eletrônico utilizado no protótipo.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\columnwidth]{driver.png}
+    \caption{Controlador eletrônico (\textit{driver}) utilizado no acionamento do motor BLDC.}
+    \label{fig:driver}
+\end{figure}
+
+Devido à ausência de documentação referente aos circuitos eletrônicos de acionamento do motor, realizou-se engenharia reversa do controlador para identificar seus conectores e sinais de controle, possibilitando a elaboração de um diagrama elétrico do sistema. Posteriormente, foram integrados o acelerador eletrônico, o gerenciamento de velocidade (em três níveis) e o sistema de marcha ré. A interconexão dos subsistemas é apresentada na Fig.~\ref{fig:integracao}.  
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.58\columnwidth]{Imagem_sitemas.jpg}
+    \caption{Integração dos sistemas eletromecânicos do protótipo.}
+    \label{fig:integracao}
+\end{figure}
+
+Com a conclusão desta etapa, o desenvolvimento do protótipo avançou para os procedimentos subsequentes de testes.
+
+
+\subsection{Testes Laboratoriais e de Usabilidade}
+
+Após a integração dos sistemas, foram realizados ensaios laboratoriais em bancada para validar o funcionamento do conjunto motor-controlador. Utilizou-se um osciloscópio digital equipado com ponteiras diferenciais para aquisição das formas de onda elétricas.
+
+As medições permitiram monitorar os sinais de tensão e corrente do motor durante o acionamento pelo acelerador eletrônico. As formas de onda apresentaram comportamento compatível com a modulação por largura de pulso (PWM) produzida pelo controlador, conforme apresentado na Fig.~\ref{fig:formas_onda}.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=.90\columnwidth]{TEK00007.PNG}
+    \caption{Formas de onda obtidas durante os ensaios laboratoriais.}
+    \label{fig:formas_onda}
+\end{figure}
+
+As medições de frequência e amplitude permitiram verificar o comportamento dos sinais elétricos durante o acionamento do motor, contribuindo para a validação experimental do funcionamento do conjunto motor-controlador.
+
+Após a validação em ambiente laboratorial, o protótipo foi empregado em atividades de ensino, pesquisa e extensão, permitindo avaliar sua usabilidade em condições reais de operação. Além de servir como plataforma experimental para diversos estudos, o veículo foi utilizado como ferramenta de demonstração tecnológica, aproximando a comunidade acadêmica e o público externo das aplicações práticas desenvolvidas.
+
+Durante a Fenarroz, evento regional de grande abrangência, o protótipo foi apresentado ao público em funcionamento. A demonstração permitiu evidenciar o desempenho do sistema de tração elétrica, divulgar as soluções empregadas no desenvolvimento do veículo e promover a interação entre estudantes, professores, profissionais e visitantes, conforme apresentado na Fig.~\ref{fig:fenarroz}.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.72\columnwidth]{FENARROZ.png}
+    \caption{Apresentação do protótipo durante a Fenarroz.}
+    \label{fig:fenarroz}
+\end{figure}
+
+O veículo também integrou as atividades do Programa de Desenvolvimento Acadêmico (PDA), sendo utilizado para demonstrar, de forma prática, conceitos relacionados à mobilidade elétrica, eletrônica de potência, acionamentos elétricos e sistemas embarcados. Conforme ilustrado na Fig.~\ref{fig:pda}, o protótipo possibilitou a integração entre teoria e prática, contribuindo para a difusão do conhecimento e para o fortalecimento das ações de ensino e extensão desenvolvidas pelo projeto.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.74\columnwidth]{pda.png}
+    \caption{Demonstração do protótipo durante o Programa de Desenvolvimento Acadêmico (PDA).}
+    \label{fig:pda}
+\end{figure}
+
+Além da participação em eventos acadêmicos e tecnológicos, o protótipo também foi utilizado em ações de extensão voltadas à comunidade escolar. Como ilustrado na Fig.~\ref{fig:escola}, essas atividades possibilitaram aproximar a universidade da comunidade, despertar o interesse dos alunos pelas áreas de ciência, tecnologia e engenharia, além de evidenciar o potencial do protótipo como ferramenta didática para a formação de engenheiros por competências e para a divulgação científica.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=1\columnwidth]{escola.jpg}
+    \caption{Apresentação do protótipo a estudantes do ensino básico.}
+    \label{fig:escola}
+\end{figure}
+
+Em outra atividade de extensão, o protótipo foi apresentado aos estudantes do Colégio Marista Roque, proporcionando aos participantes contato com o veículo elétrico e com as tecnologias empregadas em seu desenvolvimento, conforme apresentado na Fig.~\ref{fig:marista_roque}.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.95\columnwidth]{marista_roque.jpg}
+    \caption{Apresentação do protótipo aos estudantes do Marista Roque.}
+    \label{fig:marista_roque}
+\end{figure}
+
+Durante essas atividades, os participantes obtiveram a oportunidade de conhecer mais detalhadamente o protótipo e as soluções adotadas em seu desenvolvimento.
+
+\section{Conclusão}
+
+O desenvolvimento do protótipo resultou na construção de um veículo elétrico de pequeno porte destinado à aplicação prática de conhecimentos relacionados à mobilidade elétrica e às diferentes áreas da Engenharia. A metodologia adotada, envolvendo modelagem computacional em Python, projeto estrutural tridimensional no software Blender, dimensionamento dos sistemas e implementação dos subsistemas elétricos, mostrou-se adequada para orientar as diferentes etapas de desenvolvimento do veículo.
+
+A utilização das ferramentas computacionais permitiu avaliar previamente características relacionadas à demanda de potência e à configuração estrutural do protótipo, contribuindo para a tomada de decisões durante o projeto. Posteriormente, a construção possibilitou a implementação das soluções desenvolvidas e a avaliação do veículo em diferentes condições de operação.
+
+Os ensaios laboratoriais permitiram verificar o funcionamento do conjunto motor-controlador e analisar os sinais elétricos envolvidos no acionamento do motor BLDC. Além disso, os testes preliminares possibilitaram a avaliação de aspectos relacionados ao comportamento dinâmico, à estrutura e ao sistema de tração.
+
+Além dos resultados técnicos obtidos, o veículo confirmou seu potencial para utilização como recurso didático em disciplinas de Engenharia. Sua configuração permite abordar, de forma prática e integrada, conteúdos relacionados à eletrônica de potência, máquinas elétricas, acionamentos elétricos, sistemas embarcados, controle e conversão de energia.
+
+A utilização do veículo em eventos e atividades externas também amplia as possibilidades de aplicação do projeto. A interação com estudantes, visitantes e membros da comunidade permite apresentar, de forma prática, conceitos relacionados à mobilidade elétrica e à engenharia aplicada, contribuindo para a divulgação científica e para a aproximação entre a universidade e a sociedade.
+
+Por fim, o projeto evidencia a importância da integração entre diferentes áreas da Engenharia no desenvolvimento de sistemas eletromecânicos. A experiência adquirida ao longo das etapas de modelagem, projeto, construção e testes possibilitou a aplicação prática dos conhecimentos adquiridos durante a formação acadêmica. Os resultados obtidos também estabeleceram uma base sólida para futuras melhorias e para a continuidade das atividades de ensino, pesquisa e extensão relacionadas ao projeto.
+
+
+\begin{thebibliography}{00}
+
+\bibitem{b1} International Energy Agency (IEA), "Global EV Outlook 2024," IEA, Paris, France, Tech. Rep., 2024.
+
+\bibitem{b2} S. C. Burgess, D. H. Choi, and A. V. Vasilakos, "Electric vehicles and the energy transition," \textit{Renewable and Sustainable Energy Reviews}, vol. 152, p. 111624, 2021.
+
+\bibitem{b3} M. Ehsani, Y. Gao, and A. Emadi, \textit{Modern Electric, Hybrid Electric, and Fuel Cell Vehicles: Fundamentals, Theory, and Design}, 3rd ed. Boca Raton, FL, USA: CRC Press, 2018.
+
+\bibitem{b4} S. J. Chapman, \textit{Electric Machinery Fundamentals}, 5th ed. New York, NY, USA: McGraw-Hill Education, 2012.
+
+\bibitem{b5} Ministério da Educação, Conselho Nacional de Educação, "Resolução CNE/CES nº 2, de 24 de abril de 2019," \textit{Diário Oficial da União}, Brasília, DF, Brasil, 2019.
+
+\bibitem{b6} S. Freeman \textit{et al.}, "Active learning increases student performance in science, engineering, and mathematics," \textit{Proceedings of the National Academy of Sciences}, vol. 111, no. 23, pp. 8410--8415, 2014.
+
+\bibitem{b7}
+D. Halliday, R. Resnick, and J. Walker, \textit{Fundamentos de Física - Mecânica}, 12th ed., vol. 1. Rio de Janeiro, RJ, Brasil: LTC, 2023.
+
+\bibitem{b8}
+J. Pazian, "Avaliação de desempenho de motor BLDC para tração de veículo elétrico," Trabalho de Conclusão de Curso, Univ. Federal de Santa Catarina, Florianópolis, SC, Brasil, 2021.
+
+\end{thebibliography}
+
+\end{document}

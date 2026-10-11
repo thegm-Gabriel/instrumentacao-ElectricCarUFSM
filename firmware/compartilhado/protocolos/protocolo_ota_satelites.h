@@ -1,3 +1,4 @@
+// Define a transferência confiável de firmware do mestre aos satélites.
 #pragma once
 
 #include <stddef.h>
@@ -9,7 +10,8 @@
 #define OTA_SATELITE_INICIO_1 0xA5u
 #define OTA_SATELITE_INICIO_2 0x5Au
 #define OTA_SATELITE_VERSAO_PROTOCOLO 1u
-#define OTA_SATELITE_TAMANHO_MAXIMO_CARGA 2048u
+#define OTA_SATELITE_TAMANHO_CARGA_COMPATIVEL 2048u
+#define OTA_SATELITE_TAMANHO_MAXIMO_CARGA 4096u
 #define OTA_SATELITE_TAMANHO_VERSAO 24u
 #define OTA_SATELITE_TAMANHO_SHA256 32u
 

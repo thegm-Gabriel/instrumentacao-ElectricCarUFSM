@@ -1,3 +1,4 @@
+// Atualiza o painel local com estado, telemetria e progresso OTA.
 #include "servicos/servico_painel_local.h"
 
 #include <cstddef>
@@ -13,6 +14,7 @@
 #include "nucleo/configuracao_placa.h"
 #include "servicos/servico_diagnostico.h"
 #include "servicos/servico_ota.h"
+#include "servicos/servico_sinalizacao.h"
 #include "servicos/servico_telemetria.h"
 #include "servicos/servico_wifi.h"
 
@@ -22,6 +24,29 @@ constexpr std::size_t MAXIMO_LINHAS = 8;
 constexpr std::size_t TAMANHO_LINHA = 22;
 constexpr uint32_t INTERVALO_REPETICAO_ERRO_MS = 5000;
 constexpr uint32_t INTERVALO_PAGINA_SAUDAVEL_MS = 6000;
+constexpr uint32_t INTERVALO_ALTERNANCIA_ALERTA_MS = 3000;
+constexpr uint32_t CAUSAS_EXIBIVEIS[] = {
+    CausaSaudeHeapCritico,
+    CausaSaudePilhaCritica,
+    CausaSaudeSensor,
+    CausaSaudeI2c,
+    CausaSaudeUart,
+    CausaSaudeSupervisao,
+    CausaSaudeEquipeSemResposta,
+    CausaSaudeVisitantesSemResposta,
+    CausaSaudeWifiFraco,
+    CausaSaudeOtaRecente,
+    CausaSaudePersistencia,
+};
+
+struct SituacaoPainelLocal {
+    bool iniciado = false;
+    bool tela_disponivel = false;
+    EstadoSinalizacao ultimo_estado_exibido = EstadoSinalizacao::Desligado;
+    uint32_t atualizacoes_ok = 0;
+    uint32_t falhas_atualizacao = 0;
+    esp_err_t ultimo_erro = ESP_OK;
+};
 
 portMUX_TYPE trava_situacao = portMUX_INITIALIZER_UNLOCKED;
 SituacaoPainelLocal situacao{};
@@ -38,6 +63,135 @@ void montar_estado_links(char* destino, const ResumoSaudeSistema& saude) {
     std::snprintf(destino, TAMANHO_LINHA, "EQP:%s  VIS:%s",
                   saude.equipe_respondendo ? "OK" : "--",
                   saude.visitantes_respondendo ? "OK" : "--");
+}
+
+std::size_t contar_causas(uint32_t causas) {
+    std::size_t quantidade = 0;
+    for (const uint32_t causa : CAUSAS_EXIBIVEIS) {
+        if ((causas & causa) != 0) quantidade++;
+    }
+    return quantidade;
+}
+
+uint32_t obter_causa(uint32_t causas, std::size_t indice_desejado) {
+    std::size_t indice = 0;
+    for (const uint32_t causa : CAUSAS_EXIBIVEIS) {
+        if ((causas & causa) == 0) continue;
+        if (indice == indice_desejado) return causa;
+        indice++;
+    }
+    return CausaSaudeNenhuma;
+}
+
+std::size_t montar_alerta(LinhasPainel& linhas, EstadoSinalizacao estado,
+                          const ResumoSaudeSistema& saude,
+                          const SituacaoOta& ota) {
+    uint32_t causas = saude.causas_ativas;
+    if (estado == EstadoSinalizacao::OtaFalha && ota.ultimo_erro != ESP_OK) {
+        causas |= CausaSaudeOtaRecente;
+    }
+    const std::size_t quantidade = contar_causas(causas);
+    const int64_t instante_ms = esp_timer_get_time() / 1000;
+    const std::size_t indice = quantidade == 0
+        ? 0
+        : static_cast<std::size_t>(
+              instante_ms / INTERVALO_ALTERNANCIA_ALERTA_MS) % quantidade;
+    const uint32_t causa = quantidade == 0
+                               ? CausaSaudeNenhuma
+                               : obter_causa(causas, indice);
+    const bool falha = estado == EstadoSinalizacao::Falha ||
+                       estado == EstadoSinalizacao::OtaFalha;
+    copiar_linha(linhas[0], falha ? "FALHA DO SISTEMA" : "AVISO DO SISTEMA");
+    copiar_linha(linhas[1], "---------------------");
+    copiar_linha(linhas[6], "CONSULTE O TERMINAL");
+
+    switch (causa) {
+        case CausaSaudeHeapCritico:
+            copiar_linha(linhas[2], "MEMORIA INTERNA BAIXA");
+            std::snprintf(linhas[3], TAMANHO_LINHA, "LIVRE: %lu KB",
+                          static_cast<unsigned long>(
+                              saude.heap_interno_livre / 1024u));
+            std::snprintf(linhas[4], TAMANHO_LINHA, "BLOCO: %lu KB",
+                          static_cast<unsigned long>(
+                              saude.maior_bloco_heap_interno / 1024u));
+            break;
+        case CausaSaudePilhaCritica:
+            copiar_linha(linhas[2], "PILHA QUASE ESGOTADA");
+            std::snprintf(linhas[3], TAMANHO_LINHA, "LIVRE: %lu BYTES",
+                          static_cast<unsigned long>(
+                              saude.bytes_pilha_livres));
+            copiar_linha(linhas[4], "RISCO DE REINICIO");
+            break;
+        case CausaSaudeSensor:
+            copiar_linha(linhas[2], "SENSOR COM FALHA");
+            std::snprintf(linhas[3], TAMANHO_LINHA, "ERROS: %lu",
+                          static_cast<unsigned long>(saude.erros_sensores));
+            copiar_linha(linhas[4], "VERIFIQUE CONEXOES");
+            break;
+        case CausaSaudeI2c:
+            copiar_linha(linhas[2], "FALHA NO BARRAMENTO I2C");
+            std::snprintf(linhas[3], TAMANHO_LINHA, "ERROS: %lu",
+                          static_cast<unsigned long>(saude.erros_i2c));
+            copiar_linha(linhas[4], "MPU/TELA NO MESMO BUS");
+            break;
+        case CausaSaudeUart:
+            copiar_linha(linhas[2], "FALHA NA UART");
+            std::snprintf(linhas[3], TAMANHO_LINHA, "ERROS: %lu",
+                          static_cast<unsigned long>(saude.erros_uart));
+            std::snprintf(linhas[4], TAMANHO_LINHA, "DESCARTES: %lu",
+                          static_cast<unsigned long>(saude.descartes_uart));
+            break;
+        case CausaSaudeSupervisao:
+            copiar_linha(linhas[2], "TAREFA SEM RESPOSTA");
+            std::snprintf(linhas[3], TAMANHO_LINHA, "FALHAS: %lu",
+                          static_cast<unsigned long>(saude.falhas_supervisao));
+            copiar_linha(linhas[4], "RECUPERACAO EM CURSO");
+            break;
+        case CausaSaudeEquipeSemResposta:
+            copiar_linha(linhas[2], "EQUIPE SEM RESPOSTA");
+            std::snprintf(linhas[3], TAMANHO_LINHA, "ULTIMO RTT: %lu MS",
+                          static_cast<unsigned long>(saude.latencia_equipe_ms));
+            copiar_linha(linhas[4], "VERIFIQUE UART E ALIM");
+            break;
+        case CausaSaudeVisitantesSemResposta:
+            copiar_linha(linhas[2], "VISITANTES SEM RESP.");
+            std::snprintf(linhas[3], TAMANHO_LINHA, "ULTIMO RTT: %lu MS",
+                          static_cast<unsigned long>(
+                              saude.latencia_visitantes_ms));
+            copiar_linha(linhas[4], "VERIFIQUE UART E ALIM");
+            break;
+        case CausaSaudeWifiFraco:
+            copiar_linha(linhas[2], "SINAL WIFI FRACO");
+            std::snprintf(linhas[3], TAMANHO_LINHA, "RSSI: %hhd DBM",
+                          saude.wifi_rssi_dbm);
+            copiar_linha(linhas[4], "APROXIME O ROTEADOR");
+            break;
+        case CausaSaudeOtaRecente:
+            copiar_linha(linhas[2], "ATUALIZACAO FALHOU");
+            std::snprintf(linhas[3], TAMANHO_LINHA, "ERRO: %.14s",
+                          esp_err_to_name(ota.ultimo_erro));
+            std::snprintf(linhas[4], TAMANHO_LINHA, "ALVO: %.12s",
+                          servico_ota_nome_alvo(ota.alvo_ativo));
+            break;
+        case CausaSaudePersistencia:
+            copiar_linha(linhas[2], "FALHA AO SALVAR DADOS");
+            copiar_linha(linhas[3], "ODOMETRO NAO PERSISTIU");
+            copiar_linha(linhas[4], "FLASH/NVS EM ATENCAO");
+            break;
+        default:
+            copiar_linha(linhas[2], falha ? "FALHA CRITICA" : "ATENCAO");
+            copiar_linha(linhas[3], "EVENTO SEM DETALHES");
+            copiar_linha(linhas[4], "VERIFIQUE OS REGISTROS");
+            break;
+    }
+    if (quantidade > 1) {
+        std::snprintf(linhas[7], TAMANHO_LINHA, "ALERTA %hhu DE %hhu",
+                      static_cast<uint8_t>(indice + 1),
+                      static_cast<uint8_t>(quantidade));
+    } else {
+        copiar_linha(linhas[7], "ALERTA ATIVO");
+    }
+    return 8;
 }
 
 uint16_t limitar_uint16(uint32_t valor) {
@@ -201,12 +355,6 @@ std::size_t montar_conteudo(EstadoSinalizacao estado, LinhasPainel& linhas,
         copiar_linha(linhas[4], "AGUARDE");
         return 5;
     }
-    if (estado == EstadoSinalizacao::Falha) {
-        copiar_linha(linhas[2], "FALHA CRITICA");
-        copiar_linha(linhas[4], "CONSULTE O TERMINAL");
-        copiar_linha(linhas[6], "SISTEMA INTERROMPIDO");
-        return 7;
-    }
     if (estado == EstadoSinalizacao::Desligado) {
         copiar_linha(linhas[3], "PAINEL EM ESPERA");
         return 4;
@@ -215,6 +363,9 @@ std::size_t montar_conteudo(EstadoSinalizacao estado, LinhasPainel& linhas,
     const SituacaoOta ota = servico_ota_obter_situacao();
     const ResumoWifi wifi = servico_wifi_obter_resumo();
     const ResumoSaudeSistema saude = servico_diagnostico_obter_resumo();
+    if (estado == EstadoSinalizacao::Falha) {
+        return montar_alerta(linhas, estado, saude, ota);
+    }
     switch (estado) {
         case EstadoSinalizacao::Saudavel:
             return montar_pagina_saudavel(linhas, saude, ota, wifi);
@@ -323,23 +474,9 @@ std::size_t montar_conteudo(EstadoSinalizacao estado, LinhasPainel& linhas,
             copiar_linha(linhas[6], "REINICIANDO...");
             return 7;
         case EstadoSinalizacao::OtaFalha:
-            copiar_linha(linhas[0], "OTA | FALHA");
-            copiar_linha(linhas[1], "ULTIMA OPERACAO");
-            std::snprintf(linhas[2], TAMANHO_LINHA, "ERRO: %.14s",
-                          esp_err_to_name(ota.ultimo_erro));
-            copiar_linha(linhas[3], wifi.radio_ativo ? "WIFI: ATIVO" :
-                                                  "WIFI: REPOUSO");
-            std::snprintf(linhas[4], TAMANHO_LINHA, "REDE: %.15s",
-                          wifi.rede_ativa[0] ? wifi.rede_ativa : "-");
-            std::snprintf(linhas[5], TAMANHO_LINHA, "TENTATIVAS: %hu",
-                          limitar_uint16(wifi.tentativas_ultima_sessao));
-            copiar_linha(linhas[7], "CONSULTE O TERMINAL");
-            return 8;
+            return montar_alerta(linhas, estado, saude, ota);
         case EstadoSinalizacao::Aviso:
-            copiar_linha(linhas[2], "ATENCAO");
-            montar_estado_links(linhas[3], saude);
-            copiar_linha(linhas[5], "CONSULTE O TERMINAL");
-            return 6;
+            return montar_alerta(linhas, estado, saude, ota);
         case EstadoSinalizacao::Inicializando:
         case EstadoSinalizacao::Falha:
         case EstadoSinalizacao::Desligado:
@@ -425,11 +562,4 @@ esp_err_t servico_painel_local_iniciar() {
     }
     ESP_LOGI(ETIQUETA, "Painel local SSD1306 iniciado");
     return ESP_OK;
-}
-
-SituacaoPainelLocal servico_painel_local_obter_situacao() {
-    portENTER_CRITICAL(&trava_situacao);
-    const SituacaoPainelLocal copia = situacao;
-    portEXIT_CRITICAL(&trava_situacao);
-    return copia;
 }

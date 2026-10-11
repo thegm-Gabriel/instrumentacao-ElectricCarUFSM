@@ -1,3 +1,4 @@
+// Gera dados veiculares simulados para validação sem sensores.
 #include "servicos/servico_simulador_telemetria.h"
 
 #include <algorithm>
@@ -13,6 +14,14 @@ constexpr char ETIQUETA[] = "simulador_telemetria";
 constexpr float PI = 3.14159265358979323846f;
 constexpr uint16_t DINAMICA_MINIMA = 25;
 constexpr uint16_t DINAMICA_MAXIMA = 200;
+
+struct EstadoSimuladorTelemetria {
+    bool iniciado = false;
+    uint32_t amostras_geradas = 0;
+    uint16_t dinamica_percentual = 100;
+    float tempo_simulado_s = 0.0f;
+    float percurso_km = 0.0f;
+};
 
 EstadoSimuladorTelemetria estado{};
 int64_t instante_anterior_us = 0;
@@ -140,6 +149,7 @@ esp_err_t servico_simulador_telemetria_gerar(DadosTelemetriaVeiculo* dados) {
     dados->marcha = movimento.marcha;
     dados->velocidade_kmh = movimento.velocidade_kmh;
     dados->aceleracao_ms2 = movimento.aceleracao_ms2;
+    dados->aceleracao_g = dados->aceleracao_ms2 / 9.80665f;
     dados->acelerador_percentual = movimento.acelerador_percentual;
     dados->freio_percentual = movimento.freio_percentual;
     dados->carga_percentual = std::max(35.0f, 88.0f - percurso_km * 0.40f);
@@ -182,31 +192,14 @@ esp_err_t servico_simulador_telemetria_gerar(DadosTelemetriaVeiculo* dados) {
     dados->aceleracao_x = limitar_inteiro(dados->aceleracao_ms2 * escala_acelerometro);
     dados->aceleracao_y = limitar_inteiro(280.0f * std::sin(tempo_s / 2.7f));
     dados->aceleracao_z = limitar_inteiro(16384.0f + 180.0f * std::sin(tempo_s / 3.1f));
+    dados->aceleracao_x_g = dados->aceleracao_x / 16384.0f;
+    dados->aceleracao_y_g = dados->aceleracao_y / 16384.0f;
+    dados->aceleracao_z_g = dados->aceleracao_z / 16384.0f;
+    dados->aceleracao_x_ms2 = dados->aceleracao_x_g * 9.80665f;
+    dados->aceleracao_y_ms2 = dados->aceleracao_y_g * 9.80665f;
+    dados->aceleracao_z_ms2 = dados->aceleracao_z_g * 9.80665f;
     dados->giroscopio_x = limitar_inteiro(80.0f * std::sin(tempo_s / 2.0f));
     dados->giroscopio_y = limitar_inteiro(55.0f * std::cos(tempo_s / 2.8f));
     dados->giroscopio_z = limitar_inteiro(140.0f * std::sin(tempo_s / 4.2f));
     return ESP_OK;
-}
-
-esp_err_t servico_simulador_telemetria_definir_dinamica(uint16_t percentual) {
-    if (percentual < DINAMICA_MINIMA || percentual > DINAMICA_MAXIMA) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    portENTER_CRITICAL(&trava_estado);
-    if (!estado.iniciado) {
-        portEXIT_CRITICAL(&trava_estado);
-        return ESP_ERR_INVALID_STATE;
-    }
-    estado.dinamica_percentual = percentual;
-    portEXIT_CRITICAL(&trava_estado);
-    ESP_LOGI(ETIQUETA, "Dinâmica da simulação alterada para %u%%",
-             static_cast<unsigned>(percentual));
-    return ESP_OK;
-}
-
-EstadoSimuladorTelemetria servico_simulador_telemetria_obter_estado() {
-    portENTER_CRITICAL(&trava_estado);
-    const EstadoSimuladorTelemetria copia = estado;
-    portEXIT_CRITICAL(&trava_estado);
-    return copia;
 }

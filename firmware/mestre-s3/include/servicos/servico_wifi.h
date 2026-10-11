@@ -1,3 +1,4 @@
+// Declara perfis, sessões e política de conexão Wi-Fi.
 #pragma once
 
 #include <cstddef>
@@ -43,7 +44,7 @@ struct ResumoWifi {
 // Carrega os perfis da NVS já inicializada e tenta primeiro a rede principal.
 esp_err_t servico_wifi_iniciar();
 esp_err_t servico_wifi_abrir_sessao();
-void servico_wifi_encerrar_sessao();
+esp_err_t servico_wifi_encerrar_sessao();
 
 // A chamada representa a autorização explícita do usuário para tentar a rede.
 esp_err_t servico_wifi_conectar_rede_informada(const char* ssid, const char* senha);

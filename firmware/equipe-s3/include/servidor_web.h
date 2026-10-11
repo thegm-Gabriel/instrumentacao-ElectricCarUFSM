@@ -1,3 +1,4 @@
+// Declara o servidor HTTP e seus dados operacionais.
 #pragma once
 
 #include "esp_err.h"

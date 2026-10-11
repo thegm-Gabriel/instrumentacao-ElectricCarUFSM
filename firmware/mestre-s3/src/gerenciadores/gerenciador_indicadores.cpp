@@ -1,3 +1,4 @@
+// Implementa acionamento seguro de LEDs e buzzer.
 #include "gerenciadores/gerenciador_indicadores.h"
 
 #include "driver/gpio.h"
@@ -13,6 +14,17 @@ constexpr uint16_t FREQUENCIA_MINIMA_HZ = 50;
 constexpr uint16_t FREQUENCIA_MAXIMA_HZ = 10000;
 constexpr uint32_t DUTY_MAXIMO_10_BITS = 1023;
 constexpr uint32_t DUTY_ONDA_QUADRADA = (DUTY_MAXIMO_10_BITS + 1U) / 2U;
+
+struct EstatisticasIndicadores {
+    bool iniciado = false;
+    EstadoLeds leds{};
+    bool buzzer_ativo = false;
+    uint16_t frequencia_buzzer_hz = 0;
+    uint32_t alteracoes_leds = 0;
+    uint32_t tons_reproduzidos = 0;
+    uint32_t erros = 0;
+    esp_err_t ultimo_erro = ESP_OK;
+};
 
 SemaphoreHandle_t mutex_indicadores = nullptr;
 EstatisticasIndicadores estatisticas{};
@@ -186,12 +198,4 @@ esp_err_t gerenciador_indicadores_silenciar() {
     }
     xSemaphoreGive(mutex_indicadores);
     return erro;
-}
-
-EstatisticasIndicadores gerenciador_indicadores_obter_estatisticas() {
-    if (mutex_indicadores == nullptr) return estatisticas;
-    xSemaphoreTake(mutex_indicadores, portMAX_DELAY);
-    const EstatisticasIndicadores copia = estatisticas;
-    xSemaphoreGive(mutex_indicadores);
-    return copia;
 }

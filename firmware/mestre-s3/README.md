@@ -59,6 +59,31 @@ publicam seu estado ou um evento e não precisam conhecer GPIO, PWM ou notas.
 | Amarelo contínuo com vermelho duplo | Falha OTA; alarme a cada 15 segundos |
 | Vermelho em SOS | Falha crítica; alarme a cada 8 segundos |
 
+## Encoder e odômetro
+
+No modo de sensores reais, duas unidades do periférico PCNT leem os encoders das
+rodas esquerda (GPIOs 5/6) e direita (GPIOs 7/21). Todas as transições são acumuladas em hardware, portanto
+deslocamentos para frente e para trás sempre aumentam o percurso sem polling da
+CPU. Cada dispositivo converte sua configuração de 600 P/R em 2400 contagens por
+giro. O serviço aplica o diâmetro e a relação `giros do encoder / giro da roda`
+de cada lado e usa a média das duas distâncias para velocidade, percurso e
+odômetro. Os parâmetros ficam em
+`include/nucleo/configuracao_placa.h`.
+
+`percurso_km` começa em zero a cada inicialização. `odometro_km` é recuperado da
+NVS; a constante `INTERVALO_PERSISTENCIA_ODOMETRO_M` define a distância entre
+gravações e começa em 100 m. A configuração atual usa os sensores reais
+(`USAR_TELEMETRIA_SIMULADA=false`). O menu serial oferece a opção **Sensores e
+diagnóstico** para consultar ADC, MPU6050, PCNT, percurso, odômetro, NVS e erros.
+
+As constantes `VELOCIDADE_MAXIMA_ODOMETRO_KMH`,
+`RAZAO_MINIMA_MOVIMENTO_ENTRE_RODAS`,
+`MOVIMENTO_MINIMO_DIAGNOSTICO_RODAS_M` e
+`AMOSTRAS_DIVERGENTES_PARA_ALERTA` rejeitam saltos fisicamente impossíveis e
+avisam quando um encoder permanece muito abaixo do outro. Elas não mudam a
+regra de cálculo do odômetro pela média. Uma falha de gravação fica pendente e é
+tentada novamente com intervalo, evitando repetir `commit` a cada ciclo.
+
 ## Tela local SSD1306
 
 Uma tela SSD1306 I²C de 0,96 polegada e 128×64 pixels pode mostrar o estado do
@@ -70,3 +95,12 @@ mesmos GPIOs 8 e 9 do MPU6050 e detecta automaticamente os endereços `0x3C` e
 O framebuffer fica em `dispositivos/tela_ssd1306.cpp`. A seleção das mensagens e
 a atualização periódica ficam em `servicos/servico_painel_local.cpp`, sem misturar
 o protocolo elétrico da tela com as regras de estado da aplicação.
+
+## Histórico de telemetria no Google
+
+Os satélites recebem o estado ao vivo a 4 Hz, enquanto o mestre registra no
+cartão SD uma amostra por segundo. Os CSVs são fechados a cada cinco minutos e o
+upload só começa quando a opção correspondente é escolhida no terminal. Uma
+falha de rede preserva os arquivos pendentes e permite repetir a operação sem
+duplicar linhas. A pinagem, o Web App e a configuração das credenciais estão em
+`../../documentacao/telemetria-google/README.md`.

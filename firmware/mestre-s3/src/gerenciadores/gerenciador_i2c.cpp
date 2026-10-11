@@ -1,3 +1,4 @@
+// Implementa acesso mutuamente exclusivo e métricas do barramento I2C.
 #include "gerenciadores/gerenciador_i2c.h"
 
 #include <climits>
@@ -31,12 +32,19 @@ void registrar_resultado(esp_err_t resultado, size_t escritos, size_t lidos) {
     portEXIT_CRITICAL(&trava_estatisticas);
 }
 
-void registrar_sondagem(bool respondeu) {
+void registrar_sondagem(esp_err_t resultado) {
     portENTER_CRITICAL(&trava_estatisticas);
-    if (respondeu) {
+    if (resultado == ESP_OK) {
         estatisticas.sondagens_ok++;
-    } else {
+        estatisticas.ultimo_erro = ESP_OK;
+    } else if (resultado == ESP_FAIL) {
+        // O driver legado retorna ESP_FAIL quando o endereço não responde ao
+        // ACK. Isso é resultado normal de uma sondagem, não falha do barramento.
         estatisticas.enderecos_ausentes++;
+        estatisticas.ultimo_erro = ESP_OK;
+    } else {
+        estatisticas.erros++;
+        estatisticas.ultimo_erro = resultado;
     }
     portEXIT_CRITICAL(&trava_estatisticas);
 }
@@ -102,7 +110,7 @@ esp_err_t gerenciador_i2c_sondar(uint8_t endereco, TickType_t tempo_limite) {
     i2c_cmd_link_delete(comandos);
     xSemaphoreGive(mutex_barramento);
 
-    registrar_sondagem(erro == ESP_OK);
+    registrar_sondagem(erro);
     return erro;
 }
 

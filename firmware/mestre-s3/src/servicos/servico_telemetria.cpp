@@ -1,3 +1,4 @@
+// Monta, envia e acompanha confirmações dos pacotes de telemetria.
 #include "servicos/servico_telemetria.h"
 
 #include <algorithm>
@@ -13,8 +14,10 @@
 
 namespace {
 constexpr char ETIQUETA[] = "servico_telemetria";
-static_assert(TAMANHO_PACOTE_TELEMETRIA <= configuracao::TAMANHO_MAXIMO_MENSAGEM_UART,
-              "O quadro de telemetria excede o limite da fila UART");
+static_assert(
+    TAMANHO_PACOTE_TELEMETRIA <=
+        configuracao::TAMANHO_MAXIMO_MENSAGEM_UART_ASSINCRONA,
+    "O quadro de telemetria excede o limite da fila UART assincrona");
 
 uint16_t proxima_sequencia = 0;
 EstatisticasTelemetria estatisticas{};
@@ -106,6 +109,23 @@ uint32_t escalar_uint32(float valor, float fator) {
 bool dados_validos(const DadosTelemetriaVeiculo& dados) {
     if (dados.tensao_adc_bruta > 4095 || static_cast<uint8_t>(dados.marcha) > 3 ||
         !std::isfinite(dados.velocidade_kmh) || !std::isfinite(dados.aceleracao_ms2) ||
+        !std::isfinite(dados.aceleracao_g) ||
+        !std::isfinite(dados.aceleracao_x_g) ||
+        !std::isfinite(dados.aceleracao_y_g) ||
+        !std::isfinite(dados.aceleracao_z_g) ||
+        !std::isfinite(dados.aceleracao_x_ms2) ||
+        !std::isfinite(dados.aceleracao_y_ms2) ||
+        !std::isfinite(dados.aceleracao_z_ms2) ||
+        !std::isfinite(dados.giroscopio_x_graus_s) ||
+        !std::isfinite(dados.giroscopio_y_graus_s) ||
+        !std::isfinite(dados.giroscopio_z_graus_s) ||
+        !std::isfinite(dados.temperatura_mpu_c) ||
+        (dados.mpu_ativo &&
+         (dados.temperatura_mpu_c < -40.0f ||
+          dados.temperatura_mpu_c > 85.0f)) ||
+        dados.sentido_aceleracao_longitudinal < -1 ||
+        dados.sentido_aceleracao_longitudinal > 1 ||
+        dados.eixo_longitudinal_mpu > 2 ||
         !std::isfinite(dados.acelerador_percentual) ||
         !std::isfinite(dados.freio_percentual) ||
         !std::isfinite(dados.tensao_pacote_v) || !std::isfinite(dados.corrente_a) ||
@@ -139,16 +159,18 @@ esp_err_t servico_telemetria_iniciar() {
     return ESP_OK;
 }
 
-void servico_telemetria_receber_confirmacao(
+esp_err_t servico_telemetria_receber_confirmacao(
     SateliteTelemetria satelite, const confirmacao_telemetria_t& confirmacao) {
     MonitorConfirmacao* monitor = encontrar_monitor(satelite);
-    if (monitor == nullptr) return;
+    if (monitor == nullptr) return ESP_ERR_INVALID_ARG;
     if (protocolo_telemetria_confirmacao_valida(&confirmacao)) {
         registrar_confirmacao(*monitor, confirmacao);
+        return ESP_OK;
     } else {
         portENTER_CRITICAL(&trava_estatisticas);
         monitor->estatisticas.confirmacoes_invalidas++;
         portEXIT_CRITICAL(&trava_estatisticas);
+        return ESP_ERR_INVALID_CRC;
     }
 }
 
@@ -200,11 +222,43 @@ esp_err_t servico_telemetria_enviar(const DadosTelemetriaVeiculo& dados) {
     pacote.autonomia_decimos_km = escalar_uint16(dados.autonomia_km, 10.0f);
     pacote.percurso_metros = escalar_uint32(dados.percurso_km, 1000.0f);
     pacote.odometro_metros = escalar_uint32(dados.odometro_km, 1000.0f);
+    pacote.aceleracao_x_milesimos_g =
+        escalar_int16(dados.aceleracao_x_g, 1000.0f);
+    pacote.aceleracao_y_milesimos_g =
+        escalar_int16(dados.aceleracao_y_g, 1000.0f);
+    pacote.aceleracao_z_milesimos_g =
+        escalar_int16(dados.aceleracao_z_g, 1000.0f);
+    pacote.giroscopio_x_centesimos_graus_s =
+        escalar_int16(dados.giroscopio_x_graus_s, 100.0f);
+    pacote.giroscopio_y_centesimos_graus_s =
+        escalar_int16(dados.giroscopio_y_graus_s, 100.0f);
+    pacote.giroscopio_z_centesimos_graus_s =
+        escalar_int16(dados.giroscopio_z_graus_s, 100.0f);
+    pacote.aceleracao_longitudinal_milesimos_g =
+        escalar_int16(dados.aceleracao_g, 1000.0f);
+    pacote.temperatura_mpu_centesimos_c =
+        escalar_int16(dados.temperatura_mpu_c, 100.0f);
+    if (dados.mpu_ativo) pacote.estado_mpu |= TELEMETRIA_MPU_ATIVO;
+    if (dados.mpu_calibrado) pacote.estado_mpu |= TELEMETRIA_MPU_CALIBRADO;
+    if (dados.eixo_longitudinal_compativel) {
+        pacote.estado_mpu |= TELEMETRIA_MPU_EIXO_COMPATIVEL;
+    }
+    const uint8_t sentido_mpu = dados.sentido_aceleracao_longitudinal > 0
+                                    ? TELEMETRIA_MPU_SENTIDO_FRENTE
+                                : dados.sentido_aceleracao_longitudinal < 0
+                                    ? TELEMETRIA_MPU_SENTIDO_TRAS
+                                    : TELEMETRIA_MPU_SENTIDO_NEUTRO;
+    pacote.estado_mpu |=
+        sentido_mpu << TELEMETRIA_MPU_SENTIDO_DESLOCAMENTO;
+    pacote.estado_mpu |=
+        dados.eixo_longitudinal_mpu << TELEMETRIA_MPU_EIXO_DESLOCAMENTO;
     pacote.crc16 = protocolo_telemetria_calcular_crc16(&pacote);
 
-    esp_err_t erro_equipe = gerenciador_uart_enviar(DestinoUart::Equipe, &pacote, sizeof(pacote));
+    esp_err_t erro_equipe = gerenciador_uart_enfileirar(
+        DestinoUart::Equipe, &pacote, sizeof(pacote));
     esp_err_t erro_visitantes =
-        gerenciador_uart_enviar(DestinoUart::Visitantes, &pacote, sizeof(pacote));
+        gerenciador_uart_enfileirar(
+            DestinoUart::Visitantes, &pacote, sizeof(pacote));
 
     portENTER_CRITICAL(&trava_estatisticas);
     ultimos_dados = dados;

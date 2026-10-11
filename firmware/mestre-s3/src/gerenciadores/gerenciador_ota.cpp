@@ -1,3 +1,4 @@
+// Implementa download HTTPS, escrita e validação da imagem OTA.
 #include "gerenciadores/gerenciador_ota.h"
 
 #include <array>
@@ -36,17 +37,12 @@ uint8_t valor_hexadecimal(char caractere) {
     return static_cast<uint8_t>(caractere - 'a' + 10);
 }
 
-void converter_sha256(const char* texto, uint8_t* saida) {
-    for (size_t indice = 0; indice < 32; indice++) {
-        saida[indice] = static_cast<uint8_t>((valor_hexadecimal(texto[indice * 2]) << 4) |
-                                              valor_hexadecimal(texto[indice * 2 + 1]));
-    }
-}
-
 esp_err_t verificar_sha256(const esp_partition_t* particao) {
     uint8_t calculado[32]{};
     uint8_t esperado[32]{};
-    converter_sha256(sha256_esperado.data(), esperado);
+    if (!gerenciador_ota_converter_sha256(sha256_esperado.data(), esperado)) {
+        return ESP_ERR_INVALID_ARG;
+    }
 
     esp_err_t erro = esp_partition_get_sha256(particao, calculado);
     if (erro != ESP_OK) {
@@ -72,6 +68,16 @@ bool gerenciador_ota_sha256_valido(const char* texto) {
     if (texto == nullptr || std::strlen(texto) != 64) return false;
     for (size_t indice = 0; indice < 64; indice++) {
         if (!std::isxdigit(static_cast<unsigned char>(texto[indice]))) return false;
+    }
+    return true;
+}
+
+bool gerenciador_ota_converter_sha256(const char* texto, uint8_t saida[32]) {
+    if (saida == nullptr || !gerenciador_ota_sha256_valido(texto)) return false;
+    for (size_t indice = 0; indice < 32; ++indice) {
+        saida[indice] = static_cast<uint8_t>(
+            (valor_hexadecimal(texto[indice * 2]) << 4) |
+            valor_hexadecimal(texto[indice * 2 + 1]));
     }
     return true;
 }

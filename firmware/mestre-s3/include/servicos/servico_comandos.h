@@ -1,3 +1,4 @@
+// Declara consultas e ações remotas transportadas pela UART.
 #pragma once
 
 #include <cstddef>
@@ -5,7 +6,7 @@
 
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
-#include "gerenciadores/gerenciador_uart.h"
+#include "nucleo/destino_enlace.h"
 #include "protocolo_comandos.h"
 
 struct EstatisticasServicoComandos {
@@ -24,6 +25,7 @@ using AcaoSolicitarResumo = void (*)();
 // A coordenação da aplicação informa a ação sem acoplar comandos ao terminal.
 void servico_comandos_definir_acao_resumo(AcaoSolicitarResumo acao);
 esp_err_t servico_comandos_iniciar();
+esp_err_t servico_comandos_encerrar();
 void servico_comandos_processar_quadro(DestinoUart origem,
                                        const uint8_t* quadro, size_t tamanho);
 esp_err_t servico_comandos_solicitar(

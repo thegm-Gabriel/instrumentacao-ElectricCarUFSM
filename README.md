@@ -31,7 +31,7 @@ módulos da equipe e de visitantes mantêm suas configurações próprias de pla
 memória. Abra o diretório do firmware desejado no VS Code ou use o PlatformIO a
 partir dele.
 
-O pacote UART v3 de 88 bytes, protegido por CRC-16, é definido uma única vez em
+O pacote UART v4 de 105 bytes, protegido por CRC-16, é definido uma única vez em
 `firmware/compartilhado/protocolos/protocolo_telemetria.h`. Os três projetos incluem esse
 arquivo por meio de seus respectivos `platformio.ini` e `src/CMakeLists.txt`.
 

@@ -1,3 +1,4 @@
+// Declara a política e a orquestração das atualizações OTA.
 #pragma once
 
 #include <cstdint>
@@ -19,6 +20,7 @@ enum class EstadoServicoOta : uint8_t {
 
 enum class AlvoOta : uint8_t {
     Nenhum,
+    Todos,
     Mestre,
     Equipe,
     Visitantes,
@@ -73,6 +75,7 @@ esp_err_t servico_ota_confirmar_firmware_em_execucao();
 esp_err_t servico_ota_rejeitar_firmware_em_execucao();
 esp_err_t servico_ota_solicitar_verificacao();
 esp_err_t servico_ota_autorizar_atualizacao();
+esp_err_t servico_ota_autorizar_atualizacao_todos();
 esp_err_t servico_ota_autorizar_atualizacao_satelite(AlvoOta alvo);
 esp_err_t servico_ota_cancelar_atualizacao();
 esp_err_t servico_ota_definir_intervalo_verificacao(uint32_t minutos);

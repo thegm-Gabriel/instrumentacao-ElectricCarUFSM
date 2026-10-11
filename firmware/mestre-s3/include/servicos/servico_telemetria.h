@@ -1,3 +1,4 @@
+// Declara publicação, confirmação e métricas da telemetria.
 #pragma once
 
 #include <cstdint>
@@ -40,7 +41,7 @@ EstatisticasTelemetria servico_telemetria_obter_estatisticas();
 DadosTelemetriaVeiculo servico_telemetria_obter_ultimos_dados();
 EstatisticasLinkTelemetria servico_telemetria_obter_estatisticas_link(
     SateliteTelemetria satelite);
-void servico_telemetria_receber_confirmacao(
+esp_err_t servico_telemetria_receber_confirmacao(
     SateliteTelemetria satelite, const confirmacao_telemetria_t& confirmacao);
 
 // Durante a OTA dos satélites a telemetria continua ativa neste intervalo.

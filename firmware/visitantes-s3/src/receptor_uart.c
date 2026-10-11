@@ -1,3 +1,4 @@
+// Recebe e valida telemetria, comandos e quadros OTA do mestre.
 #include "receptor_uart.h"
 
 #include <stdio.h>
@@ -75,6 +76,7 @@ static void enviar_confirmacao(const pacote_telemetria_t *pacote)
                        CAPACIDADE_SATELITE_PORTAL_CATIVO |
                        CAPACIDADE_SATELITE_METRICAS_LINK |
                        CAPACIDADE_SATELITE_OTA_UART |
+                       CAPACIDADE_SATELITE_OTA_BLOCO_4096 |
                        CAPACIDADE_SATELITE_COMANDOS,
         .crc16 = 0,
     };
@@ -173,6 +175,23 @@ static resultado_validacao_t validar_e_salvar_pacote(
     dados_compartilhados.autonomia_decimos_km = pacote->autonomia_decimos_km;
     dados_compartilhados.percurso_metros = pacote->percurso_metros;
     dados_compartilhados.odometro_metros = pacote->odometro_metros;
+    dados_compartilhados.aceleracao_x_milesimos_g =
+        pacote->aceleracao_x_milesimos_g;
+    dados_compartilhados.aceleracao_y_milesimos_g =
+        pacote->aceleracao_y_milesimos_g;
+    dados_compartilhados.aceleracao_z_milesimos_g =
+        pacote->aceleracao_z_milesimos_g;
+    dados_compartilhados.giroscopio_x_centesimos_graus_s =
+        pacote->giroscopio_x_centesimos_graus_s;
+    dados_compartilhados.giroscopio_y_centesimos_graus_s =
+        pacote->giroscopio_y_centesimos_graus_s;
+    dados_compartilhados.giroscopio_z_centesimos_graus_s =
+        pacote->giroscopio_z_centesimos_graus_s;
+    dados_compartilhados.aceleracao_longitudinal_milesimos_g =
+        pacote->aceleracao_longitudinal_milesimos_g;
+    dados_compartilhados.temperatura_mpu_centesimos_c =
+        pacote->temperatura_mpu_centesimos_c;
+    dados_compartilhados.estado_mpu = pacote->estado_mpu;
     dados_compartilhados.pacotes_validos++;
     const uint64_t total_esperado = (uint64_t)dados_compartilhados.pacotes_validos +
                                     dados_compartilhados.pacotes_perdidos;
@@ -259,7 +278,7 @@ static void tarefa_recepcao_uart(void *argumento)
 {
     (void)argumento;
     uint8_t lote[1024];
-    parser_enlace_uart_t parser;
+    static parser_enlace_uart_t parser;
     protocolo_enlace_uart_inicializar(&parser, TELEMETRIA_INICIO_2,
                                       TAMANHO_PACOTE_TELEMETRIA);
     while (true) {

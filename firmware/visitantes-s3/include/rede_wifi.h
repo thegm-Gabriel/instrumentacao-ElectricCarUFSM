@@ -1,3 +1,4 @@
+// Declara o gerenciamento da rede Wi-Fi do satélite dos visitantes.
 #pragma once
 
 #include "esp_err.h"

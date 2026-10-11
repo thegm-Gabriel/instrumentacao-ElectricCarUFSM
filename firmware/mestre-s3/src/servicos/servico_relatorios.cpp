@@ -1,3 +1,4 @@
+// Publica relatórios periódicos dos dados e da saúde do mestre.
 #include "servicos/servico_relatorios.h"
 
 #include <array>
@@ -7,7 +8,6 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "gerenciadores/gerenciador_i2c.h"
 #include "gerenciadores/gerenciador_uart.h"
 #include "servicos/servico_comandos.h"
 #include "servicos/servico_diagnostico.h"
@@ -81,6 +81,14 @@ void exibir_relatorios(const DadosTelemetriaVeiculo& dados) {
                  static_cast<unsigned>(dados.tensao_adc_bruta),
                  dados.aceleracao_x, dados.aceleracao_y, dados.aceleracao_z,
                  dados.giroscopio_x, dados.giroscopio_y, dados.giroscopio_z);
+        ESP_LOGI(ETIQUETA,
+                 "[ODÔMETRO] percurso=%.3f km | total=%.3f km",
+                 dados.percurso_km, dados.odometro_km);
+        ESP_LOGI(ETIQUETA,
+                 "[ACELERAÇÃO] longitudinal=%+.3f g (%+.3f m/s²) | eixos=[%.3f, %.3f, %.3f] g",
+                 dados.aceleracao_g, dados.aceleracao_ms2,
+                 dados.aceleracao_x_g, dados.aceleracao_y_g,
+                 dados.aceleracao_z_g);
     }
 
     if (servico_relatorios_deve_exibir(GrupoRelatorio::Uart)) {
@@ -118,22 +126,22 @@ void exibir_relatorios(const DadosTelemetriaVeiculo& dados) {
     }
 
     if (servico_relatorios_deve_exibir(GrupoRelatorio::Sistema)) {
-        const EstatisticasI2c i2c = gerenciador_i2c_obter_estatisticas();
-        const EstatisticasTelemetria telemetria =
-            servico_telemetria_obter_estatisticas();
-        const EstatisticasSensoresDiagnostico sensores =
-            servico_diagnostico_obter_sensores();
+        const RetratoDiagnosticoSistema retrato =
+            servico_diagnostico_obter_retrato();
+        const auto& i2c = retrato.i2c;
+        const auto& telemetria = retrato.telemetria;
+        const auto& sensores = retrato.sensores;
+        const auto& encoder_esquerdo = retrato.encoder_esquerdo;
+        const auto& encoder_direito = retrato.encoder_direito;
+        const auto& odometro = retrato.odometro;
         const EstadoTelaSsd1306 tela = tela_ssd1306_obter_estado();
-        const ResumoSaudeSistema saude = servico_diagnostico_obter_resumo();
-        const ResumoWifi wifi = servico_wifi_obter_resumo();
+        const auto& saude = retrato.saude;
+        const auto& wifi = retrato.wifi;
         const EstatisticasServicoComandos comandos =
             servico_comandos_obter_estatisticas();
-        const EstadoModuloSupervisionado supervisao_telemetria =
-            servico_supervisao_obter_estado(ModuloSupervisionado::TarefaTelemetria);
-        const EstadoModuloSupervisionado supervisao_equipe =
-            servico_supervisao_obter_estado(ModuloSupervisionado::UartEquipe);
-        const EstadoModuloSupervisionado supervisao_visitantes =
-            servico_supervisao_obter_estado(ModuloSupervisionado::UartVisitantes);
+        const auto& supervisao_telemetria = retrato.supervisao_telemetria;
+        const auto& supervisao_equipe = retrato.supervisao_equipe;
+        const auto& supervisao_visitantes = retrato.supervisao_visitantes;
         const uint64_t total_segundos = saude.tempo_ativo_ms / 1000u;
         ESP_LOGI(ETIQUETA,
                  "========== SAÚDE DO MESTRE: %s | causas ativas=0x%03lX ==========",
@@ -146,20 +154,49 @@ void exibir_relatorios(const DadosTelemetriaVeiculo& dados) {
                  static_cast<unsigned long long>(total_segundos % 60u),
                  static_cast<unsigned long>(saude.motivo_ultimo_reset));
         ESP_LOGI(ETIQUETA,
-                 "[MEMÓRIA] heap livre=%lu KiB | mínimo=%lu KiB | menor pilha supervisionada=%lu palavras",
+                 "[MEMÓRIA] heap livre=%lu KiB | interno=%lu KiB (maior bloco=%lu KiB) | mínimo=%lu KiB | menor pilha supervisionada=%lu bytes",
                  static_cast<unsigned long>(saude.heap_livre / 1024u),
+                 static_cast<unsigned long>(saude.heap_interno_livre / 1024u),
+                 static_cast<unsigned long>(saude.maior_bloco_heap_interno / 1024u),
                  static_cast<unsigned long>(saude.menor_heap_livre / 1024u),
-                 static_cast<unsigned long>(saude.palavras_pilha_livres));
+                 static_cast<unsigned long>(saude.bytes_pilha_livres));
         ESP_LOGI(ETIQUETA,
                  "[SENSORES] I2C operações=%lu sondagens=%lu ausentes=%lu erros=%lu último=%s | ADC erros=%lu último=%s | MPU6050 erros=%lu último=%s",
                  static_cast<unsigned long>(i2c.operacoes_ok),
                  static_cast<unsigned long>(i2c.sondagens_ok),
                  static_cast<unsigned long>(i2c.enderecos_ausentes),
                  static_cast<unsigned long>(i2c.erros), esp_err_to_name(i2c.ultimo_erro),
-                 static_cast<unsigned long>(sensores.erros_adc),
-                 esp_err_to_name(sensores.ultimo_erro_adc),
-                 static_cast<unsigned long>(sensores.erros_mpu6050),
-                 esp_err_to_name(sensores.ultimo_erro_mpu6050));
+                  static_cast<unsigned long>(sensores.adc.total),
+                  esp_err_to_name(sensores.adc.ultimo_erro),
+                  static_cast<unsigned long>(sensores.mpu6050.total),
+                  esp_err_to_name(sensores.mpu6050.ultimo_erro));
+        ESP_LOGI(ETIQUETA,
+                 "[ENCODER ESQ] PCNT=%s contagem=%llu leituras/erros=%lu/%lu | acumulado=%llu percurso=%.3f m velocidade=%.2f km/h",
+                 encoder_esquerdo.inicializado ? "ativo" : "inativo",
+                 static_cast<unsigned long long>(encoder_esquerdo.contagem_atual),
+                 static_cast<unsigned long>(encoder_esquerdo.leituras_ok),
+                 static_cast<unsigned long>(encoder_esquerdo.erros_leitura),
+                 static_cast<unsigned long long>(
+                     odometro.roda_esquerda.contagens_acumuladas),
+                 odometro.roda_esquerda.percurso_m,
+                 odometro.roda_esquerda.velocidade_kmh);
+        ESP_LOGI(ETIQUETA,
+                 "[ENCODER DIR] PCNT=%s contagem=%llu leituras/erros=%lu/%lu | acumulado=%llu percurso=%.3f m velocidade=%.2f km/h | média=%.3f m | rodas=%s alertas=%lu rejeições=%lu | NVS=%s%s falhas=%lu",
+                 encoder_direito.inicializado ? "ativo" : "inativo",
+                 static_cast<unsigned long long>(encoder_direito.contagem_atual),
+                 static_cast<unsigned long>(encoder_direito.leituras_ok),
+                 static_cast<unsigned long>(encoder_direito.erros_leitura),
+                 static_cast<unsigned long long>(
+                     odometro.roda_direita.contagens_acumuladas),
+                 odometro.roda_direita.percurso_m,
+                 odometro.roda_direita.velocidade_kmh,
+                 odometro.percurso_m,
+                 odometro.rodas_coerentes ? "coerentes" : "divergentes",
+                 static_cast<unsigned long>(odometro.divergencias_detectadas),
+                 static_cast<unsigned long>(odometro.erros_validacao),
+                 odometro.persistencia_disponivel ? "ativa" : "indisponível",
+                 odometro.persistencia_pendente ? "/pendente" : "",
+                 static_cast<unsigned long>(odometro.erros_persistencia));
         ESP_LOGI(ETIQUETA,
                  "[TELA] SSD1306=%s endereço=0x%02X | quadros=%lu inalterados=%lu erros=%lu último=%s",
                  tela.presente ? "ativa" : "ausente",

@@ -1,3 +1,4 @@
+// Traduz estados do sistema em padrões de LEDs e buzzer.
 #include "servicos/servico_sinalizacao.h"
 
 #include <cstddef>

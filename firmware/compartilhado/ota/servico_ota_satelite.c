@@ -1,3 +1,4 @@
+// Implementa a recepção, validação e aplicação de firmware OTA no satélite.
 #include "servico_ota_satelite.h"
 
 #include <string.h>

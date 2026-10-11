@@ -1,3 +1,4 @@
+// Declara relatórios periódicos e resumos sob demanda.
 #pragma once
 
 #include <cstdint>

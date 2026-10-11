@@ -1,3 +1,4 @@
+// Inicializa e supervisiona os serviços do satélite da equipe.
 #include "esp_log.h"
 #include "receptor_uart.h"
 #include "rede_wifi.h"

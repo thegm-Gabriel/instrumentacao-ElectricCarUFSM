@@ -1,3 +1,4 @@
+// Implementa o menu serial interativo de operação e diagnóstico.
 #include "servicos/servico_terminal.h"
 
 #include <cerrno>
@@ -11,8 +12,14 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "gerenciadores/gerenciador_i2c.h"
+#include "nucleo/configuracao_placa.h"
+#include "servicos/servico_aceleracao.h"
 #include "servicos/servico_comandos.h"
+#include "servicos/servico_diagnostico.h"
+#include "servicos/servico_odometro.h"
 #include "servicos/servico_ota.h"
+#include "servicos/servico_registro_telemetria.h"
 #include "servicos/servico_relatorios.h"
 #include "servicos/servico_telemetria.h"
 #include "servicos/servico_wifi.h"
@@ -24,6 +31,11 @@ bool iniciado = false;
 
 enum class TelaTerminal : uint8_t {
     Principal,
+    Sensores,
+    SensorAdc,
+    SensorMpu6050,
+    SensorEncoders,
+    SensorI2c,
     Ota,
     OtaIntervalo,
     OtaIntervaloTelemetria,
@@ -81,12 +93,14 @@ constexpr OpcaoMenu OPCOES_PRINCIPAL_MONITORAMENTO[] = {
     {1, "Mostrar resumo completo agora"},
     {3, "Configurar intervalos dos relatórios"},
     {4, "Pausar ou retomar relatórios periódicos"},
+    {7, "Sensores e diagnóstico"},
 };
 
 constexpr OpcaoMenu OPCOES_PRINCIPAL_CONECTIVIDADE[] = {
     {2, "Atualização OTA"},
     {5, "Redes Wi-Fi"},
     {6, "Consultar satélites"},
+    {8, "Enviar telemetria pendente ao Google"},
 };
 
 constexpr OpcaoMenu OPCOES_SATELITES[] = {
@@ -102,20 +116,25 @@ constexpr OpcaoMenu OPCOES_OTA[] = {
     {3, "Autorizar atualização do mestre"},
     {4, "Autorizar atualização do satélite da equipe"},
     {5, "Autorizar atualização do satélite de visitantes"},
-    {6, "Cancelar atualizações pendentes"},
-    {7, "Alterar intervalo das verificações"},
-    {8, "Alterar intervalo da telemetria durante OTA"},
+    {6, "Atualizar todos: satélites e depois mestre"},
+    {7, "Cancelar atualizações pendentes"},
+    {8, "Alterar intervalo das verificações"},
+    {9, "Alterar intervalo da telemetria durante OTA"},
 };
 
 TelaTerminal tela_atual = TelaTerminal::Principal;
-GrupoRelatorioTerminal grupo_em_edicao = GrupoRelatorioTerminal::Telemetria;
-char wifi_ssid_pendente[33]{};
-char wifi_senha_pendente[64]{};
-char wifi_permissao_pendente[64]{};
-size_t wifi_indice_pendente = 0;
-bool wifi_automatico_pendente = false;
-PoliticaConexaoWifi wifi_politica_pendente{};
-CampoPoliticaWifi wifi_campo_pendente = CampoPoliticaWifi::Tentativas;
+GrupoRelatorio grupo_em_edicao = GrupoRelatorio::Telemetria;
+struct ContextoWifiTerminal {
+    char ssid[33]{};
+    char senha[64]{};
+    char permissao[64]{};
+    size_t indice_rede = 0;
+    bool automatico = false;
+    PoliticaConexaoWifi politica{};
+    CampoPoliticaWifi campo_politica = CampoPoliticaWifi::Tentativas;
+};
+
+ContextoWifiTerminal contexto_wifi{};
 int caractere_pendente = EOF;
 bool entrada_console_nao_bloqueante = false;
 
@@ -136,6 +155,12 @@ void imprimir_prompt(const char* orientacao, const char* rotulo = "comando") {
     std::fflush(stdout);
 }
 
+void imprimir_rodape_monitor_sensor() {
+    std::printf("\r\n  Atualização automática a cada %lu ms | [Enter] Voltar aos sensores\r\n",
+                static_cast<unsigned long>(
+                    configuracao::INTERVALO_MONITOR_SENSORES_MS));
+}
+
 void imprimir_linha() {
     std::printf("\r\n============================================================\r\n");
 }
@@ -154,6 +179,288 @@ void mostrar_menu_principal() {
     imprimir_opcoes(OPCOES_PRINCIPAL_CONECTIVIDADE, "    ");
     std::printf("\r\n    [0] Redesenhar este menu\r\n");
     imprimir_prompt("Digite uma opção e pressione Enter. Enter vazio redesenha o menu.");
+}
+
+void mostrar_menu_sensores() {
+    const RetratoDiagnosticoSistema retrato =
+        servico_diagnostico_obter_retrato();
+    const auto& dados = retrato.telemetria_atual;
+    const auto& telemetria = retrato.telemetria;
+    const auto& sensores = retrato.sensores;
+    const auto& saude = retrato.saude;
+    const auto& encoder_esquerdo = retrato.encoder_esquerdo;
+    const auto& encoder_direito = retrato.encoder_direito;
+    const auto& odometro = retrato.odometro;
+    const auto& i2c = retrato.i2c;
+    const EstadoServicoAceleracao aceleracao =
+        servico_aceleracao_obter_estado();
+
+    imprimir_titulo("SENSORES E DIAGNÓSTICO");
+    std::printf("Fonte configurada : %s\r\n",
+                configuracao::USAR_TELEMETRIA_SIMULADA
+                    ? "simulador"
+                    : "sensores reais");
+    std::printf("Saúde do mestre   : %s | causas=0x%03lX\r\n",
+                servico_diagnostico_nome_estado(saude.estado),
+                static_cast<unsigned long>(saude.causas_ativas));
+    std::printf("Amostras enviadas : %lu\r\n\r\n",
+                static_cast<unsigned long>(telemetria.pacotes_gerados));
+
+    if (telemetria.pacotes_gerados == 0) {
+        std::printf("LEITURAS: aguardando a primeira amostra de telemetria.\r\n\r\n");
+    } else {
+        std::printf("LEITURAS MAIS RECENTES\r\n");
+        std::printf("  ADC tensão       : %u de 4095\r\n",
+                    static_cast<unsigned>(dados.tensao_adc_bruta));
+        std::printf("  Acelerômetro XYZ : %d, %d, %d\r\n",
+                    dados.aceleracao_x, dados.aceleracao_y, dados.aceleracao_z);
+        std::printf("  Aceleração XYZ   : %.3f, %.3f, %.3f g\r\n",
+                    dados.aceleracao_x_g, dados.aceleracao_y_g,
+                    dados.aceleracao_z_g);
+        std::printf("  Acel. longitudinal: %+.3f g | %+.3f m/s²\r\n",
+                    dados.aceleracao_g, dados.aceleracao_ms2);
+        std::printf("  Calibração MPU   : %s | grav. longitudinal=%+.5f g | amostras=%u/%u\r\n",
+                    aceleracao.calibrado ? "concluída" : "aguardando repouso",
+                    aceleracao.componente_gravidade_longitudinal_g,
+                    static_cast<unsigned>(
+                        aceleracao.amostras_calibracao_coletadas),
+                    static_cast<unsigned>(
+                        configuracao::AMOSTRAS_CALIBRACAO_MPU6050));
+        std::printf("  Giroscópio XYZ   : %d, %d, %d\r\n",
+                    dados.giroscopio_x, dados.giroscopio_y, dados.giroscopio_z);
+        std::printf("  Velocidade       : %.2f km/h\r\n",
+                    dados.velocidade_kmh);
+        std::printf("  Percurso         : %.3f km\r\n", dados.percurso_km);
+        std::printf("  Odômetro         : %.3f km\r\n\r\n", dados.odometro_km);
+    }
+
+    std::printf("ENCODERS / PCNT\r\n");
+    std::printf("  Esquerdo         : %s | GPIO A=%d B=%d | PCNT=%llu\r\n",
+                encoder_esquerdo.inicializado ? "ativo" : "inativo",
+                encoder_esquerdo.pino_a, encoder_esquerdo.pino_b,
+                static_cast<unsigned long long>(encoder_esquerdo.contagem_atual));
+    std::printf("    percurso/vel.  : %.3f m | %.2f km/h | resolução=%.6f m/contagem\r\n",
+                odometro.roda_esquerda.percurso_m,
+                odometro.roda_esquerda.velocidade_kmh,
+                odometro.roda_esquerda.metros_por_contagem);
+    std::printf("    contagens      : %llu | leituras/erros=%lu/%lu\r\n",
+                static_cast<unsigned long long>(
+                    odometro.roda_esquerda.contagens_acumuladas),
+                static_cast<unsigned long>(encoder_esquerdo.leituras_ok),
+                static_cast<unsigned long>(encoder_esquerdo.erros_leitura));
+    std::printf("  Direito          : %s | GPIO A=%d B=%d | PCNT=%llu\r\n",
+                encoder_direito.inicializado ? "ativo" : "inativo",
+                encoder_direito.pino_a, encoder_direito.pino_b,
+                static_cast<unsigned long long>(encoder_direito.contagem_atual));
+    std::printf("    percurso/vel.  : %.3f m | %.2f km/h | resolução=%.6f m/contagem\r\n",
+                odometro.roda_direita.percurso_m,
+                odometro.roda_direita.velocidade_kmh,
+                odometro.roda_direita.metros_por_contagem);
+    std::printf("    contagens      : %llu | leituras/erros=%lu/%lu\r\n",
+                static_cast<unsigned long long>(
+                    odometro.roda_direita.contagens_acumuladas),
+                static_cast<unsigned long>(encoder_direito.leituras_ok),
+                static_cast<unsigned long>(encoder_direito.erros_leitura));
+    std::printf("  Média das rodas  : %.3f m | %.2f km/h\r\n",
+                odometro.percurso_m, odometro.velocidade_kmh);
+    std::printf("  Coerência rodas  : %s | alertas=%lu | validações rejeitadas=%lu\r\n",
+                odometro.rodas_coerentes ? "normal" : "VERIFICAR ENCODERS",
+                static_cast<unsigned long>(odometro.divergencias_detectadas),
+                static_cast<unsigned long>(odometro.erros_validacao));
+    std::printf("  Persistência NVS : %s%s | falhas=%lu | intervalo=%.1f m\r\n\r\n",
+                odometro.persistencia_disponivel ? "ativa" : "indisponível",
+                odometro.persistencia_pendente ? " (pendente)" : "",
+                static_cast<unsigned long>(odometro.erros_persistencia),
+                configuracao::INTERVALO_PERSISTENCIA_ODOMETRO_M);
+
+    std::printf("DIAGNÓSTICO DOS SENSORES\r\n");
+    std::printf("  ADC              : erros=%lu | último=%s\r\n",
+                static_cast<unsigned long>(sensores.adc.total),
+                esp_err_to_name(sensores.adc.ultimo_erro));
+    std::printf("  MPU6050          : erros=%lu | último=%s\r\n",
+                static_cast<unsigned long>(sensores.mpu6050.total),
+                esp_err_to_name(sensores.mpu6050.ultimo_erro));
+    std::printf("  Encoder          : erros=%lu | último=%s\r\n",
+                static_cast<unsigned long>(sensores.encoder.total),
+                esp_err_to_name(sensores.encoder.ultimo_erro));
+    std::printf("  Barramento I2C   : operações=%lu | erros=%lu | último=%s\r\n\r\n",
+                static_cast<unsigned long>(i2c.operacoes_ok),
+                static_cast<unsigned long>(i2c.erros),
+                esp_err_to_name(i2c.ultimo_erro));
+
+    std::printf("  [1] Atualizar leituras e diagnóstico\r\n");
+    std::printf("  [2] Zerar somente o percurso da sessão\r\n");
+    std::printf("  [3] Solicitar relatório completo nos logs\r\n");
+    std::printf("  [4] Ver somente o leitor de tensão (ADC)\r\n");
+    std::printf("  [5] Ver somente o MPU6050\r\n");
+    std::printf("  [6] Ver somente encoders e odômetro\r\n");
+    std::printf("  [7] Ver somente o barramento I2C\r\n");
+    imprimir_prompt("[Enter] Voltar ao menu principal");
+}
+
+void mostrar_leitura_adc() {
+    const RetratoDiagnosticoSistema retrato =
+        servico_diagnostico_obter_retrato();
+    imprimir_titulo("LEITOR DE TENSÃO | ADC");
+    std::printf("GPIO              : %d\r\n", configuracao::PINO_LEITURA_TENSAO);
+    std::printf("Leitura bruta     : %u de 4095 (%.1f%% da escala)\r\n",
+                static_cast<unsigned>(retrato.telemetria_atual.tensao_adc_bruta),
+                retrato.telemetria_atual.tensao_adc_bruta * 100.0f / 4095.0f);
+    std::printf("Erros             : %lu\r\n",
+                static_cast<unsigned long>(retrato.sensores.adc.total));
+    std::printf("Último resultado  : %s\r\n",
+                esp_err_to_name(retrato.sensores.adc.ultimo_erro));
+    std::printf("\r\nA conversão para volts depende do divisor resistivo e da calibração do ADC.\r\n");
+    imprimir_rodape_monitor_sensor();
+}
+
+void mostrar_leitura_mpu6050() {
+    const EstadoMpu6050 sensor = mpu6050_obter_estado();
+    const EstadoServicoAceleracao aceleracao =
+        servico_aceleracao_obter_estado();
+    const LeituraMpu6050& leitura = aceleracao.leitura;
+    imprimir_titulo("MPU6050 | LEITURA DETALHADA");
+    std::printf("Estado            : %s\r\n",
+                sensor.inicializado ? "ativo" : "INATIVO");
+    std::printf("WHO_AM_I          : 0x%02X (%s)\r\n",
+                static_cast<unsigned>(sensor.identificacao),
+                sensor.identificacao == 0x68 ? "padrão" : "não padrão, aceito");
+    std::printf("Endereço I2C      : 0x%02X\r\n",
+                static_cast<unsigned>(configuracao::ENDERECO_MPU6050));
+    std::printf("Configuração      : %s | ±2 g | ±250 °/s | DLPF 44 Hz\r\n",
+                 sensor.configuracao_verificada ? "verificada" : "NÃO VERIFICADA");
+    std::printf("Serviço aquisição : %s\r\n",
+                aceleracao.iniciado ? "ativo" : "INATIVO");
+    std::printf("Amostragem/filtro : %lu Hz / %.1f Hz\r\n",
+                static_cast<unsigned long>(
+                    sensor.frequencia_amostragem_hz),
+                configuracao::FREQUENCIA_CORTE_ACELERACAO_HZ);
+    std::printf("Acelerômetro bruto: X=%d Y=%d Z=%d\r\n",
+                leitura.aceleracao_x, leitura.aceleracao_y,
+                leitura.aceleracao_z);
+    std::printf("Aceleração em g   : X=%+.4f Y=%+.4f Z=%+.4f\r\n",
+                leitura.aceleracao_x_g, leitura.aceleracao_y_g,
+                leitura.aceleracao_z_g);
+    std::printf("Aceleração m/s²   : X=%+.3f Y=%+.3f Z=%+.3f\r\n",
+                leitura.aceleracao_x_ms2, leitura.aceleracao_y_ms2,
+                leitura.aceleracao_z_ms2);
+    std::printf("Gravidade estimada: X=%+.4f Y=%+.4f Z=%+.4f g\r\n",
+                aceleracao.gravidade_estimada_x_g,
+                aceleracao.gravidade_estimada_y_g,
+                aceleracao.gravidade_estimada_z_g);
+    std::printf("Aceleração linear : X=%+.4f Y=%+.4f Z=%+.4f g\r\n",
+                aceleracao.aceleracao_linear_x_g,
+                aceleracao.aceleracao_linear_y_g,
+                aceleracao.aceleracao_linear_z_g);
+    std::printf("Giroscópio bruto  : X=%d Y=%d Z=%d\r\n",
+                leitura.giroscopio_x, leitura.giroscopio_y,
+                leitura.giroscopio_z);
+    std::printf("Giroscópio °/s    : X=%+.2f Y=%+.2f Z=%+.2f\r\n",
+                leitura.giroscopio_x_graus_s,
+                leitura.giroscopio_y_graus_s,
+                leitura.giroscopio_z_graus_s);
+    std::printf("Desvio giroscópio : X=%+.3f Y=%+.3f Z=%+.3f °/s\r\n",
+                aceleracao.desvio_giroscopio_x_graus_s,
+                aceleracao.desvio_giroscopio_y_graus_s,
+                aceleracao.desvio_giroscopio_z_graus_s);
+    std::printf("Temperatura       : %.2f °C\r\n", leitura.temperatura_c);
+    std::printf("Longitudinal      : %+.4f g | %+.3f m/s²\r\n",
+                aceleracao.aceleracao_longitudinal_g,
+                aceleracao.aceleracao_longitudinal_ms2);
+    const char* sentido = aceleracao.sentido ==
+                                  SentidoAceleracaoLongitudinal::Frente
+                              ? "para frente"
+                          : aceleracao.sentido ==
+                                  SentidoAceleracaoLongitudinal::Tras
+                              ? "para trás"
+                              : "neutro";
+    const char eixo = configuracao::EIXO_LONGITUDINAL_MPU6050 == 0
+                          ? 'X'
+                      : configuracao::EIXO_LONGITUDINAL_MPU6050 == 1 ? 'Y'
+                                                                     : 'Z';
+    std::printf("Sentido aceleração: %s | eixo %c %s\r\n", sentido, eixo,
+                aceleracao.eixo_longitudinal_compativel
+                    ? "compatível"
+                    : "INCOMPATÍVEL COM A MONTAGEM");
+    std::printf("Calibração        : %s | grav. longitudinal=%+.5f g | %u/%u amostras\r\n",
+                aceleracao.calibrado ? "concluída" : "aguardando repouso",
+                aceleracao.componente_gravidade_longitudinal_g,
+                static_cast<unsigned>(
+                    aceleracao.amostras_calibracao_coletadas),
+                static_cast<unsigned>(
+                    configuracao::AMOSTRAS_CALIBRACAO_MPU6050));
+    std::printf("Leituras/erros    : dispositivo=%lu/%lu | serviço=%lu/%lu\r\n",
+                static_cast<unsigned long>(sensor.leituras_ok),
+                static_cast<unsigned long>(sensor.erros_leitura),
+                static_cast<unsigned long>(aceleracao.leituras_ok),
+                static_cast<unsigned long>(aceleracao.erros_leitura));
+    std::printf("Último resultado  : dispositivo=%s | serviço=%s\r\n",
+                esp_err_to_name(sensor.ultimo_erro),
+                esp_err_to_name(aceleracao.ultimo_erro));
+    imprimir_rodape_monitor_sensor();
+}
+
+void mostrar_leitura_encoders() {
+    const RetratoDiagnosticoSistema retrato =
+        servico_diagnostico_obter_retrato();
+    const auto& esquerdo = retrato.encoder_esquerdo;
+    const auto& direito = retrato.encoder_direito;
+    const auto& odometro = retrato.odometro;
+    imprimir_titulo("ENCODERS E ODÔMETRO | LEITURA DETALHADA");
+    std::printf("Esquerdo          : %s | contagem=%llu | giros=%.3f\r\n",
+                esquerdo.inicializado ? "ativo" : "INATIVO",
+                static_cast<unsigned long long>(esquerdo.contagem_atual),
+                esquerdo.contagens_por_giro == 0 ? 0.0
+                    : static_cast<double>(esquerdo.contagem_atual) /
+                          esquerdo.contagens_por_giro);
+    std::printf("  overflow/erros  : %lu/%lu | percurso=%.3f m | %.2f km/h\r\n",
+                static_cast<unsigned long>(
+                    esquerdo.transbordamentos_compensados),
+                static_cast<unsigned long>(esquerdo.erros_leitura),
+                odometro.roda_esquerda.percurso_m,
+                odometro.roda_esquerda.velocidade_kmh);
+    std::printf("Direito           : %s | contagem=%llu | giros=%.3f\r\n",
+                direito.inicializado ? "ativo" : "INATIVO",
+                static_cast<unsigned long long>(direito.contagem_atual),
+                direito.contagens_por_giro == 0 ? 0.0
+                    : static_cast<double>(direito.contagem_atual) /
+                          direito.contagens_por_giro);
+    std::printf("  overflow/erros  : %lu/%lu | percurso=%.3f m | %.2f km/h\r\n",
+                static_cast<unsigned long>(
+                    direito.transbordamentos_compensados),
+                static_cast<unsigned long>(direito.erros_leitura),
+                odometro.roda_direita.percurso_m,
+                odometro.roda_direita.velocidade_kmh);
+    std::printf("Média das rodas   : %.3f m | %.2f km/h\r\n",
+                odometro.percurso_m, odometro.velocidade_kmh);
+    std::printf("Odômetro total    : %.3f m | rodas %s\r\n",
+                odometro.odometro_m,
+                odometro.rodas_coerentes ? "coerentes" : "DIVERGENTES");
+    imprimir_rodape_monitor_sensor();
+}
+
+void mostrar_leitura_i2c() {
+    const EstatisticasI2c i2c = gerenciador_i2c_obter_estatisticas();
+    imprimir_titulo("BARRAMENTO I2C | DIAGNÓSTICO");
+    std::printf("Estado            : %s\r\n",
+                i2c.inicializado ? "ativo" : "INATIVO");
+    std::printf("Porta / SDA / SCL : %d / GPIO%d / GPIO%d\r\n",
+                configuracao::PORTA_I2C, configuracao::PINO_I2C_SDA,
+                configuracao::PINO_I2C_SCL);
+    std::printf("Frequência        : %lu Hz\r\n",
+                static_cast<unsigned long>(configuracao::FREQUENCIA_I2C_HZ));
+    std::printf("Operações/erros   : %lu/%lu\r\n",
+                static_cast<unsigned long>(i2c.operacoes_ok),
+                static_cast<unsigned long>(i2c.erros));
+    std::printf("Bytes TX/RX       : %llu/%llu\r\n",
+                static_cast<unsigned long long>(i2c.bytes_escritos),
+                static_cast<unsigned long long>(i2c.bytes_lidos));
+    std::printf("Sondagens OK/aus. : %lu/%lu\r\n",
+                static_cast<unsigned long>(i2c.sondagens_ok),
+                static_cast<unsigned long>(i2c.enderecos_ausentes));
+    std::printf("Último resultado  : %s\r\n",
+                esp_err_to_name(i2c.ultimo_erro));
+    imprimir_rodape_monitor_sensor();
 }
 
 void mostrar_menu_comandos_satelites() {
@@ -327,8 +634,8 @@ void mostrar_menu_wifi() {
 }
 
 void solicitar_ssid_nova_rede() {
-    std::memset(wifi_ssid_pendente, 0, sizeof(wifi_ssid_pendente));
-    std::memset(wifi_senha_pendente, 0, sizeof(wifi_senha_pendente));
+    std::memset(contexto_wifi.ssid, 0, sizeof(contexto_wifi.ssid));
+    std::memset(contexto_wifi.senha, 0, sizeof(contexto_wifi.senha));
     imprimir_linha();
     std::printf("NOVA REDE WI-FI\r\n");
     std::printf("Digite o nome da rede (SSID) e pressione Enter para enviar.\r\n");
@@ -346,7 +653,7 @@ void solicitar_senha_rede(const char* titulo) {
 void mostrar_confirmacao_nova_rede() {
     imprimir_linha();
     std::printf("CONFIRMAR TESTE DE CONEXÃO\r\n");
-    std::printf("Rede: %s\r\n", wifi_ssid_pendente);
+    std::printf("Rede: %s\r\n", contexto_wifi.ssid);
     std::printf("A senha não será exibida.\r\n\r\n");
     std::printf("  1 - Autorizar a tentativa de conexão\r\n");
     std::printf("  2 - Cancelar\r\n> ");
@@ -356,7 +663,7 @@ void mostrar_confirmacao_nova_rede() {
 void mostrar_confirmacao_nova_principal() {
     imprimir_linha();
     std::printf("CONFIRMAR ALTERAÇÃO DA REDE PRINCIPAL\r\n");
-    std::printf("Nova rede principal: %s\r\n", wifi_ssid_pendente);
+    std::printf("Nova rede principal: %s\r\n", contexto_wifi.ssid);
     std::printf("A senha da rede não será exibida.\r\n\r\n");
     std::printf("  1 - Testar, salvar e usar como principal\r\n");
     std::printf("  2 - Cancelar\r\n> ");
@@ -376,7 +683,7 @@ void mostrar_confirmacao_salvar_rede() {
     imprimir_linha();
     std::printf("REDE VALIDADA COM SUCESSO\r\n");
     std::printf("Deseja salvar a rede '%s' para uso futuro?\r\n\r\n",
-                wifi_ssid_pendente);
+                contexto_wifi.ssid);
     std::printf("  1 - Salvar rede\r\n");
     std::printf("  2 - Não salvar\r\n> ");
     std::fflush(stdout);
@@ -394,14 +701,15 @@ void mostrar_escolha_rede(const char* titulo) {
 void mostrar_confirmacao_rede_salva(const char* acao) {
     const ResumoWifi wifi = servico_wifi_obter_resumo();
     imprimir_linha();
-    if (wifi_indice_pendente >= wifi.quantidade_redes_usuario) {
+    if (contexto_wifi.indice_rede >= wifi.quantidade_redes_usuario) {
         std::printf("A rede selecionada não existe mais.\r\n");
         tela_atual = TelaTerminal::Wifi;
         mostrar_menu_wifi();
         return;
     }
     std::printf("CONFIRMAR %s\r\n", acao);
-    std::printf("Rede: %s\r\n\r\n", wifi.redes_usuario[wifi_indice_pendente]);
+    std::printf("Rede: %s\r\n\r\n",
+                wifi.redes_usuario[contexto_wifi.indice_rede]);
     std::printf("  1 - Confirmar\r\n");
     std::printf("  2 - Cancelar\r\n> ");
     std::fflush(stdout);
@@ -443,7 +751,7 @@ void mostrar_menu_politica_wifi() {
 
 void solicitar_valor_politica_wifi() {
     imprimir_linha();
-    switch (wifi_campo_pendente) {
+    switch (contexto_wifi.campo_politica) {
         case CampoPoliticaWifi::Tentativas:
             std::printf("TENTATIVAS POR REDE\r\nDigite um valor de %u a %u.\r\n> ",
                         static_cast<unsigned>(
@@ -546,11 +854,102 @@ void tratar_menu_principal(unsigned long opcao) {
             tela_atual = TelaTerminal::ComandosSatelites;
             mostrar_menu_comandos_satelites();
             break;
+        case 7:
+            tela_atual = TelaTerminal::Sensores;
+            mostrar_menu_sensores();
+            break;
+        case 8: {
+            const EstadoRegistroTelemetria registro =
+                servico_registro_telemetria_obter_estado();
+            std::printf(
+                "\r\nRegistro SD: %s | amostras=%lu | pendentes=%lu | enviados=%lu\r\n",
+                registro.cartao_disponivel ? "ativo" : "indisponível",
+                static_cast<unsigned long>(registro.amostras_gravadas),
+                static_cast<unsigned long>(registro.arquivos_pendentes),
+                static_cast<unsigned long>(registro.arquivos_enviados));
+            const esp_err_t erro =
+                servico_registro_telemetria_solicitar_sincronizacao();
+            if (erro == ESP_OK) {
+                std::printf(
+                    "[OK] Sincronização solicitada; o arquivo atual será fechado e enviado em segundo plano.\r\n");
+            } else {
+                std::printf("[ERRO] Não foi possível iniciar a sincronização: %s.\r\n",
+                            esp_err_to_name(erro));
+            }
+            mostrar_menu_principal();
+            break;
+        }
         default:
             std::printf("\r\nOpção inválida. Escolha um número do menu.\r\n> ");
             std::fflush(stdout);
             break;
     }
+}
+
+void tratar_menu_sensores(unsigned long opcao) {
+    switch (opcao) {
+        case 1:
+            break;
+        case 2: {
+            const esp_err_t erro = servico_odometro_zerar_percurso();
+            if (erro == ESP_OK) {
+                std::printf("\r\n[OK] Percurso da sessão zerado; o odômetro total foi preservado.\r\n");
+            } else {
+                std::printf("\r\n[ERRO] Não foi possível zerar o percurso: %s.\r\n",
+                            esp_err_to_name(erro));
+            }
+            break;
+        }
+        case 3:
+            solicitar_resumo();
+            break;
+        case 4:
+            tela_atual = TelaTerminal::SensorAdc;
+            return;
+        case 5:
+            tela_atual = TelaTerminal::SensorMpu6050;
+            return;
+        case 6:
+            tela_atual = TelaTerminal::SensorEncoders;
+            return;
+        case 7:
+            tela_atual = TelaTerminal::SensorI2c;
+            return;
+        default:
+            std::printf("\r\nOpção inválida. Escolha um número do menu.\r\n");
+            break;
+    }
+    mostrar_menu_sensores();
+}
+
+bool tela_monitora_sensor() {
+    return tela_atual == TelaTerminal::SensorAdc ||
+           tela_atual == TelaTerminal::SensorMpu6050 ||
+           tela_atual == TelaTerminal::SensorEncoders ||
+           tela_atual == TelaTerminal::SensorI2c;
+}
+
+void mostrar_monitor_sensor_atual() {
+    // Monitores seriais simples não interpretam controle de cursor ANSI; cada
+    // atualização é um novo bloco, em intervalo deliberadamente lento.
+    std::printf("\r\n");
+    switch (tela_atual) {
+        case TelaTerminal::SensorAdc:
+            mostrar_leitura_adc();
+            break;
+        case TelaTerminal::SensorMpu6050:
+            mostrar_leitura_mpu6050();
+            break;
+        case TelaTerminal::SensorEncoders:
+            mostrar_leitura_encoders();
+            break;
+        case TelaTerminal::SensorI2c:
+            mostrar_leitura_i2c();
+            break;
+        default:
+            break;
+    }
+    std::fflush(stdout);
 }
 
 void consultar_satelite(DestinoUart destino, codigo_comando_t comando) {
@@ -676,14 +1075,19 @@ void tratar_menu_ota(unsigned long opcao) {
                 servico_ota_autorizar_atualizacao_satelite(AlvoOta::Visitantes));
             break;
         case 6:
+            informar_resultado_ota(
+                "autorizar a atualização de todos os controladores",
+                servico_ota_autorizar_atualizacao_todos());
+            break;
+        case 7:
             informar_resultado_ota("cancelar as atualizações pendentes",
                                    servico_ota_cancelar_atualizacao());
             break;
-        case 7:
+        case 8:
             tela_atual = TelaTerminal::OtaIntervalo;
             mostrar_intervalos_ota();
             return;
-        case 8:
+        case 9:
             tela_atual = TelaTerminal::OtaIntervaloTelemetria;
             mostrar_intervalos_telemetria_ota();
             return;
@@ -701,7 +1105,7 @@ void tratar_menu_intervalos(unsigned long opcao) {
         mostrar_menu_intervalos();
         return;
     }
-    grupo_em_edicao = static_cast<GrupoRelatorioTerminal>(opcao - 1);
+    grupo_em_edicao = static_cast<GrupoRelatorio>(opcao - 1);
     tela_atual = TelaTerminal::EscolherIntervalo;
     mostrar_opcoes_intervalo();
 }
@@ -714,28 +1118,21 @@ void tratar_escolha_intervalo(unsigned long opcao) {
         return;
     }
 
-    const auto grupo = static_cast<GrupoRelatorio>(grupo_em_edicao);
     const esp_err_t erro = servico_relatorios_definir_intervalo(
-        grupo, OPCOES_MS[opcao - 1]);
+        grupo_em_edicao, OPCOES_MS[opcao - 1]);
     if (erro != ESP_OK) {
         std::printf("\r\n[ERRO] Não foi possível alterar o intervalo: %s\r\n",
                     esp_err_to_name(erro));
     } else {
         std::printf("\r\nIntervalo de '%s' atualizado.\r\n",
-                    servico_relatorios_nome_grupo(grupo));
+                    servico_relatorios_nome_grupo(grupo_em_edicao));
     }
     tela_atual = TelaTerminal::Intervalos;
     mostrar_menu_intervalos();
 }
 
 void limpar_dados_wifi_pendentes() {
-    std::memset(wifi_ssid_pendente, 0, sizeof(wifi_ssid_pendente));
-    std::memset(wifi_senha_pendente, 0, sizeof(wifi_senha_pendente));
-    std::memset(wifi_permissao_pendente, 0, sizeof(wifi_permissao_pendente));
-    wifi_indice_pendente = 0;
-    wifi_automatico_pendente = false;
-    wifi_politica_pendente = {};
-    wifi_campo_pendente = CampoPoliticaWifi::Tentativas;
+    contexto_wifi = {};
 }
 
 void voltar_menu_wifi() {
@@ -799,22 +1196,22 @@ void tratar_menu_politica_wifi(unsigned long opcao) {
         mostrar_menu_politica_wifi();
         return;
     }
-    wifi_politica_pendente = servico_wifi_obter_resumo().politica;
+    contexto_wifi.politica = servico_wifi_obter_resumo().politica;
     if (opcao == 5) {
-        wifi_politica_pendente = {};
-        wifi_campo_pendente = CampoPoliticaWifi::RestaurarPadroes;
+        contexto_wifi.politica = {};
+        contexto_wifi.campo_politica = CampoPoliticaWifi::RestaurarPadroes;
         tela_atual = TelaTerminal::WifiSenhaPolitica;
         solicitar_senha_permissao("restaurar a política Wi-Fi padrão");
         return;
     }
-    wifi_campo_pendente =
+    contexto_wifi.campo_politica =
         static_cast<CampoPoliticaWifi>(opcao - 1);
     tela_atual = TelaTerminal::WifiPoliticaValor;
     solicitar_valor_politica_wifi();
 }
 
 void tratar_valor_politica_wifi(unsigned long valor) {
-    switch (wifi_campo_pendente) {
+    switch (contexto_wifi.campo_politica) {
         case CampoPoliticaWifi::Tentativas:
             if (valor < configuracao::TENTATIVAS_WIFI_MINIMAS ||
                 valor > configuracao::TENTATIVAS_WIFI_MAXIMAS) {
@@ -822,7 +1219,7 @@ void tratar_valor_politica_wifi(unsigned long valor) {
                 solicitar_valor_politica_wifi();
                 return;
             }
-            wifi_politica_pendente.tentativas_por_rede =
+            contexto_wifi.politica.tentativas_por_rede =
                 static_cast<uint8_t>(valor);
             break;
         case CampoPoliticaWifi::TempoTentativa:
@@ -834,7 +1231,7 @@ void tratar_valor_politica_wifi(unsigned long valor) {
                 solicitar_valor_politica_wifi();
                 return;
             }
-            wifi_politica_pendente.tempo_por_tentativa_ms =
+            contexto_wifi.politica.tempo_por_tentativa_ms =
                 static_cast<uint32_t>(valor * 1000UL);
             break;
         case CampoPoliticaWifi::IntervaloTentativas:
@@ -846,7 +1243,7 @@ void tratar_valor_politica_wifi(unsigned long valor) {
                 solicitar_valor_politica_wifi();
                 return;
             }
-            wifi_politica_pendente.intervalo_entre_tentativas_ms =
+            contexto_wifi.politica.intervalo_entre_tentativas_ms =
                 static_cast<uint32_t>(valor);
             break;
         case CampoPoliticaWifi::TempoSessao:
@@ -858,14 +1255,14 @@ void tratar_valor_politica_wifi(unsigned long valor) {
                 solicitar_valor_politica_wifi();
                 return;
             }
-            wifi_politica_pendente.tempo_limite_sessao_ms =
+            contexto_wifi.politica.tempo_limite_sessao_ms =
                 static_cast<uint32_t>(valor * 1000UL);
             break;
         case CampoPoliticaWifi::RestaurarPadroes:
             break;
     }
 
-    if (!servico_wifi_politica_valida(wifi_politica_pendente)) {
+    if (!servico_wifi_politica_valida(contexto_wifi.politica)) {
         std::printf(
             "\r\nValor inválido. Confira a faixa indicada; o limite da sessão "
             "também deve ser igual ou maior que o tempo de uma tentativa.\r\n");
@@ -887,10 +1284,10 @@ void tratar_confirmacao_nova_rede(unsigned long opcao) {
         return;
     }
 
-    std::printf("\r\nTentando conectar à rede '%s'...\r\n", wifi_ssid_pendente);
+    std::printf("\r\nTentando conectar à rede '%s'...\r\n", contexto_wifi.ssid);
     std::fflush(stdout);
     const esp_err_t erro = servico_wifi_conectar_rede_informada(
-        wifi_ssid_pendente, wifi_senha_pendente);
+        contexto_wifi.ssid, contexto_wifi.senha);
     if (erro != ESP_OK) {
         informar_resultado_wifi("", "Não foi possível conectar", erro);
         voltar_menu_wifi();
@@ -903,7 +1300,7 @@ void tratar_confirmacao_nova_rede(unsigned long opcao) {
 void tratar_confirmacao_salvar_rede(unsigned long opcao) {
     if (opcao == 1) {
         const esp_err_t erro = servico_wifi_salvar_rede_usuario(
-            wifi_ssid_pendente, wifi_senha_pendente);
+            contexto_wifi.ssid, contexto_wifi.senha);
         informar_resultado_wifi("Rede salva com sucesso.",
                                "A rede foi conectada, mas não pôde ser salva", erro);
         voltar_menu_wifi();
@@ -926,7 +1323,7 @@ void tratar_escolha_rede_salva(unsigned long opcao, bool excluir) {
                                      "AUTORIZAR CONEXÃO A UMA REDE SALVA");
         return;
     }
-    wifi_indice_pendente = static_cast<size_t>(opcao - 1);
+    contexto_wifi.indice_rede = static_cast<size_t>(opcao - 1);
     tela_atual = excluir ? TelaTerminal::WifiConfirmarExclusao
                          : TelaTerminal::WifiConfirmarConexao;
     mostrar_confirmacao_rede_salva(excluir ? "EXCLUSÃO" : "CONEXÃO");
@@ -943,8 +1340,8 @@ void tratar_confirmacao_rede_salva(unsigned long opcao, bool excluir) {
         return;
     }
     const esp_err_t erro = excluir
-        ? servico_wifi_excluir_rede_usuario(wifi_indice_pendente)
-        : servico_wifi_conectar_rede_salva(wifi_indice_pendente);
+        ? servico_wifi_excluir_rede_usuario(contexto_wifi.indice_rede)
+        : servico_wifi_conectar_rede_salva(contexto_wifi.indice_rede);
     informar_resultado_wifi(excluir ? "Rede excluída com sucesso."
                                     : "Rede validada e autorizada para a próxima operação; o rádio voltou ao repouso.",
                            excluir ? "Não foi possível excluir a rede"
@@ -959,7 +1356,7 @@ void tratar_escolha_automatico(unsigned long opcao) {
         mostrar_menu_automatico();
         return;
     }
-    wifi_automatico_pendente = opcao == 1;
+    contexto_wifi.automatico = opcao == 1;
     tela_atual = TelaTerminal::WifiSenhaAutomatico;
     solicitar_senha_permissao("alterar a autorização automática");
 }
@@ -975,7 +1372,7 @@ void tratar_confirmacao_principal(unsigned long opcao) {
         return;
     }
     const esp_err_t erro = servico_wifi_alterar_rede_principal(
-        wifi_ssid_pendente, wifi_senha_pendente, wifi_permissao_pendente);
+        contexto_wifi.ssid, contexto_wifi.senha, contexto_wifi.permissao);
     informar_resultado_wifi("Rede principal alterada e salva com sucesso.",
                            "Não foi possível alterar a rede principal", erro);
     voltar_menu_wifi();
@@ -992,7 +1389,7 @@ void tratar_confirmacao_restaurar(unsigned long opcao) {
         return;
     }
     const esp_err_t erro = servico_wifi_restaurar_rede_principal(
-        wifi_permissao_pendente);
+        contexto_wifi.permissao);
     informar_resultado_wifi("Rede principal do firmware restaurada com sucesso.",
                            "Não foi possível restaurar a rede principal", erro);
     voltar_menu_wifi();
@@ -1043,6 +1440,35 @@ void consumir_segunda_quebra_de_linha() {
             caractere_pendente = proximo;
         }
         return;
+    }
+}
+
+void monitorar_sensor_ate_sair() {
+    int64_t proxima_atualizacao_ms = 0;
+    while (tela_monitora_sensor()) {
+        const int64_t agora_ms = esp_timer_get_time() / 1000;
+        if (agora_ms >= proxima_atualizacao_ms) {
+            mostrar_monitor_sensor_atual();
+            proxima_atualizacao_ms =
+                agora_ms + configuracao::INTERVALO_MONITOR_SENSORES_MS;
+        }
+
+        const int recebido = ler_caractere_console();
+        if (recebido == EOF) {
+            clearerr(stdin);
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+
+        const uint8_t caractere = static_cast<uint8_t>(recebido);
+        if (caractere == '\r' || caractere == '\n' || caractere == 0x03) {
+            if (caractere == '\r' || caractere == '\n') {
+                consumir_segunda_quebra_de_linha();
+            }
+            return;
+        }
+        // A tela ao vivo não possui comandos: caracteres diferentes de Enter
+        // são ignorados para não corromper o desenho durante a atualização.
     }
 }
 
@@ -1142,7 +1568,7 @@ void tratar_texto_wifi(const char* texto) {
             std::fflush(stdout);
             return;
         }
-        std::strncpy(wifi_ssid_pendente, texto, sizeof(wifi_ssid_pendente) - 1);
+        std::strncpy(contexto_wifi.ssid, texto, sizeof(contexto_wifi.ssid) - 1);
         if (tela_atual == TelaTerminal::WifiNovaSsid) {
             tela_atual = TelaTerminal::WifiNovaSenha;
             solicitar_senha_rede("SENHA DA NOVA REDE");
@@ -1160,7 +1586,8 @@ void tratar_texto_wifi(const char* texto) {
             std::fflush(stdout);
             return;
         }
-        std::strncpy(wifi_senha_pendente, texto, sizeof(wifi_senha_pendente) - 1);
+        std::strncpy(contexto_wifi.senha, texto,
+                     sizeof(contexto_wifi.senha) - 1);
         if (tela_atual == TelaTerminal::WifiNovaSenha) {
             tela_atual = TelaTerminal::WifiNovaConfirmarConexao;
             mostrar_confirmacao_nova_rede();
@@ -1178,28 +1605,28 @@ void tratar_texto_wifi(const char* texto) {
         return;
     }
 
-    std::strncpy(wifi_permissao_pendente, texto,
-                 sizeof(wifi_permissao_pendente) - 1);
+    std::strncpy(contexto_wifi.permissao, texto,
+                 sizeof(contexto_wifi.permissao) - 1);
     if (tela_atual == TelaTerminal::WifiSenhaAutomatico) {
         const esp_err_t erro = servico_wifi_definir_conexao_automatica(
-            wifi_automatico_pendente, wifi_permissao_pendente);
+            contexto_wifi.automatico, contexto_wifi.permissao);
         informar_resultado_wifi(
-            wifi_automatico_pendente
+            contexto_wifi.automatico
                 ? "Conexão automática às redes secundárias habilitada."
                 : "As redes secundárias voltarão a exigir autorização.",
             "Não foi possível salvar a preferência", erro);
         voltar_menu_wifi();
     } else if (tela_atual == TelaTerminal::WifiSenhaPolitica) {
         const esp_err_t erro = servico_wifi_definir_politica(
-            wifi_politica_pendente, wifi_permissao_pendente);
+            contexto_wifi.politica, contexto_wifi.permissao);
         informar_resultado_wifi(
             "Política de conexão Wi-Fi salva com sucesso.",
             "Não foi possível salvar a política de conexão", erro);
         voltar_menu_wifi();
     } else if (tela_atual == TelaTerminal::WifiSenhaPrincipal) {
         tela_atual = TelaTerminal::WifiPrincipalSsid;
-        std::memset(wifi_ssid_pendente, 0, sizeof(wifi_ssid_pendente));
-        std::memset(wifi_senha_pendente, 0, sizeof(wifi_senha_pendente));
+        std::memset(contexto_wifi.ssid, 0, sizeof(contexto_wifi.ssid));
+        std::memset(contexto_wifi.senha, 0, sizeof(contexto_wifi.senha));
         imprimir_linha();
         std::printf("NOVA REDE PRINCIPAL\r\n");
         std::printf("Digite o SSID e pressione Enter para enviar. Enter vazio cancela.\r\n> ");
@@ -1220,7 +1647,14 @@ void voltar_uma_tela() {
                tela_atual == TelaTerminal::OtaIntervaloTelemetria) {
         tela_atual = TelaTerminal::Ota;
         mostrar_menu_ota();
+    } else if (tela_atual == TelaTerminal::SensorAdc ||
+               tela_atual == TelaTerminal::SensorMpu6050 ||
+               tela_atual == TelaTerminal::SensorEncoders ||
+               tela_atual == TelaTerminal::SensorI2c) {
+        tela_atual = TelaTerminal::Sensores;
+        mostrar_menu_sensores();
     } else if (tela_atual == TelaTerminal::Ota ||
+               tela_atual == TelaTerminal::Sensores ||
                tela_atual == TelaTerminal::Intervalos ||
                tela_atual == TelaTerminal::ComandosSatelites ||
                tela_atual == TelaTerminal::Wifi) {
@@ -1255,6 +1689,7 @@ void tratar_confirmacao_exclusao(unsigned long opcao) {
 
 constexpr RotaTerminal ROTAS_TERMINAL[] = {
     {TelaTerminal::Principal, tratar_menu_principal},
+    {TelaTerminal::Sensores, tratar_menu_sensores},
     {TelaTerminal::Ota, tratar_menu_ota},
     {TelaTerminal::OtaIntervalo, tratar_intervalo_ota},
     {TelaTerminal::OtaIntervaloTelemetria,
@@ -1301,6 +1736,12 @@ void tarefa_terminal(void*) {
     }
     mostrar_menu_principal();
     while (true) {
+        if (tela_monitora_sensor()) {
+            monitorar_sensor_ate_sair();
+            tela_atual = TelaTerminal::Sensores;
+            mostrar_menu_sensores();
+            continue;
+        }
         const ResultadoLeituraLinha leitura = ler_linha_interativa(
             linha, sizeof(linha), tela_oculta_entrada());
         if (leitura == ResultadoLeituraLinha::LongaDemais) {
@@ -1343,13 +1784,4 @@ esp_err_t servico_terminal_iniciar() {
     }
     iniciado = true;
     return ESP_OK;
-}
-
-void servico_terminal_solicitar_resumo() {
-    servico_relatorios_solicitar_resumo();
-    ESP_LOGI(ETIQUETA, "Resumo solicitado pelo canal remoto da equipe");
-}
-
-bool servico_terminal_deve_exibir(GrupoRelatorioTerminal grupo) {
-    return servico_relatorios_deve_exibir(grupo);
 }

@@ -1,3 +1,4 @@
+// Centraliza os limites e parâmetros comuns do enlace UART.
 #pragma once
 
 /*
@@ -8,4 +9,3 @@
  * valores incompatíveis.
  */
 #define ENLACE_UART_BAUD_RATE 1000000
-
