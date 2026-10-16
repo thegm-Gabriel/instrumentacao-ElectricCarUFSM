@@ -104,6 +104,8 @@ A apresentação ao vivo usa um retrato a 4 Hz. Em paralelo,
 `servico_registro_telemetria` reduz esse mesmo retrato para 1 Hz e o entrega por
 fila a uma única tarefa proprietária dos CSVs. O arquivo ativo é sincronizado a
 cada dez segundos, fechado a cada cinco minutos e recuperado após reinicialização.
+Se o cartão não estiver disponível na partida, o mestre mantém a telemetria ao
+vivo e tenta habilitar novamente o histórico a cada trinta segundos.
 O upload é iniciado explicitamente no fim da sessão, abre uma sessão Wi-Fi
 temporária, exige confirmação nominal do Google e só então move o CSV para
 `enviados`. O gerenciador do cartão conhece apenas SPI e montagem FAT; toda a

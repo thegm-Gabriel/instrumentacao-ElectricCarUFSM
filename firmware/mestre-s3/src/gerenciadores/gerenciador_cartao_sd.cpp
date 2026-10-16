@@ -11,6 +11,22 @@ namespace {
 constexpr char ETIQUETA[] = "gerenciador_sd";
 bool montado = false;
 sdmmc_card_t* cartao = nullptr;
+
+bool pinos_validos_e_distintos(const ConfiguracaoCartaoSd& configuracao) {
+    const bool validos =
+        GPIO_IS_VALID_OUTPUT_GPIO(configuracao.pino_clk) &&
+        GPIO_IS_VALID_OUTPUT_GPIO(configuracao.pino_mosi) &&
+        GPIO_IS_VALID_GPIO(configuracao.pino_miso) &&
+        GPIO_IS_VALID_OUTPUT_GPIO(configuracao.pino_cs);
+    const bool distintos =
+        configuracao.pino_clk != configuracao.pino_mosi &&
+        configuracao.pino_clk != configuracao.pino_miso &&
+        configuracao.pino_clk != configuracao.pino_cs &&
+        configuracao.pino_mosi != configuracao.pino_miso &&
+        configuracao.pino_mosi != configuracao.pino_cs &&
+        configuracao.pino_miso != configuracao.pino_cs;
+    return validos && distintos;
+}
 }
 
 esp_err_t gerenciador_cartao_sd_iniciar(
@@ -18,12 +34,10 @@ esp_err_t gerenciador_cartao_sd_iniciar(
     if (montado) return ESP_OK;
     if (configuracao.ponto_montagem == nullptr ||
         configuracao.ponto_montagem[0] != '/' ||
-        configuracao.pino_clk == GPIO_NUM_NC ||
-        configuracao.pino_mosi == GPIO_NUM_NC ||
-        configuracao.pino_miso == GPIO_NUM_NC ||
-        configuracao.pino_cs == GPIO_NUM_NC ||
-        configuracao.frequencia_hz == 0 ||
+        !pinos_validos_e_distintos(configuracao) ||
+        configuracao.frequencia_hz < 1000 ||
         configuracao.maximo_arquivos_abertos == 0) {
+        ESP_LOGE(ETIQUETA, "Configuração do cartão SD inválida");
         return ESP_ERR_INVALID_ARG;
     }
 

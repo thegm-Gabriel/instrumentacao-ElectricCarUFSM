@@ -11,6 +11,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nucleo/configuracao_placa.h"
+#include "nucleo/configuracao_registro_telemetria.h"
 #include "nvs_flash.h"
 #include "servicos/servico_diagnostico.h"
 #include "servicos/servico_enlace_satelites.h"
@@ -38,6 +39,7 @@ struct DisponibilidadeAquisicao {
     bool mpu6050 = false;
     bool odometro = false;
     bool registro_sd = false;
+    bool tentar_recuperar_registro_sd = false;
 };
 
 DisponibilidadeAquisicao aquisicao{};
@@ -147,6 +149,7 @@ void tarefa_telemetria(void*) {
     int64_t ultimo_log_erro_envio_ms = -5000;
     int64_t ultimo_log_erro_odometro_ms = -5000;
     int64_t ultimo_log_erro_registro_ms = -5000;
+    int64_t proxima_tentativa_registro_sd_ms = 0;
     while (true) {
         servico_supervisao_alimentar(ModuloSupervisionado::TarefaTelemetria);
         if (configuracao::USAR_TELEMETRIA_SIMULADA) {
@@ -214,11 +217,36 @@ void tarefa_telemetria(void*) {
                 ultimo_log_erro_envio_ms = agora_ms;
             }
         }
+        const int64_t agora_ms = esp_timer_get_time() / 1000;
+        if (!aquisicao.registro_sd &&
+            aquisicao.tentar_recuperar_registro_sd &&
+            agora_ms >= proxima_tentativa_registro_sd_ms) {
+            const esp_err_t erro_recuperacao =
+                servico_registro_telemetria_iniciar();
+            if (erro_recuperacao == ESP_OK) {
+                aquisicao.registro_sd = true;
+                aquisicao.tentar_recuperar_registro_sd = false;
+                ESP_LOGI(ETIQUETA,
+                         "Cartão SD detectado; registro histórico recuperado");
+            } else {
+                proxima_tentativa_registro_sd_ms =
+                    agora_ms +
+                    configuracao::INTERVALO_NOVA_TENTATIVA_SD_MS;
+                if (agora_ms - ultimo_log_erro_registro_ms >= 5000) {
+                    ESP_LOGW(ETIQUETA,
+                             "Cartão SD ainda indisponível; nova tentativa em %lu s: %s",
+                             static_cast<unsigned long>(
+                                 configuracao::INTERVALO_NOVA_TENTATIVA_SD_MS /
+                                 1000U),
+                             esp_err_to_name(erro_recuperacao));
+                    ultimo_log_erro_registro_ms = agora_ms;
+                }
+            }
+        }
         if (aquisicao.registro_sd) {
             const esp_err_t erro_registro =
                 servico_registro_telemetria_registrar(ultimos_dados);
             if (erro_registro != ESP_OK && erro_registro != ESP_ERR_INVALID_STATE) {
-                const int64_t agora_ms = esp_timer_get_time() / 1000;
                 if (agora_ms - ultimo_log_erro_registro_ms >= 5000) {
                     ESP_LOGW(ETIQUETA, "Amostra histórica não enfileirada: %s",
                              esp_err_to_name(erro_registro));
@@ -469,6 +497,8 @@ extern "C" void app_main(void) {
     atualizar_partida("CARTAO E HISTORICO", 50);
     const esp_err_t erro_registro = servico_registro_telemetria_iniciar();
     aquisicao.registro_sd = erro_registro == ESP_OK;
+    aquisicao.tentar_recuperar_registro_sd =
+        erro_registro != ESP_OK && erro_registro != ESP_ERR_NOT_SUPPORTED;
     if (erro_registro != ESP_OK && erro_registro != ESP_ERR_NOT_SUPPORTED) {
         ESP_LOGW(ETIQUETA,
                  "Telemetria ao vivo ativa, mas histórico no SD indisponível: %s",

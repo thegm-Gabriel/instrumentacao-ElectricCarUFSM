@@ -24,6 +24,7 @@ namespace configuracao {
 constexpr bool HABILITAR_REGISTRO_TELEMETRIA = true;
 constexpr uint32_t INTERVALO_REGISTRO_TELEMETRIA_MS = 1000;
 constexpr uint32_t INTERVALO_SINCRONIZACAO_SD_MS = 10000;
+constexpr uint32_t INTERVALO_NOVA_TENTATIVA_SD_MS = 30000;
 constexpr uint32_t DURACAO_ARQUIVO_TELEMETRIA_MS = 5U * 60U * 1000U;
 constexpr std::size_t CAPACIDADE_FILA_REGISTRO = 24;
 constexpr std::size_t TAMANHO_MAXIMO_CSV_BYTES = 1536U * 1024U;
