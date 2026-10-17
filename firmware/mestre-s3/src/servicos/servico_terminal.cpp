@@ -1,4 +1,5 @@
 // Implementa o menu serial interativo de operação e diagnóstico.
+#include "nucleo/configuracao_tarefas.h"
 #include "servicos/servico_terminal.h"
 
 #include <cerrno>
@@ -606,7 +607,9 @@ void mostrar_menu_wifi() {
                 static_cast<unsigned long>(
                     wifi.politica.tempo_limite_sessao_ms / 1000));
     if (wifi.sessao_em_andamento) {
-        std::printf("Sessão de rede     : em andamento (%lu tentativa(s))\r\n",
+        std::printf("Sessão de rede     : %s (%lu tentativa(s))\r\n",
+                    servico_wifi_nome_finalidade_sessao(
+                        wifi.finalidade_sessao),
                     static_cast<unsigned long>(
                         wifi.tentativas_ultima_sessao));
     }
@@ -810,13 +813,15 @@ bool interpretar_numero(const char* texto, unsigned long* numero) {
     return true;
 }
 
-void marcar_resumo_pendente() {
-    servico_relatorios_solicitar_resumo();
-}
-
 void solicitar_resumo() {
-    marcar_resumo_pendente();
-    std::printf("\r\n[OK] Resumo solicitado; será exibido no próximo ciclo.\r\n");
+    std::printf("\r\nPreparando resumo completo...\r\n");
+    std::fflush(stdout);
+    const esp_err_t erro =
+        servico_relatorios_solicitar_resumo_e_aguardar(3000);
+    if (erro != ESP_OK) {
+        std::printf("[AVISO] O resumo não terminou no prazo: %s\r\n",
+                    esp_err_to_name(erro));
+    }
 }
 
 void alternar_pausa() {
@@ -869,9 +874,17 @@ void tratar_menu_principal(unsigned long opcao) {
                 static_cast<unsigned long>(registro.arquivos_enviados));
             const esp_err_t erro =
                 servico_registro_telemetria_solicitar_sincronizacao();
+            const ResumoWifi wifi_apos_solicitacao =
+                servico_wifi_obter_resumo();
             if (erro == ESP_OK) {
                 std::printf(
                     "[OK] Sincronização solicitada; o arquivo atual será fechado e enviado em segundo plano.\r\n");
+            } else if (erro == ESP_ERR_INVALID_STATE &&
+                       wifi_apos_solicitacao.sessao_em_andamento) {
+                std::printf(
+                    "[AVISO] Sincronização não iniciada: aguarde a conclusão da %s.\r\n",
+                    servico_wifi_nome_finalidade_sessao(
+                        wifi_apos_solicitacao.finalidade_sessao));
             } else {
                 std::printf("[ERRO] Não foi possível iniciar a sincronização: %s.\r\n",
                             esp_err_to_name(erro));
@@ -1046,8 +1059,15 @@ void tratar_intervalo_telemetria_ota(unsigned long opcao) {
 }
 
 void informar_resultado_ota(const char* acao, esp_err_t resultado) {
+    const ResumoWifi wifi = servico_wifi_obter_resumo();
     if (resultado == ESP_OK) {
         std::printf("\r\n[OK] Solicitação recebida: %s.\r\n", acao);
+    } else if (resultado == ESP_ERR_INVALID_STATE &&
+               wifi.sessao_em_andamento) {
+        std::printf(
+            "\r\n[AVISO] Não foi possível %s: aguarde a conclusão da %s.\r\n",
+            acao,
+            servico_wifi_nome_finalidade_sessao(wifi.finalidade_sessao));
     } else {
         std::printf("\r\n[ERRO] Não foi possível %s: %s. Consulte o estado da OTA.\r\n",
                     acao, esp_err_to_name(resultado));
@@ -1778,7 +1798,7 @@ void tarefa_terminal(void*) {
 
 esp_err_t servico_terminal_iniciar() {
     if (iniciado) return ESP_OK;
-    if (xTaskCreate(tarefa_terminal, "terminal", 4096, nullptr, 3, nullptr) != pdPASS) {
+    if (configuracao::criar_tarefa(tarefa_terminal, "terminal", nullptr, nullptr) != pdPASS) {
         ESP_LOGE(ETIQUETA, "Não foi possível iniciar o menu serial");
         return ESP_ERR_NO_MEM;
     }

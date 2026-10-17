@@ -111,8 +111,31 @@ também a atualização de um satélite mesmo quando o estado geral muda rapidam
 ## Histórico de telemetria no Google
 
 Os satélites recebem o estado ao vivo a 4 Hz, enquanto o mestre registra no
-cartão SD uma amostra por segundo. Os CSVs são fechados a cada cinco minutos e o
-upload só começa quando a opção correspondente é escolhida no terminal. Uma
-falha de rede preserva os arquivos pendentes e permite repetir a operação sem
-duplicar linhas. A pinagem, o Web App e a configuração das credenciais estão em
+cartão SD uma amostra por segundo. Os CSVs cobrem até uma hora ou 2 MiB e o
+upload só começa quando a opção correspondente é escolhida no terminal. O envio
+é feito em blocos e a tela local mostra arquivo atual, progresso, velocidade,
+estimativa e quantidade restante, seguida de um resumo. Uma falha de rede
+preserva os arquivos pendentes e permite repetir a operação sem duplicar linhas.
+A pinagem, o Web App e a configuração das credenciais estão em
 `../../documentacao/telemetria-google/README.md`.
+
+## Diagnóstico do ESP e tarefas
+
+A política de núcleos, prioridades e pilhas fica em
+`include/nucleo/configuracao_tarefas.h`. Os relatórios incluem uso de CPU por
+tarefa, afinidade e menor margem de pilha. A supervisão executa recuperações
+fora da tarefa de prioridade alta e acompanha fases de aquisição, SD e rede.
+A opção 1 apresenta o resumo por seções e as tarefas em tabela, ordenadas pela
+menor margem, além de indicar qual estado dos LEDs foi comandado.
+
+No cartão, `logs/esp_<sessao>_<parte>.log` reúne identificação do firmware,
+motivo do reset, memória interna/PSRAM/DMA, tarefas e erros. Há registros a cada
+30 segundos e em mudanças relevantes, com segmentos de aproximadamente 1 MiB
+e limite aproximado de 8 MiB por sessão. Ao atingir esse limite, a telemetria
+continua sendo gravada. Esses logs não são enviados ao Google nem apagados
+automaticamente. Veja limites e interpretação em `ARQUITETURA.md`.
+
+Validação em bancada: exercitar aquisição junto com upload e depois OTA,
+interromper a rede, verificar os alertas e conferir os logs após reiniciar.
+Comparar memória interna, maior bloco e margens mínimas de pilha durante TLS;
+a compilação não substitui esse teste com o cartão e os periféricos reais.

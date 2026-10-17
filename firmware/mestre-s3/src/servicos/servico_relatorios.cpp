@@ -1,17 +1,23 @@
 // Publica relatórios periódicos dos dados e da saúde do mestre.
+#include "nucleo/configuracao_tarefas.h"
 #include "servicos/servico_relatorios.h"
 
+#include <algorithm>
 #include <array>
+#include <cstdio>
 
 #include "dispositivos/tela_ssd1306.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "gerenciadores/gerenciador_uart.h"
 #include "servicos/servico_comandos.h"
 #include "servicos/servico_diagnostico.h"
 #include "servicos/servico_ota.h"
+#include "servicos/servico_sinalizacao.h"
 #include "servicos/servico_supervisao.h"
 #include "servicos/servico_telemetria.h"
 #include "servicos/servico_wifi.h"
@@ -45,6 +51,28 @@ portMUX_TYPE trava_dados = portMUX_INITIALIZER_UNLOCKED;
 DadosTelemetriaVeiculo dados_mais_recentes{};
 bool dados_disponiveis = false;
 bool iniciado = false;
+DiagnosticoTarefas* tarefas_relatorio = nullptr;
+int64_t ultimo_relatorio_tarefas_us = 0;
+SemaphoreHandle_t resumo_concluido = nullptr;
+
+void exibir_secao(const char* titulo) {
+    ESP_LOGI(ETIQUETA,
+             "-------------------- %-32s --------------------", titulo);
+}
+
+bool consumir_resumo_completo() {
+    portENTER_CRITICAL(&trava_configuracao);
+    const bool solicitado = relatorios_forcados == MASCARA_TODOS_RELATORIOS;
+    if (solicitado) relatorios_forcados = 0;
+    portEXIT_CRITICAL(&trava_configuracao);
+    return solicitado;
+}
+
+void concluir_resumo_completo() {
+    ESP_LOGI(ETIQUETA,
+             "======================================================================");
+    if (resumo_concluido != nullptr) xSemaphoreGive(resumo_concluido);
+}
 
 void exibir_link(const char* nome, const EstatisticasLinkTelemetria& link) {
     if (!link.respondeu) {
@@ -69,7 +97,14 @@ void exibir_link(const char* nome, const EstatisticasLinkTelemetria& link) {
              static_cast<unsigned long>(link.capacidades));
 }
 void exibir_relatorios(const DadosTelemetriaVeiculo& dados) {
-    if (servico_relatorios_deve_exibir(GrupoRelatorio::Telemetria)) {
+    const bool resumo_completo = consumir_resumo_completo();
+    if (resumo_completo) {
+        ESP_LOGI(ETIQUETA,
+                 "===================== RESUMO COMPLETO DO MESTRE =====================");
+    }
+    if (resumo_completo ||
+        servico_relatorios_deve_exibir(GrupoRelatorio::Telemetria)) {
+        if (resumo_completo) exibir_secao("TELEMETRIA E SENSORES");
         const EstatisticasTelemetria telemetria =
             servico_telemetria_obter_estatisticas();
         ESP_LOGI(ETIQUETA,
@@ -91,7 +126,8 @@ void exibir_relatorios(const DadosTelemetriaVeiculo& dados) {
                  dados.aceleracao_z_g);
     }
 
-    if (servico_relatorios_deve_exibir(GrupoRelatorio::Uart)) {
+    if (resumo_completo || servico_relatorios_deve_exibir(GrupoRelatorio::Uart)) {
+        if (resumo_completo) exibir_secao("COMUNICACAO UART");
         const EstatisticasUart equipe =
             gerenciador_uart_obter_estatisticas(DestinoUart::Equipe);
         const EstatisticasUart visitantes =
@@ -125,7 +161,9 @@ void exibir_relatorios(const DadosTelemetriaVeiculo& dados) {
         exibir_link("VISITANTES", link_visitantes);
     }
 
-    if (servico_relatorios_deve_exibir(GrupoRelatorio::Sistema)) {
+    if (resumo_completo ||
+        servico_relatorios_deve_exibir(GrupoRelatorio::Sistema)) {
+        if (resumo_completo) exibir_secao("SISTEMA E RECURSOS");
         const RetratoDiagnosticoSistema retrato =
             servico_diagnostico_obter_retrato();
         const auto& i2c = retrato.i2c;
@@ -154,14 +192,15 @@ void exibir_relatorios(const DadosTelemetriaVeiculo& dados) {
                  static_cast<unsigned long long>(total_segundos % 60u),
                  static_cast<unsigned long>(saude.motivo_ultimo_reset));
         ESP_LOGI(ETIQUETA,
-                 "[MEMÓRIA] heap livre=%lu KiB | interno=%lu KiB (bloco=%lu KiB) | PSRAM=%lu KiB (bloco=%lu KiB) | mínimo=%lu KiB | menor pilha=%lu bytes",
+                 "[MEMÓRIA] heap livre=%lu KiB | interno=%lu KiB (bloco=%lu KiB) | PSRAM=%lu KiB (bloco=%lu KiB) | mínimo=%lu KiB | menor pilha=%lu bytes (%s)",
                  static_cast<unsigned long>(saude.heap_livre / 1024u),
                  static_cast<unsigned long>(saude.heap_interno_livre / 1024u),
                  static_cast<unsigned long>(saude.maior_bloco_heap_interno / 1024u),
                  static_cast<unsigned long>(saude.psram_livre / 1024u),
                  static_cast<unsigned long>(saude.maior_bloco_psram / 1024u),
                  static_cast<unsigned long>(saude.menor_heap_livre / 1024u),
-                 static_cast<unsigned long>(saude.bytes_pilha_livres));
+                 static_cast<unsigned long>(saude.bytes_pilha_livres),
+                 saude.tarefa_menor_pilha);
         ESP_LOGI(ETIQUETA,
                  "[SENSORES] I2C operações=%lu sondagens=%lu ausentes=%lu erros=%lu último=%s | ADC erros=%lu último=%s | MPU6050 erros=%lu último=%s",
                  static_cast<unsigned long>(i2c.operacoes_ok),
@@ -172,6 +211,57 @@ void exibir_relatorios(const DadosTelemetriaVeiculo& dados) {
                   esp_err_to_name(sensores.adc.ultimo_erro),
                   static_cast<unsigned long>(sensores.mpu6050.total),
                   esp_err_to_name(sensores.mpu6050.ultimo_erro));
+        const int64_t agora_tarefas = esp_timer_get_time();
+        if (tarefas_relatorio != nullptr &&
+            (resumo_completo || ultimo_relatorio_tarefas_us == 0 ||
+             agora_tarefas - ultimo_relatorio_tarefas_us >= 30000000)) {
+            ultimo_relatorio_tarefas_us = agora_tarefas;
+            servico_diagnostico_obter_tarefas(tarefas_relatorio);
+            std::sort(tarefas_relatorio->tarefas,
+                      tarefas_relatorio->tarefas + tarefas_relatorio->quantidade,
+                      [](const DiagnosticoTarefa& a, const DiagnosticoTarefa& b) {
+                          return a.pilha_minima_livre_bytes <
+                                 b.pilha_minima_livre_bytes;
+                      });
+            ESP_LOGI(ETIQUETA,
+                     "[TAREFAS] retrato=%s | ordenado pela menor margem | CPU 100%%=um nucleo",
+                     tarefas_relatorio->valido ? "valido" : "indisponivel");
+            ESP_LOGI(ETIQUETA,
+                     "+----------------------+--------+------+-----+--------+--------+--------+");
+            ESP_LOGI(ETIQUETA,
+                     "| Tarefa               | CPU    | Core | Pri | Pilha  | Livre  | Margem |");
+            ESP_LOGI(ETIQUETA,
+                     "+----------------------+--------+------+-----+--------+--------+--------+");
+            for (size_t i = 0; i < tarefas_relatorio->quantidade; ++i) {
+                const auto& t = tarefas_relatorio->tarefas[i];
+                char cpu[9] = "n/d";
+                char pilha[12] = "SDK";
+                if (t.cpu_valida) {
+                    std::snprintf(cpu, sizeof(cpu), "%u.%u%%",
+                                  t.cpu_decimos / 10, t.cpu_decimos % 10);
+                }
+                if (t.pilha_reservada_bytes != 0) {
+                    std::snprintf(pilha, sizeof(pilha), "%lu",
+                                  static_cast<unsigned long>(
+                                      t.pilha_reservada_bytes));
+                }
+                const char* margem = t.pilha_minima_livre_bytes < 512
+                                         ? "FALHA"
+                                     : t.pilha_minima_livre_bytes < 1024
+                                         ? "ATENCAO"
+                                         : "OK";
+                ESP_LOGI(ETIQUETA,
+                         "| %-20.20s | %6s | %4d | %3lu | %6s | %6lu | %-6s |",
+                         t.nome, cpu, t.nucleo,
+                         static_cast<unsigned long>(t.prioridade), pilha,
+                         static_cast<unsigned long>(t.pilha_minima_livre_bytes),
+                         margem);
+            }
+            ESP_LOGI(ETIQUETA,
+                     "+----------------------+--------+------+-----+--------+--------+--------+");
+            ESP_LOGI(ETIQUETA,
+                     "[TAREFAS] Core -1=sem afinidade; Pilha SDK=tamanho interno nao catalogado");
+        }
         ESP_LOGI(ETIQUETA,
                  "[ENCODER ESQ] PCNT=%s contagem=%llu leituras/erros=%lu/%lu | acumulado=%llu percurso=%.3f m velocidade=%.2f km/h",
                  encoder_esquerdo.inicializado ? "ativo" : "inativo",
@@ -243,9 +333,21 @@ void exibir_relatorios(const DadosTelemetriaVeiculo& dados) {
                  wifi.rssi_dbm, static_cast<unsigned>(wifi.canal),
                  esp_err_to_name(wifi.ultimo_erro),
                  static_cast<long>(wifi.ultimo_motivo_desconexao));
+        const SituacaoSinalizacao sinalizacao =
+            servico_sinalizacao_obter_situacao();
+        const bool verde_continuo =
+            sinalizacao.estado == EstadoSinalizacao::Saudavel ||
+            sinalizacao.estado == EstadoSinalizacao::WifiAtivo;
+        ESP_LOGI(ETIQUETA,
+                 "[LEDS] estado visual=%s | verde contínuo=%s | falhas hardware=%lu | último=%s",
+                 servico_sinalizacao_nome_estado(sinalizacao.estado),
+                 verde_continuo ? "COMANDADO" : "não",
+                 static_cast<unsigned long>(sinalizacao.falhas_hardware),
+                 esp_err_to_name(sinalizacao.ultimo_erro));
     }
 
-    if (servico_relatorios_deve_exibir(GrupoRelatorio::Ota)) {
+    if (resumo_completo || servico_relatorios_deve_exibir(GrupoRelatorio::Ota)) {
+        if (resumo_completo) exibir_secao("OTA E REDE");
         const SituacaoOta ota = servico_ota_obter_situacao();
         ESP_LOGI(ETIQUETA,
                  "[OTA] estado=%s | instalada=%s | disponível=%s | verificações=%lu | intervalo=%lu min | falhas=%lu | último resultado=%s",
@@ -288,6 +390,7 @@ void exibir_relatorios(const DadosTelemetriaVeiculo& dados) {
                      static_cast<unsigned long>(ota.progresso.tempo_restante_segundos));
         }
     }
+    if (resumo_completo) concluir_resumo_completo();
 }
 
 void tarefa_relatorios(void*) {
@@ -298,7 +401,8 @@ void tarefa_relatorios(void*) {
         copia = dados_mais_recentes;
         possui_dados = dados_disponiveis;
         portEXIT_CRITICAL(&trava_dados);
-        if (possui_dados) exibir_relatorios(copia);
+        if (possui_dados && servico_diagnostico_obter_resumo().valido)
+            exibir_relatorios(copia);
         vTaskDelay(INTERVALO_AVALIACAO);
     }
 }
@@ -306,8 +410,16 @@ void tarefa_relatorios(void*) {
 
 esp_err_t servico_relatorios_iniciar() {
     if (iniciado) return ESP_OK;
-    if (xTaskCreate(tarefa_relatorios, "relatorios", 6144, nullptr, 2, nullptr) !=
+    resumo_concluido = xSemaphoreCreateBinary();
+    if (resumo_concluido == nullptr) return ESP_ERR_NO_MEM;
+    tarefas_relatorio = static_cast<DiagnosticoTarefas*>(heap_caps_calloc(
+        1, sizeof(DiagnosticoTarefas), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (configuracao::criar_tarefa(tarefa_relatorios, "relatorios", nullptr, nullptr) !=
         pdPASS) {
+        heap_caps_free(tarefas_relatorio);
+        tarefas_relatorio = nullptr;
+        vSemaphoreDelete(resumo_concluido);
+        resumo_concluido = nullptr;
         ESP_LOGE(ETIQUETA, "Não foi possível iniciar a tarefa de relatórios");
         return ESP_ERR_NO_MEM;
     }
@@ -368,6 +480,15 @@ void servico_relatorios_solicitar_resumo() {
     portENTER_CRITICAL(&trava_configuracao);
     relatorios_forcados = MASCARA_TODOS_RELATORIOS;
     portEXIT_CRITICAL(&trava_configuracao);
+}
+
+esp_err_t servico_relatorios_solicitar_resumo_e_aguardar(uint32_t limite_ms) {
+    if (!iniciado || resumo_concluido == nullptr) return ESP_ERR_INVALID_STATE;
+    (void)xSemaphoreTake(resumo_concluido, 0);
+    servico_relatorios_solicitar_resumo();
+    return xSemaphoreTake(resumo_concluido, pdMS_TO_TICKS(limite_ms)) == pdTRUE
+               ? ESP_OK
+               : ESP_ERR_TIMEOUT;
 }
 
 bool servico_relatorios_deve_exibir(GrupoRelatorio grupo) {

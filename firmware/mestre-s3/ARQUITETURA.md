@@ -103,13 +103,13 @@ forma, apenas as estruturas transitórias do analisador JSON permanecem dinâmic
 A apresentação ao vivo usa um retrato a 4 Hz. Em paralelo,
 `servico_registro_telemetria` reduz esse mesmo retrato para 1 Hz e o entrega por
 fila a uma única tarefa proprietária dos CSVs. O arquivo ativo é sincronizado a
-cada dez segundos, fechado a cada cinco minutos e recuperado após reinicialização.
+cada dez segundos, fechado a cada hora ou 2 MiB e recuperado após reinicialização.
 Se o cartão não estiver disponível na partida, o mestre mantém a telemetria ao
 vivo e tenta habilitar novamente o histórico a cada trinta segundos.
-O upload é iniciado explicitamente no fim da sessão, abre uma sessão Wi-Fi
-temporária, exige confirmação nominal do Google e só então move o CSV para
-`enviados`. O gerenciador do cartão conhece apenas SPI e montagem FAT; toda a
-política permanece no serviço.
+O upload é iniciado explicitamente, abre uma sessão Wi-Fi temporária, transmite
+o CSV em blocos com progresso compartilhado com o painel local, exige confirmação
+nominal do Google e só então move o CSV para `enviados`. O gerenciador do cartão
+conhece apenas SPI e montagem FAT; toda a política permanece no serviço.
 
 Os gerenciadores retornam `esp_err_t`. O código chamador deve sempre verificar o
 resultado antes de usar os dados ou avançar para a próxima etapa.
@@ -146,7 +146,63 @@ tela. Nenhuma mensagem faz alocação dinâmica durante a operação.
 
 `servicos/servico_supervisao.cpp` acompanha pulsos da tarefa de telemetria e dos
 dois canais UART. Cada alvo possui tempo limite compatível com o maior intervalo
-configurável e recuperação independente. A supervisão mede a margem de pilha das
-tarefas associadas. Os canais UART são recuperados restaurando filas, buffers,
+configurável e recuperação independente. O diagnóstico mede a margem de pilha das
+tarefas por um retrato do FreeRTOS. Os canais UART são recuperados restaurando filas, buffers,
 pinos e velocidade sem reiniciar o restante do mestre; a tarefa de telemetria não
 é apagada à força enquanto pode estar usando um periférico.
+
+### Escalonamento e diagnóstico de recursos
+
+`include/nucleo/configuracao_tarefas.h` centraliza nomes, pilhas, prioridades e
+afinidades; cada serviço continua responsável pela criação e pelo ciclo de vida.
+Aquisição, telemetria e enlaces ficam no núcleo 1; OTA, upload e registro SD no
+núcleo 0. Painel, terminal, sinalização, relatórios e supervisão ficam sem afinidade
+fixa. Isso não reserva núcleos: tarefas do ESP-IDF também são escalonadas neles.
+Pilhas e buffers UART existentes foram preservados para ajuste posterior com
+medição sob TLS, OTA e recuperação. Buffers DMA continuam sob as restrições dos
+drivers; PSRAM não substitui indiscriminadamente memória interna/DMA.
+
+As medições em bancada mostraram margens mínimas de 124 bytes na tarefa `main`
+durante a inicialização e 492 bytes em `sys_evt` após o uso do Wi-Fi. Por isso,
+somente essas pilhas do ESP-IDF foram ajustadas: `main` para 6144 bytes e a tarefa
+de eventos do sistema para 4096 bytes. O diagnóstico registra também o nome da
+tarefa com a menor margem, evitando aumentos indiscriminados.
+
+A supervisão de prioridade alta apenas detecta e enfileira recuperações; a tarefa
+`recuperacao`, de prioridade 4, executa as ações potencialmente bloqueantes.
+Aquisição, SD, upload e OTA também informam fase e prazo de atividade; espera ociosa
+tem prazo zero. Atrasos desses serviços geram diagnóstico, sem apagar tarefas à
+força. Os prazos de rede são maiores que os de aquisição.
+
+O diagnóstico coleta até 48 tarefas a cada cinco segundos, incluindo tarefas do
+SDK, com prioridade, afinidade, estado, menor margem de pilha e CPU por janela.
+CPU de 100% representa um núcleo; a primeira janela não possui medição. Os campos
+de núcleo representam afinidade, não o núcleo instantâneo de execução. Uma coleta
+sem capacidade é marcada inválida. Relatórios de tarefas são emitidos a cada 30 s;
+suas cópias e as do log usam PSRAM, sem alocação por mensagem. Alertas antecipados
+ocorrem abaixo de 48 KiB internos livres ou de 20 KiB no maior bloco; limites
+críticos são 24 KiB e 8 KiB, respectivamente.
+
+O resumo solicitado pela opção 1 do terminal é separado por seções e aguarda a
+impressão terminar antes de redesenhar o menu. A tabela de tarefas é ordenada pela
+menor margem de pilha e usa estados textuais, compatíveis com monitores seriais
+sem ANSI. O resumo informa ainda o estado visual comandado e se o verde contínuo
+é esperado; isso confirma a decisão do software, mas não detecta LED aberto,
+resistor, polaridade ou ligação física incorreta.
+
+### Registro de diagnóstico no cartão
+
+A tarefa de registro existente também mantém `/sdcard/logs/esp_<sessao>_<parte>.log`.
+Grava versão do firmware/IDF, chip, flash, motivo numérico do último reset, memória
+interna/PSRAM/DMA, pilhas, CPU, erros dos sensores e comunicação, fases supervisionadas
+e resultado dos uploads. Os tempos são relativos ao boot. Há registro periódico
+a cada 30 s e em mudanças de estado/contadores, agregando rajadas em até um registro
+por segundo; isso não é uma cópia integral do console nem um core dump.
+
+Os segmentos giram em aproximadamente 1 MiB e a sessão limita o diagnóstico a
+aproximadamente 8 MiB (pode exceder pelo último registro). Ao atingir o limite,
+somente o log para; CSV continua. Arquivos anteriores são preservados e não são
+enviados ao Google. Não há retenção global: é necessário acompanhar o espaço livre
+entre sessões. Cada registro é sincronizado e fechado; falhas de SD têm nova
+tentativa em 30 s. Falha do cartão ou queda brusca de energia ainda pode impedir
+a persistência do último evento. Credenciais não são incluídas.

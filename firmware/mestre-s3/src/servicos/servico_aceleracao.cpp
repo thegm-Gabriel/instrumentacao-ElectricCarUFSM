@@ -1,4 +1,6 @@
 // Implementa aquisição filtrada e calibração do movimento longitudinal.
+#include "nucleo/configuracao_tarefas.h"
+#include "servicos/servico_supervisao.h"
 #include "servicos/servico_aceleracao.h"
 
 #include <algorithm>
@@ -187,6 +189,8 @@ void tarefa_aquisicao(void*) {
 
     while (true) {
         LeituraMpu6050 leitura{};
+        servico_supervisao_informar_atividade(ModuloSupervisionado::Aceleracao,
+            "aceleracao", "aquisicao MPU6050", 2000);
         const esp_err_t erro = mpu6050_ler(&leitura);
         const int64_t agora_us = esp_timer_get_time();
         if (erro != ESP_OK) {
@@ -424,8 +428,7 @@ esp_err_t servico_aceleracao_iniciar(
     estado.leituras_ok = 1;
     portEXIT_CRITICAL(&trava_estado);
 
-    if (xTaskCreate(tarefa_aquisicao, "aceleracao", 4096, nullptr, 5,
-                    &tarefa_handle) != pdPASS) {
+    if (configuracao::criar_tarefa(tarefa_aquisicao, "aceleracao", nullptr, &tarefa_handle) != pdPASS) {
         tarefa_handle = nullptr;
         portENTER_CRITICAL(&trava_estado);
         estado.iniciado = false;

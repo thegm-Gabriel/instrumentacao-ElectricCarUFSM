@@ -1,4 +1,5 @@
 // Detecta tarefas sem atividade e executa recuperações localizadas.
+#include "nucleo/configuracao_tarefas.h"
 #include "servicos/servico_supervisao.h"
 
 #include <array>
@@ -8,6 +9,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 
 namespace {
 constexpr char ETIQUETA[] = "supervisao";
@@ -18,12 +20,42 @@ struct RegistroModulo {
     AcaoRecuperacaoModulo acao = nullptr;
     uint32_t instante_ultimo_pulso_ms = 0;
     TaskHandle_t tarefa_monitorada = nullptr;
+    bool recuperacao_pendente = false;
 };
 
 std::array<RegistroModulo, static_cast<size_t>(ModuloSupervisionado::Quantidade)> modulos{};
 portMUX_TYPE trava = portMUX_INITIALIZER_UNLOCKED;
 TaskHandle_t tarefa_supervisao = nullptr;
 uint32_t menor_pilha_supervisao = 0;
+QueueHandle_t fila_recuperacao = nullptr;
+TaskHandle_t tarefa_recuperacao = nullptr;
+
+struct RecuperacaoPendente {
+    ModuloSupervisionado modulo;
+    AcaoRecuperacaoModulo acao;
+    const char* nome;
+};
+
+void recuperar(void*) {
+    RecuperacaoPendente pendente{};
+    while (true) {
+        if (xQueueReceive(fila_recuperacao, &pendente, portMAX_DELAY) != pdTRUE) continue;
+        const esp_err_t resultado = pendente.acao();
+        portENTER_CRITICAL(&trava);
+        auto& registro = modulos[static_cast<size_t>(pendente.modulo)];
+        if (registro.estado.registrado && registro.acao == pendente.acao) {
+            registro.recuperacao_pendente = false;
+            registro.estado.ultimo_resultado = resultado;
+            if (resultado != ESP_OK) {
+                registro.estado.em_recuperacao = false;
+                registro.estado.recuperacoes_com_falha++;
+            }
+        }
+        portEXIT_CRITICAL(&trava);
+        ESP_LOGI(ETIQUETA, "Recuperação de %s: %s", pendente.nome,
+                 esp_err_to_name(resultado));
+    }
+}
 
 RegistroModulo* localizar(ModuloSupervisionado modulo) {
     const size_t indice = static_cast<size_t>(modulo);
@@ -45,16 +77,24 @@ void tarefa(void*) {
             AcaoRecuperacaoModulo acao = nullptr;
             const char* nome = nullptr;
             portENTER_CRITICAL(&trava);
-            if (registro.tarefa_monitorada != nullptr) {
-                const uint32_t pilha_atual =
-                    uxTaskGetStackHighWaterMark(registro.tarefa_monitorada);
-                if (registro.estado.bytes_pilha_livres == 0 ||
-                    pilha_atual < registro.estado.bytes_pilha_livres) {
-                    registro.estado.bytes_pilha_livres = pilha_atual;
-                }
-            }
             const uint32_t idade = agora_ms - registro.instante_ultimo_pulso_ms;
             registro.estado.idade_ultimo_pulso_ms = idade;
+            if (registro.estado.registrado && registro.acao == nullptr) {
+                const bool atrasado = registro.estado.tempo_limite_ms != 0 &&
+                                      idade > registro.estado.tempo_limite_ms;
+                const bool avisar = atrasado && !registro.estado.atrasado;
+                registro.estado.atrasado = atrasado;
+                if (avisar) registro.estado.falhas_detectadas++;
+                const char* fase = registro.estado.fase;
+                nome = registro.estado.nome;
+                portEXIT_CRITICAL(&trava);
+                if (avisar) ESP_LOGE(ETIQUETA, "%s sem progresso na fase %s", nome, fase);
+                continue;
+            }
+            if (registro.recuperacao_pendente) {
+                portEXIT_CRITICAL(&trava);
+                continue;
+            }
             if (registro.estado.registrado && registro.estado.em_recuperacao &&
                 idade > registro.estado.tempo_limite_ms) {
                 registro.estado.em_recuperacao = false;
@@ -69,22 +109,27 @@ void tarefa(void*) {
                 registro.instante_ultimo_pulso_ms = agora_ms;
                 acao = registro.acao;
                 nome = registro.estado.nome;
+                registro.recuperacao_pendente = acao != nullptr;
             }
             portEXIT_CRITICAL(&trava);
             if (acao == nullptr) continue;
 
             ESP_LOGE(ETIQUETA, "%s sem atividade; iniciando recuperação localizada", nome);
-            const esp_err_t resultado = acao();
+            const RecuperacaoPendente pendente{
+                static_cast<ModuloSupervisionado>(&registro - modulos.data()), acao, nome};
+            const esp_err_t resultado = xQueueSend(fila_recuperacao, &pendente, 0) == pdTRUE
+                                           ? ESP_OK : ESP_ERR_NO_MEM;
             portENTER_CRITICAL(&trava);
             registro.estado.ultimo_resultado = resultado;
             if (resultado != ESP_OK) {
+                registro.recuperacao_pendente = false;
                 registro.estado.em_recuperacao = false;
                 registro.estado.recuperacoes_com_falha++;
             }
             portEXIT_CRITICAL(&trava);
             if (resultado == ESP_OK) {
                 ESP_LOGI(ETIQUETA,
-                         "Ação de recuperação de %s executada; aguardando novo pulso",
+                         "Recuperação de %s enfileirada; aguardando novo pulso",
                          nome);
             } else {
                 ESP_LOGE(ETIQUETA, "Falha ao recuperar %s: %s", nome,
@@ -95,10 +140,44 @@ void tarefa(void*) {
 }
 }  // namespace
 
+void servico_supervisao_informar_atividade(ModuloSupervisionado modulo,
+    const char* nome, const char* fase, uint32_t limite_ms) {
+    auto* registro = localizar(modulo);
+    if (registro == nullptr || nome == nullptr || fase == nullptr) return;
+    portENTER_CRITICAL(&trava);
+    registro->estado.registrado = true;
+    registro->estado.nome = nome;
+    registro->estado.fase = fase;
+    registro->estado.tempo_limite_ms = limite_ms;
+    registro->estado.atrasado = false;
+    registro->estado.idade_ultimo_pulso_ms = 0;
+    registro->instante_ultimo_pulso_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+    portEXIT_CRITICAL(&trava);
+}
+
+void servico_supervisao_atualizar_pilha(ModuloSupervisionado modulo, uint32_t bytes) {
+    auto* registro = localizar(modulo);
+    if (registro == nullptr) return;
+    portENTER_CRITICAL(&trava);
+    registro->estado.bytes_pilha_livres = bytes;
+    portEXIT_CRITICAL(&trava);
+}
+
 esp_err_t servico_supervisao_iniciar() {
     if (tarefa_supervisao != nullptr) return ESP_OK;
-    if (xTaskCreate(tarefa, "supervisao", 3072, nullptr, 8,
-                    &tarefa_supervisao) != pdPASS) {
+    fila_recuperacao = xQueueCreate(modulos.size(), sizeof(RecuperacaoPendente));
+    if (fila_recuperacao == nullptr) return ESP_ERR_NO_MEM;
+    if (configuracao::criar_tarefa(recuperar, "recuperacao", nullptr,
+                                  &tarefa_recuperacao) != pdPASS) {
+        vQueueDelete(fila_recuperacao);
+        fila_recuperacao = nullptr;
+        return ESP_ERR_NO_MEM;
+    }
+    if (configuracao::criar_tarefa(tarefa, "supervisao", nullptr, &tarefa_supervisao) != pdPASS) {
+        vTaskDelete(tarefa_recuperacao);
+        tarefa_recuperacao = nullptr;
+        vQueueDelete(fila_recuperacao);
+        fila_recuperacao = nullptr;
         return ESP_ERR_NO_MEM;
     }
     ESP_LOGI(ETIQUETA, "Supervisão localizada iniciada");

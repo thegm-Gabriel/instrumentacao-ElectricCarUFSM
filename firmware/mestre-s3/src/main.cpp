@@ -1,4 +1,5 @@
 // Compõe os módulos do mestre e define sua política de inicialização.
+#include "nucleo/configuracao_tarefas.h"
 #include <cstdio>
 
 #include "dispositivos/leitor_tensao.h"
@@ -263,8 +264,7 @@ void tarefa_telemetria(void*) {
 
 esp_err_t criar_tarefa_telemetria() {
     if (tarefa_telemetria_handle != nullptr) return ESP_ERR_INVALID_STATE;
-    if (xTaskCreate(tarefa_telemetria, "telemetria", 6144, nullptr, 5,
-                    &tarefa_telemetria_handle) != pdPASS) {
+    if (configuracao::criar_tarefa(tarefa_telemetria, "telemetria", nullptr, &tarefa_telemetria_handle) != pdPASS) {
         tarefa_telemetria_handle = nullptr;
         return ESP_ERR_NO_MEM;
     }
@@ -543,13 +543,6 @@ extern "C" void app_main(void) {
         ESP_LOGW(ETIQUETA, "Telemetria ativa, mas OTA indisponível: %s",
                  esp_err_to_name(erro_ota));
         notificar_servico_degradado("SERVICO OTA", erro_ota);
-        if (erro_wifi == ESP_OK) {
-            const esp_err_t erro_encerramento = servico_wifi_encerrar_sessao();
-            if (erro_encerramento != ESP_OK) {
-                ESP_LOGW(ETIQUETA, "Falha ao encerrar sessão Wi-Fi: %s",
-                         esp_err_to_name(erro_encerramento));
-            }
-        }
     }
 
     atualizar_partida("TERMINAL", 90);

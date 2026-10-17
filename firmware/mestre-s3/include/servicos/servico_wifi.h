@@ -8,6 +8,12 @@
 #include "freertos/FreeRTOS.h"
 #include "nucleo/configuracao_wifi.h"
 
+enum class FinalidadeSessaoWifi : uint8_t {
+    Nenhuma,
+    Ota,
+    SincronizacaoGoogle,
+};
+
 struct PoliticaConexaoWifi {
     uint8_t tentativas_por_rede = configuracao::TENTATIVAS_WIFI_PADRAO;
     uint32_t tempo_por_tentativa_ms =
@@ -38,13 +44,15 @@ struct ResumoWifi {
     uint32_t desconexoes_inesperadas = 0;
     uint32_t tentativas_ultima_sessao = 0;
     bool sessao_em_andamento = false;
+    FinalidadeSessaoWifi finalidade_sessao = FinalidadeSessaoWifi::Nenhuma;
     PoliticaConexaoWifi politica;
 };
 
 // Carrega os perfis da NVS já inicializada e tenta primeiro a rede principal.
 esp_err_t servico_wifi_iniciar();
-esp_err_t servico_wifi_abrir_sessao();
-esp_err_t servico_wifi_encerrar_sessao();
+esp_err_t servico_wifi_abrir_sessao(FinalidadeSessaoWifi finalidade);
+esp_err_t servico_wifi_encerrar_sessao(FinalidadeSessaoWifi finalidade);
+const char* servico_wifi_nome_finalidade_sessao(FinalidadeSessaoWifi finalidade);
 
 // A chamada representa a autorização explícita do usuário para tentar a rede.
 esp_err_t servico_wifi_conectar_rede_informada(const char* ssid, const char* senha);

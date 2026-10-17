@@ -1,4 +1,5 @@
 // Roteia quadros UART e supervisiona a comunicação com satélites.
+#include "nucleo/configuracao_tarefas.h"
 #include "servicos/servico_enlace_satelites.h"
 
 #include <cstring>
@@ -137,8 +138,7 @@ esp_err_t servico_enlace_satelites_iniciar() {
             TAMANHO_CONFIRMACAO_TELEMETRIA);
         const char* nome_tarefa = canal.origem == DestinoUart::Equipe
                                       ? "enlace_equipe" : "enlace_visitantes";
-        if (xTaskCreate(tarefa_recepcao, nome_tarefa, 6144, &canal, 6,
-                        &canal.tarefa) != pdPASS) {
+        if (configuracao::criar_tarefa(tarefa_recepcao, nome_tarefa, &canal, &canal.tarefa) != pdPASS) {
             ESP_LOGE(ETIQUETA, "Não foi possível iniciar o enlace de %s", canal.nome);
             servico_enlace_satelites_encerrar();
             return ESP_ERR_NO_MEM;

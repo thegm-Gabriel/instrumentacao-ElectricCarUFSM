@@ -1,4 +1,6 @@
 // Orquestra descoberta, autorização e execução das atualizações OTA.
+#include "nucleo/configuracao_tarefas.h"
+#include "servicos/servico_supervisao.h"
 #include "servicos/servico_ota.h"
 
 #include <cctype>
@@ -69,18 +71,27 @@ bool cancelamento_em_andamento = false;
 void definir_estado(EstadoServicoOta estado, esp_err_t erro = ESP_OK);
 bool interpretar_versao(const char* texto, int partes[3]);
 
+bool wifi_ocupado_para_ota(const char* operacao) {
+    const ResumoWifi wifi = servico_wifi_obter_resumo();
+    if (!wifi.sessao_em_andamento) return false;
+    ESP_LOGW(ETIQUETA, "%s recusada: Wi-Fi ocupado pela %s", operacao,
+             servico_wifi_nome_finalidade_sessao(wifi.finalidade_sessao));
+    return true;
+}
+
 class SessaoWifiOta {
 public:
     SessaoWifiOta() = default;
     esp_err_t ativar() {
-        definir_estado(EstadoServicoOta::AguardandoRede);
-        const esp_err_t erro = servico_wifi_abrir_sessao();
+        const esp_err_t erro =
+            servico_wifi_abrir_sessao(FinalidadeSessaoWifi::Ota);
         ativo_ = erro == ESP_OK;
         return erro;
     }
     ~SessaoWifiOta() {
         if (ativo_) {
-            const esp_err_t erro = servico_wifi_encerrar_sessao();
+            const esp_err_t erro =
+                servico_wifi_encerrar_sessao(FinalidadeSessaoWifi::Ota);
             if (erro != ESP_OK) {
                 ESP_LOGW(ETIQUETA, "Falha ao encerrar a sessão Wi-Fi da OTA: %s",
                          esp_err_to_name(erro));
@@ -340,9 +351,19 @@ esp_err_t verificar_atualizacao() {
     xSemaphoreTake(mutex_estado, portMAX_DELAY);
     situacao.verificacoes++;
     xSemaphoreGive(mutex_estado);
+    definir_estado(EstadoServicoOta::AguardandoRede);
     SessaoWifiOta sessao_wifi;
     esp_err_t erro = sessao_wifi.ativar();
     if (erro != ESP_OK) {
+        const ResumoWifi wifi = servico_wifi_obter_resumo();
+        if (wifi.sessao_em_andamento &&
+            wifi.finalidade_sessao != FinalidadeSessaoWifi::Ota) {
+            ESP_LOGW(
+                ETIQUETA,
+                "Verificação OTA adiada: Wi-Fi ocupado pela %s",
+                servico_wifi_nome_finalidade_sessao(wifi.finalidade_sessao));
+            return erro;
+        }
         ESP_LOGE(ETIQUETA,
                  "Não foi possível verificar atualizações porque o Wi-Fi está desconectado");
         definir_estado(EstadoServicoOta::Falha, erro);
@@ -418,6 +439,8 @@ void calcular_progresso(ProgressoTransferenciaOta* progresso, uint32_t bytes,
 
 void atualizar_progresso_satelite(uint32_t bytes, uint32_t total,
                                   uint32_t decorrido_ms) {
+    servico_supervisao_informar_atividade(ModuloSupervisionado::Ota,
+        "servico_ota", "transferindo satelite", 180000);
     xSemaphoreTake(mutex_estado, portMAX_DELAY);
     SituacaoOtaSatelite* alvo = situacao.alvo_ativo == AlvoOta::Equipe
                                     ? &situacao.equipe : &situacao.visitantes;
@@ -439,6 +462,8 @@ void atualizar_progresso_satelite(uint32_t bytes, uint32_t total,
 
 void atualizar_progresso_mestre(uint32_t bytes, uint32_t total,
                                 uint32_t decorrido_ms) {
+    servico_supervisao_informar_atividade(ModuloSupervisionado::Ota,
+        "servico_ota", "download/gravacao mestre", 180000);
     xSemaphoreTake(mutex_estado, portMAX_DELAY);
     calcular_progresso(&situacao.progresso, bytes, total, decorrido_ms);
     xSemaphoreGive(mutex_estado);
@@ -679,6 +704,15 @@ void executar_atualizacao_autorizada() {
     SessaoWifiOta sessao_wifi;
     esp_err_t erro = sessao_wifi.ativar();
     if (erro != ESP_OK) {
+        const ResumoWifi wifi = servico_wifi_obter_resumo();
+        if (wifi.sessao_em_andamento &&
+            wifi.finalidade_sessao != FinalidadeSessaoWifi::Ota) {
+            ESP_LOGW(
+                ETIQUETA,
+                "Instalação OTA não iniciada: Wi-Fi ocupado pela %s; a atualização continua pendente",
+                servico_wifi_nome_finalidade_sessao(wifi.finalidade_sessao));
+            return;
+        }
         definir_estado(EstadoServicoOta::Falha, erro);
         ESP_LOGE(ETIQUETA, "A atualização não começou porque o Wi-Fi está indisponível");
         return;
@@ -717,15 +751,23 @@ void cancelar_atualizacao() {
 void tarefa_ota(void*) {
     bool verificar = true;
     while (true) {
-        if (verificar) verificar_atualizacao();
+        if (verificar) {
+            servico_supervisao_informar_atividade(ModuloSupervisionado::Ota,
+                "servico_ota", "rede/verificacao manifesto", 180000);
+            verificar_atualizacao();
+        }
         xSemaphoreTake(mutex_estado, portMAX_DELAY);
         const uint32_t intervalo_minutos = situacao.intervalo_verificacao_minutos;
         xSemaphoreGive(mutex_estado);
         const TickType_t espera = pdMS_TO_TICKS(intervalo_minutos * 60UL * 1000UL);
+        servico_supervisao_informar_atividade(ModuloSupervisionado::Ota,
+            "servico_ota", "aguardando solicitacao", 0);
         EventBits_t eventos = xEventGroupWaitBits(
             eventos_ota, BIT_VERIFICAR | BIT_AUTORIZAR | BIT_CANCELAR |
                             BIT_INTERVALO_ALTERADO,
             pdTRUE, pdFALSE, espera);
+        servico_supervisao_informar_atividade(ModuloSupervisionado::Ota,
+            "servico_ota", "processando solicitacao", 180000);
         if ((eventos & BIT_CANCELAR) != 0) cancelar_atualizacao();
         if ((eventos & BIT_AUTORIZAR) != 0) executar_atualizacao_autorizada();
         verificar = eventos == 0 || (eventos & BIT_VERIFICAR) != 0;
@@ -784,8 +826,7 @@ esp_err_t servico_ota_iniciar() {
     situacao.intervalo_verificacao_minutos = carregar_intervalo_verificacao();
     xSemaphoreGive(mutex_estado);
 
-    if (xTaskCreate(tarefa_ota, "servico_ota", 14336, nullptr, 4,
-                    &tarefa_ota_handle) != pdPASS) {
+    if (configuracao::criar_tarefa(tarefa_ota, "servico_ota", nullptr, &tarefa_ota_handle) != pdPASS) {
         tarefa_ota_handle = nullptr;
         vEventGroupDelete(eventos_ota);
         eventos_ota = nullptr;
@@ -816,12 +857,20 @@ esp_err_t servico_ota_rejeitar_firmware_em_execucao() {
 
 esp_err_t servico_ota_solicitar_verificacao() {
     if (!iniciado || eventos_ota == nullptr) return ESP_ERR_INVALID_STATE;
+    if (wifi_ocupado_para_ota("Verificação OTA")) return ESP_ERR_INVALID_STATE;
+    const SituacaoOta atual = servico_ota_obter_situacao();
+    if (atual.estado == EstadoServicoOta::Verificando ||
+        atual.estado == EstadoServicoOta::Baixando) {
+        ESP_LOGW(ETIQUETA, "Verificação OTA recusada: outra operação OTA está ativa");
+        return ESP_ERR_INVALID_STATE;
+    }
     xEventGroupSetBits(eventos_ota, BIT_VERIFICAR);
     return ESP_OK;
 }
 
 esp_err_t servico_ota_autorizar_atualizacao() {
     if (!iniciado || eventos_ota == nullptr) return ESP_ERR_INVALID_STATE;
+    if (wifi_ocupado_para_ota("Autorização OTA")) return ESP_ERR_INVALID_STATE;
     xSemaphoreTake(mutex_estado, portMAX_DELAY);
     const bool aguardando = situacao.estado == EstadoServicoOta::AguardandoAutorizacao &&
                             situacao.versao_disponivel[0] != '\0' &&
@@ -839,6 +888,9 @@ esp_err_t servico_ota_autorizar_atualizacao() {
 
 esp_err_t servico_ota_autorizar_atualizacao_todos() {
     if (!iniciado || eventos_ota == nullptr) return ESP_ERR_INVALID_STATE;
+    if (wifi_ocupado_para_ota("Autorização OTA conjunta")) {
+        return ESP_ERR_INVALID_STATE;
+    }
     xSemaphoreTake(mutex_estado, portMAX_DELAY);
     const auto alvo_disponivel = [](EstadoOtaSatelite estado) {
         return estado == EstadoOtaSatelite::Atualizado ||
@@ -873,6 +925,9 @@ esp_err_t servico_ota_autorizar_atualizacao_satelite(AlvoOta alvo) {
     if (!iniciado || eventos_ota == nullptr ||
         (alvo != AlvoOta::Equipe && alvo != AlvoOta::Visitantes)) {
         return ESP_ERR_INVALID_ARG;
+    }
+    if (wifi_ocupado_para_ota("Autorização OTA de satélite")) {
+        return ESP_ERR_INVALID_STATE;
     }
     xSemaphoreTake(mutex_estado, portMAX_DELAY);
     const SituacaoOtaSatelite& satelite = alvo == AlvoOta::Equipe

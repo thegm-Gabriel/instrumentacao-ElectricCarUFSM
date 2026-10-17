@@ -40,6 +40,7 @@ struct EstadoServicoWifi {
     bool sessao_em_andamento = false;
     bool aguardando_autorizacao_secundaria = false;
     uint32_t tentativas_ultima_sessao = 0;
+    FinalidadeSessaoWifi finalidade_sessao = FinalidadeSessaoWifi::Nenhuma;
 };
 
 ConfiguracaoPerfis perfis{};
@@ -96,10 +97,14 @@ EstadoServicoWifi copiar_estado_servico() {
     return copia;
 }
 
-void definir_sessao(bool em_andamento, bool aguardando_autorizacao) {
+void definir_sessao(
+    bool em_andamento, bool aguardando_autorizacao,
+    FinalidadeSessaoWifi finalidade = FinalidadeSessaoWifi::Nenhuma) {
     portENTER_CRITICAL(&trava_estado_servico);
     estado_servico.sessao_em_andamento = em_andamento;
     estado_servico.aguardando_autorizacao_secundaria = aguardando_autorizacao;
+    estado_servico.finalidade_sessao =
+        em_andamento ? finalidade : FinalidadeSessaoWifi::Nenhuma;
     portEXIT_CRITICAL(&trava_estado_servico);
 }
 
@@ -459,13 +464,24 @@ esp_err_t servico_wifi_iniciar() {
     return ESP_OK;
 }
 
-esp_err_t servico_wifi_abrir_sessao() {
+esp_err_t servico_wifi_abrir_sessao(FinalidadeSessaoWifi finalidade) {
+    if (finalidade == FinalidadeSessaoWifi::Nenhuma) return ESP_ERR_INVALID_ARG;
     if (mutex_alteracoes == nullptr) return ESP_ERR_INVALID_STATE;
     BloqueioAlteracoes bloqueio;
     if (!bloqueio.adquirido()) return ESP_ERR_TIMEOUT;
-    if (!servico_pronto_sem_sessao()) return ESP_ERR_INVALID_STATE;
+    const EstadoServicoWifi estado_atual = copiar_estado_servico();
+    if (!estado_atual.iniciado) return ESP_ERR_INVALID_STATE;
+    if (estado_atual.sessao_em_andamento) {
+        ESP_LOGW(
+            ETIQUETA,
+            "Sessão para %s recusada: Wi-Fi reservado para %s",
+            servico_wifi_nome_finalidade_sessao(finalidade),
+            servico_wifi_nome_finalidade_sessao(
+                estado_atual.finalidade_sessao));
+        return ESP_ERR_INVALID_STATE;
+    }
 
-    definir_sessao(true, false);
+    definir_sessao(true, false, finalidade);
     reiniciar_contador_tentativas();
     if (gerenciador_wifi_esta_conectado()) return ESP_OK;
 
@@ -540,11 +556,24 @@ esp_err_t servico_wifi_abrir_sessao() {
     return ultimo_erro;
 }
 
-esp_err_t servico_wifi_encerrar_sessao() {
+esp_err_t servico_wifi_encerrar_sessao(FinalidadeSessaoWifi finalidade) {
+    if (finalidade == FinalidadeSessaoWifi::Nenhuma) return ESP_ERR_INVALID_ARG;
     if (mutex_alteracoes == nullptr) return ESP_ERR_INVALID_STATE;
     BloqueioAlteracoes bloqueio;
     if (!bloqueio.adquirido()) return ESP_ERR_TIMEOUT;
-    if (!copiar_estado_servico().iniciado) return ESP_ERR_INVALID_STATE;
+    const EstadoServicoWifi estado_atual = copiar_estado_servico();
+    if (!estado_atual.iniciado || !estado_atual.sessao_em_andamento) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (estado_atual.finalidade_sessao != finalidade) {
+        ESP_LOGW(
+            ETIQUETA,
+            "Encerramento por %s recusado: sessão pertence a %s",
+            servico_wifi_nome_finalidade_sessao(finalidade),
+            servico_wifi_nome_finalidade_sessao(
+                estado_atual.finalidade_sessao));
+        return ESP_ERR_INVALID_STATE;
+    }
     const esp_err_t erro = gerenciador_wifi_desativar(TEMPO_DESLIGAMENTO);
     definir_sessao(false, false);
     if (erro != ESP_OK) {
@@ -552,6 +581,17 @@ esp_err_t servico_wifi_encerrar_sessao() {
                  esp_err_to_name(erro));
     }
     return erro;
+}
+
+const char* servico_wifi_nome_finalidade_sessao(
+    FinalidadeSessaoWifi finalidade) {
+    switch (finalidade) {
+        case FinalidadeSessaoWifi::Nenhuma: return "nenhuma operação";
+        case FinalidadeSessaoWifi::Ota: return "atualização OTA";
+        case FinalidadeSessaoWifi::SincronizacaoGoogle:
+            return "sincronização com o Google";
+    }
+    return "operação desconhecida";
 }
 
 esp_err_t servico_wifi_conectar_rede_informada(const char* ssid,
@@ -806,6 +846,7 @@ ResumoWifi servico_wifi_obter_resumo() {
     resumo.tentativas_ultima_sessao =
         estado_local.tentativas_ultima_sessao;
     resumo.sessao_em_andamento = estado_local.sessao_em_andamento;
+    resumo.finalidade_sessao = estado_local.finalidade_sessao;
     resumo.politica = copia.politica;
     std::strncpy(resumo.rede_ativa, estado.ssid_atual,
                  sizeof(resumo.rede_ativa) - 1);

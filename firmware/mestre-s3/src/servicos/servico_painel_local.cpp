@@ -1,6 +1,8 @@
 // Atualiza o painel local com estado, telemetria e progresso OTA.
+#include "nucleo/configuracao_tarefas.h"
 #include "servicos/servico_painel_local.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -15,6 +17,7 @@
 #include "nucleo/configuracao_placa.h"
 #include "servicos/servico_diagnostico.h"
 #include "servicos/servico_ota.h"
+#include "servicos/servico_registro_telemetria.h"
 #include "servicos/servico_sinalizacao.h"
 #include "servicos/servico_telemetria.h"
 #include "servicos/servico_wifi.h"
@@ -22,7 +25,9 @@
 namespace {
 constexpr char ETIQUETA[] = "painel_local";
 constexpr std::size_t MAXIMO_LINHAS = 8;
+constexpr std::size_t MAXIMO_LINHAS_COM_PROGRESSO = MAXIMO_LINHAS - 1;
 constexpr std::size_t TAMANHO_LINHA = 22;
+constexpr int PROGRESSO_DECIMOS_MAXIMO = 1000;
 constexpr uint32_t INTERVALO_REPETICAO_ERRO_MS = 5000;
 constexpr uint32_t INTERVALO_PAGINA_SAUDAVEL_MS = 6000;
 constexpr uint32_t INTERVALO_ALTERNANCIA_ALERTA_MS = 3000;
@@ -33,9 +38,11 @@ constexpr uint32_t INTERVALO_LEMBRETE_AVISO_MS = 16000;
 constexpr uint32_t DURACAO_LEMBRETE_AVISO_MS = 7000;
 constexpr uint32_t INTERVALO_LEMBRETE_FALHA_MS = 14000;
 constexpr uint32_t DURACAO_LEMBRETE_FALHA_MS = 10000;
+constexpr uint32_t DURACAO_RESUMO_UPLOAD_MS = 8000;
 constexpr UBaseType_t CAPACIDADE_FILA_MENSAGENS = 10;
 constexpr uint32_t CAUSAS_EXIBIVEIS[] = {
     CausaSaudeHeapCritico,
+    CausaSaudeMemoriaBaixa,
     CausaSaudePilhaCritica,
     CausaSaudeSensor,
     CausaSaudeI2c,
@@ -256,6 +263,7 @@ std::size_t montar_alerta(LinhasPainel& linhas, EstadoSinalizacao estado,
 
     switch (causa) {
         case CausaSaudeHeapCritico:
+        case CausaSaudeMemoriaBaixa:
             copiar_linha(linhas[2], "MEMORIA INTERNA BAIXA");
             std::snprintf(linhas[3], TAMANHO_LINHA, "LIVRE: %lu KB",
                           static_cast<unsigned long>(
@@ -269,7 +277,8 @@ std::size_t montar_alerta(LinhasPainel& linhas, EstadoSinalizacao estado,
             std::snprintf(linhas[3], TAMANHO_LINHA, "LIVRE: %lu BYTES",
                           static_cast<unsigned long>(
                               saude.bytes_pilha_livres));
-            copiar_linha(linhas[4], "RISCO DE REINICIO");
+            std::snprintf(linhas[4], TAMANHO_LINHA, "TAREFA: %.13s",
+                          saude.tarefa_menor_pilha);
             break;
         case CausaSaudeSensor:
             copiar_linha(linhas[2], "SENSOR COM FALHA");
@@ -494,6 +503,108 @@ void montar_progresso_ota(char* destino,
                   recebidos_exibidos, total_exibido);
 }
 
+bool resumo_upload_recente(const EstadoRegistroTelemetria& registro,
+                           uint32_t instante_ms) {
+    return registro.sincronizacoes_finalizadas > 0 &&
+           instante_ms - registro.fim_ultima_sincronizacao_ms <
+               DURACAO_RESUMO_UPLOAD_MS;
+}
+
+std::size_t montar_upload_google(const EstadoRegistroTelemetria& registro,
+                                 const ResumoWifi& wifi,
+                                 LinhasPainel& linhas,
+                                 int* progresso_decimos) {
+    copiar_linha(linhas[0], "UPLOAD GOOGLE");
+    copiar_linha(linhas[1], "---------------------");
+    if (registro.arquivos_upload_total == 0) {
+        copiar_linha(linhas[3], "PREPARANDO ARQUIVOS");
+        copiar_linha(linhas[5], wifi.conectado ? "WIFI: CONECTADO"
+                                               : "WIFI: PROCURANDO");
+        return 7;
+    }
+
+    const uint32_t indice = std::min(
+        registro.arquivos_upload_concluidos + 1,
+        registro.arquivos_upload_total);
+    const uint32_t restantes = registro.arquivos_upload_total > indice
+        ? registro.arquivos_upload_total - indice
+        : 0;
+    std::snprintf(linhas[2], TAMANHO_LINHA, "ARQ:%hu/%hu FALT:%hu",
+                  limitar_uint16(indice),
+                  limitar_uint16(registro.arquivos_upload_total),
+                  limitar_uint16(restantes));
+    std::snprintf(linhas[3], TAMANHO_LINHA, "%.21s",
+                  registro.arquivo_em_upload[0]
+                      ? registro.arquivo_em_upload
+                      : "ABRINDO ARQUIVO");
+    const uint32_t percentual_calculado =
+        registro.arquivo_atual_bytes_total == 0
+            ? 0
+            : static_cast<uint32_t>(
+                  (static_cast<uint64_t>(
+                       registro.arquivo_atual_bytes_enviados) * 1000U) /
+                  registro.arquivo_atual_bytes_total);
+    const uint32_t percentual_decimos = std::min(
+        percentual_calculado,
+        static_cast<uint32_t>(PROGRESSO_DECIMOS_MAXIMO));
+    std::snprintf(linhas[4], TAMANHO_LINHA, "%hu.%hu%% %hu/%huK",
+                  limitar_uint16(percentual_decimos / 10U),
+                  limitar_uint16(percentual_decimos % 10U),
+                  limitar_uint16(
+                      registro.arquivo_atual_bytes_enviados / 1024U),
+                  limitar_uint16(
+                      registro.arquivo_atual_bytes_total / 1024U));
+    std::snprintf(
+        linhas[5], TAMANHO_LINHA, "VEL: %lu.%lu KIB/S",
+        static_cast<unsigned long>(registro.velocidade_upload_bytes_s / 1024U),
+        static_cast<unsigned long>(
+            ((registro.velocidade_upload_bytes_s % 1024U) * 10U) / 1024U));
+    if (registro.aguardando_confirmacao_upload) {
+        copiar_linha(linhas[6], "CONFIRMANDO NO GOOGLE");
+    } else {
+        std::snprintf(linhas[6], TAMANHO_LINHA, "RESTANTE: %lu S",
+                      static_cast<unsigned long>(
+                          registro.tempo_restante_upload_s));
+    }
+    *progresso_decimos = static_cast<int>(percentual_decimos);
+    return MAXIMO_LINHAS_COM_PROGRESSO;
+}
+
+std::size_t montar_resumo_upload(const EstadoRegistroTelemetria& registro,
+                                 LinhasPainel& linhas) {
+    const bool sucesso = registro.ultimo_resultado_sincronizacao == ESP_OK;
+    copiar_linha(linhas[0], sucesso ? "UPLOAD CONCLUIDO" : "UPLOAD INTERROMPIDO");
+    copiar_linha(linhas[1], "---------------------");
+    std::snprintf(linhas[2], TAMANHO_LINHA, "ARQUIVOS: %lu/%lu",
+                  static_cast<unsigned long>(
+                      registro.arquivos_ultima_sincronizacao),
+                  static_cast<unsigned long>(registro.arquivos_upload_total));
+    std::snprintf(linhas[3], TAMANHO_LINHA, "DADOS: %lu KIB",
+                  static_cast<unsigned long>(
+                      registro.bytes_ultima_sincronizacao / 1024U));
+    std::snprintf(linhas[4], TAMANHO_LINHA, "TEMPO: %lu.%lu S",
+                  static_cast<unsigned long>(
+                      registro.duracao_ultima_sincronizacao_ms / 1000U),
+                  static_cast<unsigned long>(
+                      (registro.duracao_ultima_sincronizacao_ms % 1000U) /
+                      100U));
+    const uint32_t media = registro.duracao_ultima_sincronizacao_ms == 0
+        ? 0
+        : static_cast<uint32_t>(
+              (static_cast<uint64_t>(
+                   registro.bytes_ultima_sincronizacao) * 1000U) /
+              registro.duracao_ultima_sincronizacao_ms);
+    std::snprintf(linhas[5], TAMANHO_LINHA, "MED:%hu.%hu KIB/S",
+                  limitar_uint16(media / 1024U),
+                  limitar_uint16(((media % 1024U) * 10U) / 1024U));
+    std::snprintf(linhas[6], TAMANHO_LINHA, "PENDENTES: %lu",
+                  static_cast<unsigned long>(registro.arquivos_pendentes));
+    std::snprintf(linhas[7], TAMANHO_LINHA, "RESULT: %.12s",
+                  sucesso ? "OK" : esp_err_to_name(
+                      registro.ultimo_resultado_sincronizacao));
+    return 8;
+}
+
 std::size_t montar_conteudo(EstadoSinalizacao estado, LinhasPainel& linhas,
                             int* progresso_decimos) {
     std::memset(linhas, 0, sizeof(LinhasPainel));
@@ -511,8 +622,19 @@ std::size_t montar_conteudo(EstadoSinalizacao estado, LinhasPainel& linhas,
     const SituacaoOta ota = servico_ota_obter_situacao();
     const ResumoWifi wifi = servico_wifi_obter_resumo();
     const ResumoSaudeSistema saude = servico_diagnostico_obter_resumo();
+    const EstadoRegistroTelemetria registro =
+        servico_registro_telemetria_obter_estado();
     if (estado == EstadoSinalizacao::Falha) {
         return montar_alerta(linhas, estado, saude, ota);
+    }
+    if (registro.sincronizacao_em_andamento) {
+        return montar_upload_google(registro, wifi, linhas,
+                                    progresso_decimos);
+    }
+    if (!estado_reserva_tela(estado) &&
+        resumo_upload_recente(
+            registro, static_cast<uint32_t>(esp_timer_get_time() / 1000))) {
+        return montar_resumo_upload(registro, linhas);
     }
     switch (estado) {
         case EstadoSinalizacao::Saudavel:
@@ -659,7 +781,13 @@ void tarefa_painel(void*) {
                 servico_sinalizacao_obter_situacao().estado;
             const EstadoSinalizacao estado =
                 selecionar_estado_exibicao(estado_sistema, instante_ms);
-            const bool tela_reservada = estado_reserva_tela(estado_sistema);
+            const EstadoRegistroTelemetria registro =
+                servico_registro_telemetria_obter_estado();
+            const bool tela_reservada =
+                estado_reserva_tela(estado_sistema) ||
+                registro.sincronizacao_em_andamento ||
+                resumo_upload_recente(
+                    registro, static_cast<uint32_t>(instante_ms));
             if (mensagem_ativa.ativa && tela_reservada &&
                 !tela_estava_reservada) {
                 inicio_reserva_ms = instante_ms;
@@ -686,9 +814,15 @@ void tarefa_painel(void*) {
             int progresso_decimos = -1;
             const bool exibir_mensagem = mensagem_ativa.ativa &&
                                          !tela_reservada;
-            const std::size_t quantidade = exibir_mensagem
+            std::size_t quantidade = exibir_mensagem
                 ? montar_mensagem(mensagem_ativa.mensagem, linhas)
                 : montar_conteudo(estado, linhas, &progresso_decimos);
+            if (progresso_decimos >= 0) {
+                progresso_decimos = std::min(
+                    progresso_decimos, PROGRESSO_DECIMOS_MAXIMO);
+                quantidade = std::min(
+                    quantidade, MAXIMO_LINHAS_COM_PROGRESSO);
+            }
             const char* ponteiros[MAXIMO_LINHAS]{};
             for (std::size_t indice = 0; indice < quantidade; ++indice) {
                 ponteiros[indice] = linhas[indice];
@@ -743,8 +877,7 @@ esp_err_t servico_painel_local_iniciar() {
         portEXIT_CRITICAL(&trava_situacao);
         return ESP_ERR_NO_MEM;
     }
-    if (xTaskCreate(tarefa_painel, "painel_local", 4096, nullptr, 2,
-                    &tarefa_painel_handle) != pdPASS) {
+    if (configuracao::criar_tarefa(tarefa_painel, "painel_local", nullptr, &tarefa_painel_handle) != pdPASS) {
         vQueueDelete(fila_mensagens);
         fila_mensagens = nullptr;
         portENTER_CRITICAL(&trava_situacao);

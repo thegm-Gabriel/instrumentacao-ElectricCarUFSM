@@ -1,4 +1,6 @@
 // Encadeia download HTTPS e envio UART usando buffers fixos reutilizáveis.
+#include "nucleo/configuracao_tarefas.h"
+#include "servicos/servico_supervisao.h"
 #include "servicos/transporte_ota_satelites.h"
 
 #include <algorithm>
@@ -241,11 +243,15 @@ esp_err_t enviar_bloco(ContextoDownload& contexto, const uint8_t* dados,
 
 void tarefa_pipeline(void*) {
     while (true) {
+        servico_supervisao_informar_atividade(ModuloSupervisionado::PipelineOta,
+            "ota_uart_pipeline", "aguardando bloco", 0);
         BlocoPipeline bloco{};
         if (xQueueReceive(fila_blocos_prontos, &bloco, portMAX_DELAY) != pdTRUE) {
             continue;
         }
         if (bloco.encerrar_tarefa) break;
+        servico_supervisao_informar_atividade(ModuloSupervisionado::PipelineOta,
+            "ota_uart_pipeline", "enviando/confirmando bloco", 60000);
 
         portENTER_CRITICAL(&trava_estado);
         ContextoDownload* contexto = contexto_pipeline;
@@ -466,8 +472,7 @@ esp_err_t transporte_ota_satelites_iniciar() {
         liberar_recursos_pipeline();
         return ESP_ERR_NO_MEM;
     }
-    if (xTaskCreate(tarefa_pipeline, "ota_uart_pipeline", 6144, nullptr, 5,
-                    &tarefa_pipeline_handle) != pdPASS) {
+    if (configuracao::criar_tarefa(tarefa_pipeline, "ota_uart_pipeline", nullptr, &tarefa_pipeline_handle) != pdPASS) {
         tarefa_pipeline_handle = nullptr;
         liberar_recursos_pipeline();
         return ESP_ERR_NO_MEM;

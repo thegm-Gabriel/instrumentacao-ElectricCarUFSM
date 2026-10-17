@@ -11,6 +11,11 @@ enum class ModuloSupervisionado : uint8_t {
     TarefaTelemetria,
     UartEquipe,
     UartVisitantes,
+    Aceleracao,
+    RegistroSd,
+    UploadGoogle,
+    Ota,
+    PipelineOta,
     Quantidade,
 };
 
@@ -20,6 +25,8 @@ struct EstadoModuloSupervisionado {
     bool registrado = false;
     bool em_recuperacao = false;
     const char* nome = "-";
+    const char* fase = "-";
+    bool atrasado = false;
     uint32_t tempo_limite_ms = 0;
     uint32_t idade_ultimo_pulso_ms = 0;
     uint32_t falhas_detectadas = 0;
@@ -40,3 +47,7 @@ esp_err_t servico_supervisao_associar_tarefa(ModuloSupervisionado modulo,
 EstadoModuloSupervisionado servico_supervisao_obter_estado(
     ModuloSupervisionado modulo);
 uint32_t servico_supervisao_obter_menor_pilha_livre();
+// nome/fase devem ser literais persistentes. Limite zero representa espera ociosa.
+void servico_supervisao_informar_atividade(ModuloSupervisionado modulo,
+    const char* nome, const char* fase, uint32_t limite_ms);
+void servico_supervisao_atualizar_pilha(ModuloSupervisionado modulo, uint32_t bytes);

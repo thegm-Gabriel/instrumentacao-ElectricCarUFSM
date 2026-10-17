@@ -26,4 +26,6 @@ esp_err_t servico_relatorios_definir_intervalo(GrupoRelatorio grupo,
 bool servico_relatorios_alternar_pausa();
 bool servico_relatorios_estao_pausados();
 void servico_relatorios_solicitar_resumo();
+// Solicita o mesmo resumo e aguarda sua impressão antes de o terminal redesenhar.
+esp_err_t servico_relatorios_solicitar_resumo_e_aguardar(uint32_t limite_ms);
 bool servico_relatorios_deve_exibir(GrupoRelatorio grupo);

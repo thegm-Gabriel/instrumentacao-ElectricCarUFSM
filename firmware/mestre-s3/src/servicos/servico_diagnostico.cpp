@@ -1,7 +1,10 @@
 // Consolida saúde, falhas e um retrato neutro dos subsistemas.
+#include "nucleo/configuracao_tarefas.h"
 #include "servicos/servico_diagnostico.h"
 
 #include <cstring>
+#include <cstdio>
+#include <algorithm>
 
 #include "esp_log.h"
 #include "esp_heap_caps.h"
@@ -36,6 +39,85 @@ MemoriaEstadoSaude memoria_saude{};
 ResumoSaudeSistema resumo_publicado{};
 portMUX_TYPE trava_diagnostico = portMUX_INITIALIZER_UNLOCKED;
 TaskHandle_t tarefa_diagnostico = nullptr;
+DiagnosticoTarefas tarefas_publicadas{};
+DiagnosticoTarefas tarefas_coleta{};
+TaskStatus_t estados_tarefas[MAXIMO_TAREFAS_DIAGNOSTICO]{};
+uint64_t cpu_anterior[MAXIMO_TAREFAS_DIAGNOSTICO]{};
+uint32_t ids_anteriores[MAXIMO_TAREFAS_DIAGNOSTICO]{};
+uint64_t total_cpu_anterior = 0;
+uint32_t menor_pilha_tarefas = 0;
+char tarefa_menor_pilha[24]{};
+bool pilhas_medidas = false;
+
+void atualizar_tarefas() {
+#if CONFIG_FREERTOS_USE_TRACE_FACILITY
+    configRUN_TIME_COUNTER_TYPE total = 0;
+    const UBaseType_t quantidade = uxTaskGetSystemState(
+        estados_tarefas, MAXIMO_TAREFAS_DIAGNOSTICO, &total);
+    tarefas_coleta = {};
+    tarefas_coleta.coletado_em_ms = esp_timer_get_time() / 1000;
+    tarefas_coleta.valido = quantidade != 0;
+    tarefas_coleta.quantidade = quantidade;
+    uint32_t menor = UINT32_MAX;
+    const char* nome_menor = "-";
+    for (UBaseType_t i = 0; i < quantidade; ++i) {
+        const auto& origem = estados_tarefas[i];
+        auto& destino = tarefas_coleta.tarefas[i];
+        std::snprintf(destino.nome, sizeof(destino.nome), "%s", origem.pcTaskName);
+        destino.identificador = origem.xTaskNumber;
+        destino.prioridade = origem.uxCurrentPriority;
+        destino.estado = static_cast<uint8_t>(origem.eCurrentState);
+        destino.pilha_minima_livre_bytes = origem.usStackHighWaterMark;
+        if (std::strcmp(destino.nome, "telemetria") == 0)
+            servico_supervisao_atualizar_pilha(ModuloSupervisionado::TarefaTelemetria, destino.pilha_minima_livre_bytes);
+        if (std::strcmp(destino.nome, "enlace_equipe") == 0)
+            servico_supervisao_atualizar_pilha(ModuloSupervisionado::UartEquipe, destino.pilha_minima_livre_bytes);
+        if (std::strcmp(destino.nome, "enlace_visitantes") == 0)
+            servico_supervisao_atualizar_pilha(ModuloSupervisionado::UartVisitantes, destino.pilha_minima_livre_bytes);
+#if CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID
+        destino.nucleo = origem.xCoreID == tskNO_AFFINITY ? -1 : origem.xCoreID;
+#endif
+        const auto* politica = configuracao::politica_tarefa(destino.nome);
+        destino.pilha_reservada_bytes =
+            politica != nullptr ? politica->pilha_bytes
+                                : configuracao::pilha_tarefa_sistema(
+                                      destino.nome);
+        if (destino.pilha_minima_livre_bytes < menor) {
+            menor = destino.pilha_minima_livre_bytes;
+            nome_menor = destino.nome;
+        }
+#if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
+        if (total_cpu_anterior != 0 && total > total_cpu_anterior) {
+            for (std::size_t j = 0; j < MAXIMO_TAREFAS_DIAGNOSTICO; ++j) {
+                if (ids_anteriores[j] != destino.identificador ||
+                    origem.ulRunTimeCounter < cpu_anterior[j]) continue;
+                const uint64_t uso = (origem.ulRunTimeCounter - cpu_anterior[j]) * 1000ULL /
+                                     (total - total_cpu_anterior);
+                destino.cpu_decimos = static_cast<uint16_t>(std::min<uint64_t>(uso, 1000));
+                destino.cpu_valida = true;
+                break;
+            }
+        }
+#endif
+    }
+    if (quantidade != 0) {
+        menor_pilha_tarefas = menor;
+        std::snprintf(tarefa_menor_pilha, sizeof(tarefa_menor_pilha), "%s",
+                      nome_menor);
+        pilhas_medidas = true;
+        for (std::size_t i = 0; i < MAXIMO_TAREFAS_DIAGNOSTICO; ++i) {
+            ids_anteriores[i] = i < quantidade ? estados_tarefas[i].xTaskNumber : 0;
+#if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
+            cpu_anterior[i] = i < quantidade ? estados_tarefas[i].ulRunTimeCounter : 0;
+#endif
+        }
+        total_cpu_anterior = total;
+    }
+    portENTER_CRITICAL(&trava_diagnostico);
+    tarefas_publicadas = tarefas_coleta;
+    portEXIT_CRITICAL(&trava_diagnostico);
+#endif
+}
 
 void registrar_resultado(RegistroErroDiagnostico& registro, esp_err_t resultado,
                          uint64_t instante_ms) {
@@ -76,11 +158,14 @@ ResumoSaudeSistema calcular_resumo() {
         servico_supervisao_obter_estado(ModuloSupervisionado::UartVisitantes);
 
     ResumoSaudeSistema resumo{};
+    resumo.valido = true;
     resumo.tempo_ativo_ms = static_cast<uint64_t>(esp_timer_get_time() / 1000);
     resumo.heap_livre = esp_get_free_heap_size();
     resumo.menor_heap_livre = esp_get_minimum_free_heap_size();
-    resumo.bytes_pilha_livres =
-        servico_supervisao_obter_menor_pilha_livre();
+    resumo.bytes_pilha_livres = menor_pilha_tarefas;
+    std::snprintf(resumo.tarefa_menor_pilha,
+                  sizeof(resumo.tarefa_menor_pilha), "%s",
+                  pilhas_medidas ? tarefa_menor_pilha : "-");
     resumo.heap_interno_livre = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     resumo.maior_bloco_heap_interno =
         heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
@@ -115,11 +200,14 @@ ResumoSaudeSistema calcular_resumo() {
 
     const int64_t instante_ms = esp_timer_get_time() / 1000;
     uint32_t causas = CausaSaudeNenhuma;
-    if (resumo.heap_interno_livre < 20000 ||
+    if (resumo.heap_interno_livre < 24U * 1024U ||
         resumo.maior_bloco_heap_interno < 8192) {
         causas |= CausaSaudeHeapCritico;
+    } else if (resumo.heap_interno_livre < 48U * 1024U ||
+               resumo.maior_bloco_heap_interno < 20U * 1024U) {
+        causas |= CausaSaudeMemoriaBaixa;
     }
-    if (resumo.bytes_pilha_livres != 0 &&
+    if (pilhas_medidas &&
         resumo.bytes_pilha_livres < 512) {
         causas |= CausaSaudePilhaCritica;
     }
@@ -145,6 +233,12 @@ ResumoSaudeSistema calcular_resumo() {
          supervisao_visitantes.idade_ultimo_pulso_ms >
              supervisao_visitantes.tempo_limite_ms);
     if (supervisao_ativa) causas |= CausaSaudeSupervisao;
+    for (unsigned i = static_cast<unsigned>(ModuloSupervisionado::Aceleracao);
+         i < static_cast<unsigned>(ModuloSupervisionado::Quantidade); ++i) {
+        const auto modulo = servico_supervisao_obter_estado(static_cast<ModuloSupervisionado>(i));
+        resumo.falhas_supervisao += modulo.falhas_detectadas;
+        if (modulo.atrasado) causas |= CausaSaudeSupervisao;
+    }
     if (telemetria.pacotes_gerados >= 10u && !resumo.equipe_respondendo)
         causas |= CausaSaudeEquipeSemResposta;
     if (telemetria.pacotes_gerados >= 10u && !resumo.visitantes_respondendo)
@@ -186,7 +280,9 @@ ResumoSaudeSistema calcular_resumo() {
 }
 
 void tarefa_atualizacao(void*) {
+    uint32_t ciclos = 0;
     while (true) {
+        if (ciclos++ % 5 == 0) atualizar_tarefas();
         const ResumoSaudeSistema novo = calcular_resumo();
         portENTER_CRITICAL(&trava_diagnostico);
         resumo_publicado = novo;
@@ -196,14 +292,20 @@ void tarefa_atualizacao(void*) {
 }
 }  // namespace
 
+void servico_diagnostico_obter_tarefas(DiagnosticoTarefas* destino) {
+    if (destino == nullptr) return;
+    portENTER_CRITICAL(&trava_diagnostico);
+    *destino = tarefas_publicadas;
+    portEXIT_CRITICAL(&trava_diagnostico);
+}
+
 esp_err_t servico_diagnostico_iniciar() {
     if (tarefa_diagnostico != nullptr) return ESP_OK;
     const ResumoSaudeSistema inicial = calcular_resumo();
     portENTER_CRITICAL(&trava_diagnostico);
     resumo_publicado = inicial;
     portEXIT_CRITICAL(&trava_diagnostico);
-    if (xTaskCreate(tarefa_atualizacao, "diagnostico", 6144, nullptr, 4,
-                    &tarefa_diagnostico) != pdPASS) {
+    if (configuracao::criar_tarefa(tarefa_atualizacao, "diagnostico", nullptr, &tarefa_diagnostico) != pdPASS) {
         tarefa_diagnostico = nullptr;
         return ESP_ERR_NO_MEM;
     }

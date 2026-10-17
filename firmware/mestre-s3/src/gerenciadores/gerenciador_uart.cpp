@@ -1,4 +1,5 @@
 // Implementa filas, eventos, transmissão e recuperação das UARTs.
+#include "nucleo/configuracao_tarefas.h"
 #include "gerenciadores/gerenciador_uart.h"
 
 #include <cstring>
@@ -250,15 +251,13 @@ esp_err_t configurar_canal(CanalUart& canal) {
                             UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
     }
     if (erro == ESP_OK &&
-        xTaskCreate(tarefa_eventos_uart, canal.nome, 3072, &canal, 6,
-                    &canal.tarefa_eventos) != pdPASS) {
+        configuracao::criar_tarefa(tarefa_eventos_uart, canal.nome, &canal, &canal.tarefa_eventos) != pdPASS) {
         erro = ESP_ERR_NO_MEM;
     }
     if (erro == ESP_OK) {
         const char* nome_tarefa = canal.destino == DestinoUart::Equipe
                                       ? "uart_tx_equipe" : "uart_tx_visitantes";
-        if (xTaskCreate(tarefa_transmissao_uart, nome_tarefa, 6144, &canal, 7,
-                        &canal.tarefa_tx) != pdPASS) {
+        if (configuracao::criar_tarefa(tarefa_transmissao_uart, nome_tarefa, &canal, &canal.tarefa_tx) != pdPASS) {
             erro = ESP_ERR_NO_MEM;
         }
     }

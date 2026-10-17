@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 
 #include "dados_telemetria_veiculo.h"
 #include "esp_err.h"
@@ -26,14 +27,17 @@ enum CausaSaudeSistema : uint32_t {
     CausaSaudeWifiFraco = 1u << 8,
     CausaSaudeOtaRecente = 1u << 9,
     CausaSaudePersistencia = 1u << 10,
+    CausaSaudeMemoriaBaixa = 1u << 11,
 };
 
 struct ResumoSaudeSistema {
+    bool valido = false;
     EstadoSaudeSistema estado = EstadoSaudeSistema::Saudavel;
     uint64_t tempo_ativo_ms = 0;
     uint32_t heap_livre = 0;
     uint32_t menor_heap_livre = 0;
     uint32_t bytes_pilha_livres = 0;
+    char tarefa_menor_pilha[24]{};
     uint32_t heap_interno_livre = 0;
     uint32_t maior_bloco_heap_interno = 0;
     uint32_t psram_livre = 0;
@@ -54,6 +58,27 @@ struct ResumoSaudeSistema {
     uint32_t falhas_supervisao = 0;
     uint32_t causas_ativas = CausaSaudeNenhuma;
 };
+
+struct DiagnosticoTarefa {
+    char nome[24]{};
+    uint32_t identificador = 0;
+    uint32_t pilha_reservada_bytes = 0;  // Zero para tarefas internas do SDK.
+    uint32_t pilha_minima_livre_bytes = 0;
+    uint32_t prioridade = 0;
+    int nucleo = -1;  // Afinidade, não o núcleo instantâneo de execução.
+    uint8_t estado = 0;  // eTaskState do FreeRTOS.
+    uint16_t cpu_decimos = 0;  // 1000 = um núcleo inteiro na janela.
+    bool cpu_valida = false;
+};
+
+constexpr std::size_t MAXIMO_TAREFAS_DIAGNOSTICO = 48;
+struct DiagnosticoTarefas {
+    uint64_t coletado_em_ms = 0;
+    bool valido = false;
+    std::size_t quantidade = 0;
+    DiagnosticoTarefa tarefas[MAXIMO_TAREFAS_DIAGNOSTICO]{};
+};
+void servico_diagnostico_obter_tarefas(DiagnosticoTarefas* destino);
 
 enum class SensorDiagnosticado : uint8_t {
     Adc,

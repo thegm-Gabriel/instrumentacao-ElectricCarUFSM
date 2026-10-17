@@ -1,4 +1,8 @@
-// Recebe CSVs do mestre, arquiva o original no Drive e consolida cada sessão no Sheets.
+// Recebe CSVs do mestre, arquiva o original no Drive e consolida as sessões
+// em folhas separadas de uma única planilha.
+const NOME_PLANILHA_TELEMETRIA = 'telemetria_carro';
+const PROPRIEDADE_ID_PLANILHA = 'ID_PLANILHA_TELEMETRIA';
+
 function doPost(evento) {
   const parametros = evento && evento.parameter ? evento.parameter : {};
   const propriedades = PropertiesService.getScriptProperties();
@@ -34,8 +38,8 @@ function doPost(evento) {
     }
 
     const sessao = nomeArquivo.match(/^telemetria_([0-9a-f]{8})_/i)[1];
-    const planilha = obterPlanilhaDaSessao_(pasta, sessao);
-    const aba = planilha.getSheets()[0];
+    const planilha = obterPlanilhaTelemetria_(pasta, propriedades);
+    const aba = obterAbaDaSessao_(planilha, sessao);
     const jaInserido = aba.getLastRow() > 1 &&
       aba.getRange(2, 1, aba.getLastRow() - 1, 1)
         .createTextFinder(nomeArquivo)
@@ -65,16 +69,45 @@ function doPost(evento) {
   }
 }
 
-function obterPlanilhaDaSessao_(pasta, sessao) {
-  const nome = 'planilha_telemetria_' + sessao;
-  const arquivos = pasta.getFilesByName(nome);
-  if (arquivos.hasNext()) {
-    return SpreadsheetApp.openById(arquivos.next().getId());
+function obterPlanilhaTelemetria_(pasta, propriedades) {
+  const idConhecido = propriedades.getProperty(PROPRIEDADE_ID_PLANILHA);
+  if (idConhecido) {
+    try {
+      return SpreadsheetApp.openById(idConhecido);
+    } catch (erro) {
+      console.warn('Planilha configurada não está acessível: ' + erro);
+      propriedades.deleteProperty(PROPRIEDADE_ID_PLANILHA);
+    }
   }
-  const planilha = SpreadsheetApp.create(nome);
-  planilha.getSheets()[0].setName('dados');
+
+  const arquivos = pasta.getFilesByName(NOME_PLANILHA_TELEMETRIA);
+  while (arquivos.hasNext()) {
+    const arquivo = arquivos.next();
+    if (arquivo.getMimeType() === MimeType.GOOGLE_SHEETS) {
+      propriedades.setProperty(PROPRIEDADE_ID_PLANILHA, arquivo.getId());
+      return SpreadsheetApp.openById(arquivo.getId());
+    }
+  }
+
+  const planilha = SpreadsheetApp.create(NOME_PLANILHA_TELEMETRIA);
   DriveApp.getFileById(planilha.getId()).moveTo(pasta);
+  propriedades.setProperty(PROPRIEDADE_ID_PLANILHA, planilha.getId());
   return planilha;
+}
+
+function obterAbaDaSessao_(planilha, sessao) {
+  const nomeAba = 'sessao_' + String(sessao).toLowerCase();
+  const existente = planilha.getSheetByName(nomeAba);
+  if (existente) {
+    return existente;
+  }
+
+  const abas = planilha.getSheets();
+  if (abas.length === 1 && abas[0].getLastRow() === 0) {
+    abas[0].setName(nomeAba);
+    return abas[0];
+  }
+  return planilha.insertSheet(nomeAba);
 }
 
 function resposta_(texto) {

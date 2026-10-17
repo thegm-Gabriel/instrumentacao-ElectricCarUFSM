@@ -1,10 +1,10 @@
 {
   "versao_formato": 1,
-  "versao_release": "0.2.35",
+  "versao_release": "0.2.36",
   "firmwares": {
     "mestre-s3": {
-      "versao": "0.2.30",
-      "impressao_digital": "a1e32fab9239ff11cb54ed31c993601b10518b769b57ac416389a8f8a742e6c0"
+      "versao": "0.2.31",
+      "impressao_digital": "73731dd860e655798908be22fbfe8caec986f0c99839133390fc3307d5eafc95"
     },
     "equipe-s3": {
       "versao": "0.1.20",

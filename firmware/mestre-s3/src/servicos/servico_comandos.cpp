@@ -1,4 +1,5 @@
 // Implementa despacho, resposta e repetição confiável de comandos.
+#include "nucleo/configuracao_tarefas.h"
 #include "servicos/servico_comandos.h"
 
 #include <algorithm>
@@ -827,8 +828,7 @@ esp_err_t servico_comandos_iniciar() {
     mutex_solicitacao = xSemaphoreCreateMutex();
     if (fila_respostas == nullptr || fila_operacoes == nullptr ||
         mutex_solicitacao == nullptr ||
-        xTaskCreate(tarefa_operacoes_mestre, "acoes_mestre", 6144, nullptr, 5,
-                    &tarefa_operacoes) != pdPASS) {
+        configuracao::criar_tarefa(tarefa_operacoes_mestre, "acoes_mestre", nullptr, &tarefa_operacoes) != pdPASS) {
         if (fila_respostas != nullptr) vQueueDelete(fila_respostas);
         if (fila_operacoes != nullptr) vQueueDelete(fila_operacoes);
         if (mutex_solicitacao != nullptr) vSemaphoreDelete(mutex_solicitacao);

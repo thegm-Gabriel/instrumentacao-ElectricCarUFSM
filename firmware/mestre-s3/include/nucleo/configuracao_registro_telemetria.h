@@ -25,9 +25,10 @@ constexpr bool HABILITAR_REGISTRO_TELEMETRIA = true;
 constexpr uint32_t INTERVALO_REGISTRO_TELEMETRIA_MS = 1000;
 constexpr uint32_t INTERVALO_SINCRONIZACAO_SD_MS = 10000;
 constexpr uint32_t INTERVALO_NOVA_TENTATIVA_SD_MS = 30000;
-constexpr uint32_t DURACAO_ARQUIVO_TELEMETRIA_MS = 5U * 60U * 1000U;
+// Uma hora reduz a fragmentação sem criar um CSV ilimitado e difícil de recuperar.
+constexpr uint32_t DURACAO_ARQUIVO_TELEMETRIA_MS = 60U * 60U * 1000U;
 constexpr std::size_t CAPACIDADE_FILA_REGISTRO = 24;
-constexpr std::size_t TAMANHO_MAXIMO_CSV_BYTES = 1536U * 1024U;
+constexpr std::size_t TAMANHO_MAXIMO_CSV_BYTES = 2U * 1024U * 1024U;
 
 // SPI2 sugerido para o ESP32-S3-WROOM-1-N16R8. Confirme estes GPIOs na montagem.
 constexpr gpio_num_t PINO_SD_CLK = GPIO_NUM_38;
@@ -38,10 +39,18 @@ constexpr uint32_t FREQUENCIA_SD_HZ = 10U * 1000U * 1000U;
 constexpr char PONTO_MONTAGEM_SD[] = "/sdcard";
 constexpr char DIRETORIO_TELEMETRIA[] = "/sdcard/telemetria";
 constexpr char DIRETORIO_TELEMETRIA_ENVIADA[] = "/sdcard/telemetria/enviados";
+constexpr char DIRETORIO_LOG_ESP[] = "/sdcard/logs";
+constexpr uint32_t INTERVALO_LOG_ESP_MS = 30000;
+constexpr std::size_t TAMANHO_SEGMENTO_LOG_ESP = 1024U * 1024U;
+constexpr std::size_t LIMITE_LOG_ESP_POR_SESSAO = 8U * 1024U * 1024U;
 
 constexpr char ENDERECO_GOOGLE_TELEMETRIA[] = TELEMETRIA_GOOGLE_URL;
 constexpr char TOKEN_GOOGLE_TELEMETRIA[] = TELEMETRIA_GOOGLE_TOKEN;
 constexpr uint32_t TEMPO_LIMITE_UPLOAD_MS = 60000;
+// Comporta a URL temporária extensa devolvida pelo ContentService e os cabeçalhos HTTPS.
+constexpr std::size_t TAMANHO_BUFFER_TRANSMISSAO_HTTP_BYTES = 4096;
+constexpr std::size_t TAMANHO_BLOCO_UPLOAD_BYTES = 8192;
+constexpr uint32_t INTERVALO_RELATORIO_UPLOAD_MS = 2000;
 constexpr uint8_t MAXIMO_TENTATIVAS_UPLOAD = 4;
 constexpr uint32_t ESPERA_INICIAL_NOVA_TENTATIVA_MS = 1000;
 

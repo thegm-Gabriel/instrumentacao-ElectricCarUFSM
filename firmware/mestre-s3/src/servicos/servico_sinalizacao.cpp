@@ -1,4 +1,5 @@
 // Traduz estados do sistema em padrões de LEDs e buzzer.
+#include "nucleo/configuracao_tarefas.h"
 #include "servicos/servico_sinalizacao.h"
 
 #include <cstddef>
@@ -483,8 +484,7 @@ esp_err_t servico_sinalizacao_iniciar() {
     situacao.iniciado = true;
     situacao.estado = EstadoSinalizacao::Inicializando;
     portEXIT_CRITICAL(&trava_situacao);
-    if (xTaskCreate(tarefa_sinalizacao, "sinalizacao", 4096, nullptr, 3,
-                    &tarefa_sinalizacao_handle) != pdPASS) {
+    if (configuracao::criar_tarefa(tarefa_sinalizacao, "sinalizacao", nullptr, &tarefa_sinalizacao_handle) != pdPASS) {
         vQueueDelete(fila_eventos);
         fila_eventos = nullptr;
         tarefa_sinalizacao_handle = nullptr;
