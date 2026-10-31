@@ -1,4 +1,79 @@
-# Arquitetura do ESP32-S3 mestre
+# Arquitetura do sistema
+
+[Índice da documentação](README.md)
+
+O sistema possui um mestre responsável pelos sensores e dois satélites dedicados
+à apresentação. Essa separação mantém a aquisição independente da quantidade de
+clientes Wi-Fi e permite atualizar ou reiniciar uma interface sem interromper as
+demais funções do veículo.
+
+```text
+                    ┌─ UART bidirecional ──► painel da equipe
+sensores ─► mestre ─┤
+                    ├─ UART bidirecional ──► painel de visitantes
+                    ├─ SPI ────────────────► cartão SD
+                    └─ Wi-Fi temporário ───► OTA e Google
+```
+
+## Responsabilidades
+
+Cada firmware é um projeto PlatformIO independente. Os contratos binários ficam
+em `firmware/compartilhado`, evitando cópias divergentes entre os três projetos.
+
+No mestre:
+
+- `nucleo` reúne configurações de placa e políticas estáticas;
+- `gerenciadores` encapsula drivers e periféricos do ESP-IDF;
+- `dispositivos` representa componentes físicos, como MPU6050, encoders e ADC;
+- `servicos` implementa regras de aplicação, diagnóstico, telemetria e OTA;
+- `main.cpp` inicializa os módulos e coordena o fluxo periódico.
+
+Nos satélites:
+
+- `servicos/receptor_uart` valida a telemetria, mantém o último retrato e
+  encaminha quadros de comandos e OTA aos serviços compartilhados;
+- `gerenciadores/gerenciador_wifi` mantém o ponto de acesso local;
+- `servicos/servidor_web` publica o painel e as APIs HTTP;
+- somente na equipe, `gerenciadores/gerenciador_uart` serializa as consultas
+  feitas pelo painel ao mestre e `servicos/diagnostico_sistema` mede o estado local.
+
+## Fluxos de dados
+
+A aquisição produz um modelo em unidades de engenharia. O serviço de telemetria
+o converte para o protocolo compacto e enfileira uma cópia para cada UART. Os
+satélites só substituem o retrato publicado depois de validar cabeçalho, tamanho,
+versão e CRC. Eles devolvem ACK de telemetria e respostas a comandos e OTA pelo
+fio de retorno de cada UART. As confirmações permitem medir atraso, perdas e
+disponibilidade. A equipe expõe consultas e ações do mestre por HTTP; o módulo
+de visitantes expõe somente a telemetria pública.
+
+O mesmo retrato é amostrado a 1 Hz pelo serviço de registro. Uma tarefa é a única
+proprietária dos CSVs no cartão SD; por isso, aquisição e transmissão não esperam
+gravações. O envio ao Google ocorre somente por solicitação e não faz parte do
+caminho de tempo real.
+
+Na atualização completa, o mestre transfere e confirma primeiro os dois
+satélites. Sua própria atualização só começa depois dessa etapa, preservando o
+controlador que coordena a operação até o fim.
+
+## Falhas e recuperação
+
+Gerenciadores retornam o `esp_err_t` original. Serviços decidem se devem repetir,
+degradar uma função ou publicar uma falha; a aplicação decide se a inicialização
+pode continuar. Diagnóstico e supervisão mantêm contadores e idade da última
+resposta, enquanto OLED, terminal e painel web apresentam o estado sem acessar
+diretamente os drivers.
+
+Falhas de um recurso opcional, como tela, cartão SD ou Wi-Fi externo, não devem
+interromper a telemetria UART. Falhas em tarefas e enlaces possuem recuperação
+isolada. Operações remotas carregam um identificador de solicitação, e respostas
+recentes são memorizadas para que uma repetição não execute novamente uma ação
+com efeito colateral.
+
+As regras internas do mestre seguem abaixo. O comportamento das interfaces e
+dos enlaces dos satélites está no [guia dos satélites](satelites.md).
+
+## Arquitetura interna do mestre
 
 O código ativo está dividido por responsabilidade:
 
@@ -33,7 +108,7 @@ não entram no mesmo contador de falhas do barramento. O diagnóstico registra
 totais, falhas consecutivas e instantes da primeira e da última ocorrência dos
 sensores, sem alocação dinâmica.
 
-## Estado atual
+### Estado atual
 
 UART, I2C, PCNT, cartão SD e OTA possuem implementação funcional. O serviço
 `servico_gravador_audio_treinamento` usa I2S com um INMP441 para coletar WAVs de
@@ -153,7 +228,7 @@ tarefas por um retrato do FreeRTOS. Os canais UART são recuperados restaurando 
 pinos e velocidade sem reiniciar o restante do mestre; a tarefa de telemetria não
 é apagada à força enquanto pode estar usando um periférico.
 
-### Escalonamento e diagnóstico de recursos
+#### Escalonamento e diagnóstico de recursos
 
 `include/nucleo/configuracao_tarefas.h` centraliza nomes, pilhas, prioridades e
 afinidades; cada serviço continua responsável pela criação e pelo ciclo de vida.
@@ -194,7 +269,7 @@ sem ANSI. O resumo informa ainda o estado visual comandado e se o verde contínu
 é esperado; isso confirma a decisão do software, mas não detecta LED aberto,
 resistor, polaridade ou ligação física incorreta.
 
-### Registro de diagnóstico no cartão
+#### Registro de diagnóstico no cartão
 
 A tarefa de registro existente também mantém `/sdcard/logs/esp_<sessao>_<parte>.log`.
 Grava versão do firmware/IDF, chip, flash, motivo numérico do último reset, memória

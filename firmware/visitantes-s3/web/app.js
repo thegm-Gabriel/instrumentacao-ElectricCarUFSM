@@ -6,9 +6,9 @@
   const finite = value => typeof value === 'number' && Number.isFinite(value);
   const state = {
     lastData:null, lastSampleAt:0, firstSampleAt:0, lastSequence:null,
-    samples:[], gapOpen:false, rangeMinutes:1, speedScale:120,
+    samples:[], gapOpen:false, rangeMinutes:1, chartSignal:'accel',
     firstDistance:null, previousEnergy:null, energyWh:null,
-    chartLimits:{speed:null,power:null}, hovering:{}, fetching:false,
+    chartLimits:{}, hovering:{}, fetching:false,
   };
 
   function setValue(id, text, unit = '') {
@@ -44,12 +44,12 @@
     state.firstDistance = null;
     state.previousEnergy = null;
     state.energyWh = null;
-    state.chartLimits = {speed:null,power:null};
+    state.chartLimits = {};
   }
 
   function addGap() {
     if (state.gapOpen || !state.samples.length) return;
-    state.samples.push({time:Date.now(), speed:null, power:null});
+    state.samples.push({time:Date.now(), speed:null, power:null, accel:null, battery:null});
     state.gapOpen = true;
     state.previousEnergy = null;
     drawCharts();
@@ -71,7 +71,7 @@
     setValue('speed-value', speed === null ? 'Sem leitura' : format(speed, 1));
     $('motion-state').textContent = speed === null ? 'Aguardando dados' : speed < 0.5 ? 'Parado' : 'Em movimento';
     $('speed-source').textContent = simulated ? 'Velocidade simulada' : 'Velocidade informada pelo veículo';
-    $('speed-arc').style.strokeDasharray = (speed === null ? 0 : Math.min(100, Math.max(0, speed / state.speedScale * 100))) + ' 100';
+    $('speed-arc').style.strokeDasharray = (speed === null ? 0 : Math.min(100, Math.max(0, speed / 30 * 100))) + ' 100';
 
     setValue('battery-value', charge === null ? 'Sem leitura' : format(charge, 1), charge === null ? '' : '%');
     $('battery-fill').style.width = charge === null ? '0%' : Math.max(0, Math.min(100, charge)) + '%';
@@ -115,7 +115,7 @@
       }
       state.previousEnergy = {time:now, power};
     } else state.previousEnergy = null;
-    state.samples.push({time:now, speed:readNumber(data, 'velocidade_centesimos_kmh', 100), power});
+    state.samples.push({time:now, speed:readNumber(data, 'velocidade_centesimos_kmh', 100), power,accel:data.aceleracao_disponivel?readNumber(data,'aceleracao_milesimos_ms2',1000):null,battery:data.simulado?readNumber(data,'carga_decimos_percentual',10):null});
     state.samples = state.samples.filter(sample => now - sample.time <= 610000);
     state.gapOpen = false;
     state.lastData = data;
@@ -136,7 +136,7 @@
       const data = await response.json();
       if (data.valido === true && finite(data.idade_ms) && data.idade_ms < 2000) {
         if (data.sequencia !== state.lastSequence) acceptSample(data);
-        setStatus(data.simulado ? 'demo' : 'live', data.simulado ? 'Dados simulados' : 'Ao vivo');
+        setStatus(data.simulado ? 'demo' : 'live', data.simulado ? 'Simulação ativa' : 'Leituras atuais');
       } else {
         setStatus('stale', 'Dados desatualizados');
         addGap();
@@ -169,31 +169,45 @@
     return Math.ceil(value / step) * step;
   }
 
-  function drawChart(key) {
-    const setup = chartSetup($(key + '-chart'));
+  const chartSeries={
+    speed:{label:'Velocidade',unit:'km/h',digits:1,color:'#60A5FA',empty:'Aguardando leituras de velocidade.'},
+    accel:{label:'Aceleração',unit:'m/s²',digits:2,color:'#E9B66A',empty:'Aguardando leituras de aceleração.'},
+    power:{label:'Potência elétrica',unit:'W',digits:0,color:'#79C9A3',empty:'Potência disponível apenas quando informada pela simulação.'},
+    battery:{label:'Carga da bateria',unit:'%',digits:1,color:'#9AB8E5',empty:'Carga disponível apenas quando informada pela simulação.'}
+  };
+  function drawChart(slot) {
+    const key=slot==='speed'?'speed':state.chartSignal,series=chartSeries[key];
+    const setup = chartSetup($(slot + '-chart'));
     if (!setup) return;
     const {ctx, width:w, height:h} = setup;
     const plot = {left:46, right:w - 13, top:13, bottom:h - 28};
     const end = Date.now(), start = end - state.rangeMinutes * 60000;
     const points = state.samples.filter(sample => sample.time >= start && sample.time <= end);
     const numeric = points.map(point => point[key]).filter(finite);
-    $(key + '-empty').hidden = numeric.length > 0;
+    $(slot + '-empty').hidden = numeric.length > 0;
     const highest = numeric.length ? Math.max(0, ...numeric) : 0;
     const lowest = numeric.length ? Math.min(0, ...numeric) : 0;
     let limit = state.chartLimits[key];
-    if (!limit) limit = key === 'speed' ? {min:0,max:20} : {min:0,max:100};
-    limit.max = Math.max(limit.max, niceCeiling(highest * 1.12, key === 'speed' ? 20 : 100));
-    if (lowest < 0) limit.min = Math.min(limit.min, -niceCeiling(Math.abs(lowest) * 1.12, 100));
+    if(key==='speed')limit={min:0,max:30};
+    else if(key==='battery')limit={min:0,max:100};
+    else if(key==='accel'){
+      const peak=niceCeiling(Math.max(Math.abs(highest),Math.abs(lowest))*1.12,1);
+      limit={min:Math.min(limit ? limit.min : -1,-peak),max:Math.max(limit ? limit.max : 1,peak)};
+    }else{
+      if(!limit)limit={min:0,max:100};
+      limit.max=Math.max(limit.max,niceCeiling(highest*1.12,100));
+      if(lowest<0)limit.min=Math.min(limit.min,-niceCeiling(Math.abs(lowest)*1.12,100));
+    }
     state.chartLimits[key] = limit;
     const x = time => plot.left + (time - start) / (end - start) * (plot.right - plot.left);
-    const y = value => plot.bottom - (value - limit.min) / (limit.max - limit.min) * (plot.bottom - plot.top);
+    const y = value => Math.max(plot.top,Math.min(plot.bottom,plot.bottom - (value - limit.min) / (limit.max - limit.min) * (plot.bottom - plot.top)));
     ctx.font = '11px Inter, Segoe UI, sans-serif';
     ctx.lineWidth = 1;
     for (let index = 0; index <= 4; index++) {
       const yy = plot.top + (plot.bottom - plot.top) * index / 4;
       ctx.strokeStyle = '#2B3E59'; ctx.beginPath(); ctx.moveTo(plot.left, yy); ctx.lineTo(plot.right, yy); ctx.stroke();
       ctx.fillStyle = '#A9B7CC'; ctx.textAlign = 'right';
-      ctx.fillText(format(limit.max - (limit.max - limit.min) * index / 4, 0), plot.left - 7, yy + 4);
+      ctx.fillText(format(limit.max - (limit.max - limit.min) * index / 4, key==='accel'?1:0), plot.left - 7, yy + 4);
     }
     for (let index = 0; index <= 2; index++) {
       const xx = plot.left + (plot.right - plot.left) * index / 2;
@@ -201,8 +215,8 @@
       ctx.fillStyle = '#A9B7CC'; ctx.textAlign = index === 0 ? 'left' : index === 2 ? 'right' : 'center';
       ctx.fillText(new Date(start + (end - start) * index / 2).toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'}), xx, h - 8);
     }
-    const color = key === 'speed' ? '#60A5FA' : '#79C9A3';
-    ctx.strokeStyle = color; ctx.lineWidth = 2.3; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    ctx.strokeStyle = series.color; ctx.lineWidth = 2.3; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    ctx.save();ctx.beginPath();ctx.rect(plot.left,plot.top,plot.right-plot.left,plot.bottom-plot.top);ctx.clip();
     let open = false;
     for (const point of points) {
       if (!finite(point[key])) {if (open) ctx.stroke(); open = false; continue;}
@@ -210,30 +224,39 @@
       else ctx.lineTo(x(point.time), y(point[key]));
     }
     if (open) ctx.stroke();
-    if (numeric.length === 1) {const point = points.find(item => finite(item[key]));ctx.fillStyle = color;ctx.beginPath();ctx.arc(x(point.time), y(point[key]), 3, 0, Math.PI * 2);ctx.fill();}
-    const hover = state.hovering[key];
-    if (hover && hover.time >= start && hover.time <= end) {ctx.fillStyle = color;ctx.beginPath();ctx.arc(x(hover.time), y(hover[key]), 4, 0, Math.PI * 2);ctx.fill();}
-    state[key + 'ChartGeometry'] = {start,end,plot,x,y};
+    if (numeric.length === 1) {const point = points.find(item => finite(item[key]));ctx.fillStyle = series.color;ctx.beginPath();ctx.arc(x(point.time), y(point[key]), 3, 0, Math.PI * 2);ctx.fill();}
+    const hover = state.hovering[slot];
+    if (hover && finite(hover[key]) && hover.time >= start && hover.time <= end) {ctx.fillStyle = series.color;ctx.beginPath();ctx.arc(x(hover.time), y(hover[key]), 4, 0, Math.PI * 2);ctx.fill();}
+    ctx.restore();
+    state[slot + 'ChartGeometry'] = {start,end,plot,x,y,key};
   }
 
-  function drawCharts() {drawChart('speed');drawChart('power');}
+  function drawCharts() {
+    const series=chartSeries[state.chartSignal];
+    $('secondary-chart-title').textContent=series.label+' ao longo do tempo';
+    $('secondary-chart-unit').textContent=series.unit;
+    $('power-empty').textContent=series.empty;
+    $('power-chart').setAttribute('aria-label','Gráfico de '+series.label.toLowerCase()+' ao longo do tempo');
+    drawChart('speed');drawChart('power');
+  }
 
-  function showTooltip(key, event) {
-    const geometry = state[key + 'ChartGeometry'];
+  function showTooltip(slot, event) {
+    const geometry = state[slot + 'ChartGeometry'];
     if (!geometry) return;
-    const canvas = $(key + '-chart'), rect = canvas.getBoundingClientRect();
+    const key=geometry.key,series=chartSeries[key];
+    const canvas = $(slot + '-chart'), rect = canvas.getBoundingClientRect();
     const px = Math.max(geometry.plot.left, Math.min(geometry.plot.right, event.clientX - rect.left));
     const time = geometry.start + (px - geometry.plot.left) / (geometry.plot.right - geometry.plot.left) * (geometry.end - geometry.start);
     const points = state.samples.filter(point => finite(point[key]) && point.time >= geometry.start && point.time <= geometry.end);
     if (!points.length) return;
     const nearest = points.reduce((best, point) => Math.abs(point.time - time) < Math.abs(best.time - time) ? point : best);
-    const tip = $(key + '-tip');
-    tip.textContent = new Date(nearest.time).toLocaleTimeString('pt-BR') + ' · ' + format(nearest[key], key === 'speed' ? 1 : 0) + (key === 'speed' ? ' km/h' : ' W');
+    const tip = $(slot + '-tip');
+    tip.textContent = new Date(nearest.time).toLocaleTimeString('pt-BR') + ' · ' + format(nearest[key],series.digits) + ' ' + series.unit;
     tip.hidden = false;
     tip.style.left = Math.max(4, Math.min(rect.width - 190, geometry.x(nearest.time) - 82)) + 'px';
     tip.style.top = Math.max(4, geometry.y(nearest[key]) - 40) + 'px';
-    state.hovering[key] = nearest;
-    drawChart(key);
+    state.hovering[slot] = nearest;
+    drawChart(slot);
   }
 
   ['speed','power'].forEach(key => {
@@ -254,14 +277,11 @@
   });
   document.querySelectorAll('.range').forEach(button => button.addEventListener('click', () => {
     state.rangeMinutes = Number(button.dataset.minutes);
-    state.chartLimits = {speed:null,power:null};
+    state.chartLimits = {};
     document.querySelectorAll('.range').forEach(other => {const active = other === button;other.classList.toggle('active', active);other.setAttribute('aria-pressed', String(active));});
     drawCharts();
   }));
-  $('speed-scale').addEventListener('change', event => {
-    state.speedScale = Number(event.target.value);
-    if (state.lastData) updateReadings(state.lastData);
-  });
+  $('visitor-chart-signal').addEventListener('change',event=>{state.chartSignal=event.target.value;state.hovering.power=null;$('power-tip').hidden=true;drawCharts();});
   window.addEventListener('resize', drawCharts);
   document.addEventListener('visibilitychange', () => {if (!document.hidden) poll();});
   updateAge();

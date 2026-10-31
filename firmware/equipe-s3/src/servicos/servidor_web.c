@@ -89,6 +89,8 @@ static codigo_comando_t localizar_consulta_mestre(const char *consulta)
         return COMANDO_OBTER_DIAGNOSTICO_MESTRE;
     if (strcmp(consulta, "configuracao") == 0)
         return COMANDO_OBTER_CONFIGURACAO_MESTRE;
+    if (strcmp(consulta, "sincronizacao") == 0)
+        return COMANDO_OBTER_ESTADO_SINCRONIZACAO;
     if (strcmp(consulta, "rede_wifi_salva") == 0)
         return COMANDO_OBTER_REDE_WIFI_SALVA;
     if (strcmp(consulta, "satelite_equipe_ping") == 0 ||
@@ -381,6 +383,9 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
                 requisicao, "400 Bad Request",
                 "{\"ok\":false,\"erro\":\"dados da ação inválidos\"}");
         }
+        if (solicitacao_acao.acao == ACAO_MESTRE_SINCRONIZAR_GOOGLE)
+            solicitacao_acao.reservado =
+                SOLICITACAO_ACAO_CONFIRMACAO_SINCRONIZACAO_DETALHADA;
         carga_solicitacao = &solicitacao_acao;
         tamanho_carga_solicitacao = sizeof(solicitacao_acao);
         if (solicitacao_acao.acao ==
@@ -421,10 +426,21 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
     uint16_t tamanho_resposta = 0;
     codigo_resposta_comando_t resultado = RESPOSTA_COMANDO_TIMEOUT;
     informacoes_solicitacao_comando_t informacoes = {0};
-    const esp_err_t erro = servico_comandos_satelite_solicitar_detalhado(
+    esp_err_t erro = servico_comandos_satelite_solicitar_detalhado(
         comando, carga_solicitacao, tamanho_carga_solicitacao, resposta,
         sizeof(resposta), &tamanho_resposta, &resultado, tempo_limite,
         &informacoes);
+    if (erro == ESP_OK && resultado == RESPOSTA_COMANDO_CARGA_INVALIDA &&
+        comando == COMANDO_EXECUTAR_ACAO_MESTRE &&
+        solicitacao_acao.acao == ACAO_MESTRE_SINCRONIZAR_GOOGLE) {
+        // O mestre antigo recusou a extensão antes de executar a ação.
+        solicitacao_acao.reservado = 0;
+        tamanho_resposta = 0;
+        erro = servico_comandos_satelite_solicitar_detalhado(
+            comando, &solicitacao_acao, sizeof(solicitacao_acao), resposta,
+            sizeof(resposta), &tamanho_resposta, &resultado, tempo_limite,
+            &informacoes);
+    }
     if (erro != ESP_OK) {
         if (acao) {
             ESP_LOGW(TAG, "Mestre não confirmou a ação '%s': %s",
@@ -732,6 +748,60 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
             (unsigned long)dados.tempo_tentativa_wifi_ms,
             (unsigned long)dados.intervalo_tentativas_wifi_ms,
             (unsigned long)dados.tempo_limite_wifi_ms);
+    } else if (comando == COMANDO_OBTER_ESTADO_SINCRONIZACAO &&
+               tamanho_resposta == sizeof(resposta_sincronizacao_mestre_t)) {
+        resposta_sincronizacao_mestre_t dados;
+        char arquivo[256];
+        memcpy(&dados, resposta, sizeof(dados));
+        if (dados.versao_formato != COMANDO_FORMATO_SINCRONIZACAO) {
+            return enviar_json_comando(requisicao, "502 Bad Gateway",
+                "{\"ok\":false,\"erro\":\"formato da sincronização não suportado\"}");
+        }
+        dados.arquivo_em_upload[sizeof(dados.arquivo_em_upload) - 1] = '\0';
+        escapar_texto_json(arquivo, sizeof(arquivo), dados.arquivo_em_upload);
+        tamanho = snprintf(json, sizeof(json),
+            "{\"ok\":true,\"consulta\":\"sincronizacao\",\"comando\":%u,"
+            "\"solicitacao\":%lu,\"resultado\":0,\"tentativas\":%u,"
+            "\"duracao_ms\":%lu,\"formato\":%u,\"iniciado\":%s,"
+            "\"cartao_disponivel\":%s,\"em_andamento\":%s,"
+            "\"aguardando_confirmacao\":%s,"
+            "\"sincronizacoes_iniciadas\":%lu,\"sincronizacoes_finalizadas\":%lu,"
+            "\"arquivos_pendentes\":%lu,\"arquivos_upload_total\":%lu,"
+            "\"arquivos_upload_concluidos\":%lu,"
+            "\"arquivo_atual_bytes_enviados\":%lu,"
+            "\"arquivo_atual_bytes_total\":%lu,"
+            "\"velocidade_upload_bytes_s\":%lu,"
+            "\"tempo_restante_upload_s\":%lu,"
+            "\"ultimo_resultado_sincronizacao\":%ld,"
+            "\"ultimo_resultado_nome\":\"%s\","
+            "\"arquivos_ultima_sincronizacao\":%lu,"
+            "\"bytes_ultima_sincronizacao\":%lu,"
+            "\"duracao_ultima_sincronizacao_ms\":%lu,"
+            "\"fim_ultima_sincronizacao_ms\":%lu,"
+            "\"arquivo_em_upload\":\"%s\"}",
+            (unsigned)comando, (unsigned long)informacoes.identificador,
+            (unsigned)informacoes.tentativas,
+            (unsigned long)informacoes.duracao_ms,
+            (unsigned)dados.versao_formato,
+            (dados.indicadores & SINCRONIZACAO_MESTRE_INICIADA) ? "true" : "false",
+            (dados.indicadores & SINCRONIZACAO_MESTRE_CARTAO_DISPONIVEL) ? "true" : "false",
+            (dados.indicadores & SINCRONIZACAO_MESTRE_EM_ANDAMENTO) ? "true" : "false",
+            (dados.indicadores & SINCRONIZACAO_MESTRE_AGUARDANDO_CONFIRMACAO) ? "true" : "false",
+            (unsigned long)dados.sincronizacoes_iniciadas,
+            (unsigned long)dados.sincronizacoes_finalizadas,
+            (unsigned long)dados.arquivos_pendentes,
+            (unsigned long)dados.arquivos_upload_total,
+            (unsigned long)dados.arquivos_upload_concluidos,
+            (unsigned long)dados.arquivo_atual_bytes_enviados,
+            (unsigned long)dados.arquivo_atual_bytes_total,
+            (unsigned long)dados.velocidade_upload_bytes_s,
+            (unsigned long)dados.tempo_restante_upload_s,
+            (long)dados.ultimo_resultado_sincronizacao,
+            esp_err_to_name((esp_err_t)dados.ultimo_resultado_sincronizacao),
+            (unsigned long)dados.arquivos_ultima_sincronizacao,
+            (unsigned long)dados.bytes_ultima_sincronizacao,
+            (unsigned long)dados.duracao_ultima_sincronizacao_ms,
+            (unsigned long)dados.fim_ultima_sincronizacao_ms, arquivo);
     } else if (comando == COMANDO_OBTER_REDE_WIFI_SALVA &&
                tamanho_resposta == sizeof(resposta_rede_wifi_salva_t)) {
         resposta_rede_wifi_salva_t dados;
@@ -767,6 +837,27 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
             (unsigned)dados.tipo, (unsigned long)dados.rtt_ms,
             (unsigned long)dados.tempo_ativo_ms,
             (unsigned long)dados.capacidades, versao);
+    } else if (acao && strcmp(consulta, "sincronizar_google") == 0 &&
+               tamanho_resposta == sizeof(resposta_comando_acao_sincronizacao_t)) {
+        resposta_comando_acao_sincronizacao_t dados;
+        memcpy(&dados, resposta, sizeof(dados));
+        if (!dados.confirmacao.aceito ||
+            dados.confirmacao.comando != (uint16_t)comando ||
+            dados.versao_formato != COMANDO_FORMATO_CONFIRMACAO_SINCRONIZACAO) {
+            return enviar_json_comando(requisicao, "502 Bad Gateway",
+                "{\"ok\":false,\"erro\":\"confirmação de sincronização inválida\"}");
+        }
+        tamanho = snprintf(json, sizeof(json),
+            "{\"ok\":true,\"consulta\":\"%s\",\"acao\":\"%s\",\"comando\":%u,"
+            "\"solicitacao\":%lu,\"resultado\":0,\"tentativas\":%u,\"duracao_ms\":%lu,"
+            "\"confirmada\":true,\"tempo_mestre_ms\":%lu,\"sincronizacao_id\":%lu,"
+            "\"mensagem\":\"solicitação aceita pelo mestre\"}",
+            consulta, consulta, (unsigned)comando,
+            (unsigned long)informacoes.identificador,
+            (unsigned)informacoes.tentativas,
+            (unsigned long)informacoes.duracao_ms,
+            (unsigned long)dados.confirmacao.tempo_mestre_ms,
+            (unsigned long)dados.sincronizacao_id);
     } else if (acao &&
                tamanho_resposta == sizeof(resposta_comando_acao_t)) {
         resposta_comando_acao_t dados;

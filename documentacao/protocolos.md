@@ -1,5 +1,7 @@
 # Protocolos compartilhados
 
+[Índice da documentação](README.md)
+
 Esta pasta contém estruturas binárias e regras que precisam ser idênticas no mestre,
 no módulo da equipe e no módulo de visitantes.
 
@@ -81,5 +83,19 @@ como tamanho compatível para versões antigas. O início leva tamanho total,
 SHA-256 esperado e versão. Cada bloco recebe confirmação; o satélite rejeita
 sessão, sequência, deslocamento e tamanho incompatíveis. Ao finalizar, compara
 o hash completo antes de selecionar a partição inativa e reiniciar. O
-[guia de OTA](../../../documentacao/ota/README.md) cobre publicação,
+[guia de OTA](ota.md) cobre publicação,
 autorização e rollback.
+
+## Modelo da aplicação e testes
+
+`firmware/compartilhado/telemetria/dados_telemetria_veiculo.h` descreve o
+retrato em unidades de engenharia antes da compactação. O serviço do mestre
+converte esse modelo para `pacote_telemetria_t`; os satélites usam o mesmo
+cabeçalho binário para reconstruir as amostras. Utilitários pequenos usados por
+mais de um firmware ficam em `firmware/compartilhado/comum`.
+
+A suíte em `firmware/mestre-s3/test/test_protocolo_telemetria` verifica tamanho
+e serialização, CRC-16, limites de conteúdo, ACK, sequência com perda,
+duplicação e retorno, além da recuperação do parser após quadro incompleto ou
+corrompido. Ela não é incluída no firmware normal e pode ser executada com o
+executor de testes do PlatformIO no ambiente do mestre.

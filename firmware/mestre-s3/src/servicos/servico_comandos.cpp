@@ -38,7 +38,8 @@ constexpr uint32_t CAPACIDADES_MESTRE =
     CAPACIDADE_COMANDO_WIFI | CAPACIDADE_COMANDO_CONTROLE_OTA |
     CAPACIDADE_COMANDO_TERMINAL |
     CAPACIDADE_COMANDO_CONTROLE_OPERACIONAL |
-    CAPACIDADE_COMANDO_DIAGNOSTICO;
+    CAPACIDADE_COMANDO_DIAGNOSTICO |
+    CAPACIDADE_COMANDO_SINCRONIZACAO;
 
 struct RespostaPendente {
     DestinoUart origem;
@@ -337,9 +338,14 @@ codigo_resposta_comando_t executar_acao_mestre(
     }
     solicitacao_acao_mestre_t solicitacao{};
     std::memcpy(&solicitacao, carga, sizeof(solicitacao));
-    if (solicitacao.reservado != 0 ||
-        solicitacao.acao < ACAO_MESTRE_ALTERNAR_RELATORIOS ||
+    if (solicitacao.acao < ACAO_MESTRE_ALTERNAR_RELATORIOS ||
         solicitacao.acao > ACAO_MESTRE_DEFINIR_POLITICA_WIFI) {
+        return RESPOSTA_COMANDO_CARGA_INVALIDA;
+    }
+    if (solicitacao.reservado != 0 &&
+        !(solicitacao.acao == ACAO_MESTRE_SINCRONIZAR_GOOGLE &&
+          solicitacao.reservado ==
+              SOLICITACAO_ACAO_CONFIRMACAO_SINCRONIZACAO_DETALHADA)) {
         return RESPOSTA_COMANDO_CARGA_INVALIDA;
     }
     solicitacao.texto[sizeof(solicitacao.texto) - 1] = '\0';
@@ -437,7 +443,23 @@ codigo_resposta_comando_t executar_acao_mestre(
             break;
         }
     }
-    return confirmar_acao_mestre(acao, erro, resposta, tamanho_resposta);
+    const codigo_resposta_comando_t resultado =
+        confirmar_acao_mestre(acao, erro, resposta, tamanho_resposta);
+    if (resultado == RESPOSTA_COMANDO_OK &&
+        acao == ACAO_MESTRE_SINCRONIZAR_GOOGLE &&
+        solicitacao.reservado ==
+            SOLICITACAO_ACAO_CONFIRMACAO_SINCRONIZACAO_DETALHADA) {
+        resposta_comando_acao_sincronizacao_t confirmacao{};
+        std::memcpy(&confirmacao.confirmacao, resposta,
+                    sizeof(confirmacao.confirmacao));
+        confirmacao.versao_formato =
+            COMANDO_FORMATO_CONFIRMACAO_SINCRONIZACAO;
+        confirmacao.sincronizacao_id =
+            servico_registro_telemetria_obter_estado().sincronizacoes_iniciadas;
+        std::memcpy(resposta, &confirmacao, sizeof(confirmacao));
+        *tamanho_resposta = sizeof(confirmacao);
+    }
+    return resultado;
 }
 
 codigo_resposta_comando_t responder_configuracao_mestre(
@@ -470,6 +492,48 @@ codigo_resposta_comando_t responder_configuracao_mestre(
     dados.intervalo_tentativas_wifi_ms =
         wifi.politica.intervalo_entre_tentativas_ms;
     dados.tempo_limite_wifi_ms = wifi.politica.tempo_limite_sessao_ms;
+    std::memcpy(resposta, &dados, sizeof(dados));
+    *tamanho_resposta = sizeof(dados);
+    return RESPOSTA_COMANDO_OK;
+}
+
+codigo_resposta_comando_t responder_sincronizacao_mestre(
+    DestinoUart, const uint8_t*, uint16_t tamanho_carga, uint8_t* resposta,
+    uint16_t* tamanho_resposta) {
+    const codigo_resposta_comando_t valido = validar_sem_carga(tamanho_carga);
+    if (valido != RESPOSTA_COMANDO_OK) return valido;
+    const EstadoRegistroTelemetria registro =
+        servico_registro_telemetria_obter_estado();
+    resposta_sincronizacao_mestre_t dados{};
+    dados.versao_formato = COMANDO_FORMATO_SINCRONIZACAO;
+    if (registro.iniciado) dados.indicadores |= SINCRONIZACAO_MESTRE_INICIADA;
+    if (registro.cartao_disponivel)
+        dados.indicadores |= SINCRONIZACAO_MESTRE_CARTAO_DISPONIVEL;
+    if (registro.sincronizacao_em_andamento)
+        dados.indicadores |= SINCRONIZACAO_MESTRE_EM_ANDAMENTO;
+    if (registro.aguardando_confirmacao_upload)
+        dados.indicadores |= SINCRONIZACAO_MESTRE_AGUARDANDO_CONFIRMACAO;
+    dados.sincronizacoes_iniciadas = registro.sincronizacoes_iniciadas;
+    dados.sincronizacoes_finalizadas = registro.sincronizacoes_finalizadas;
+    dados.arquivos_pendentes = registro.arquivos_pendentes;
+    dados.arquivos_upload_total = registro.arquivos_upload_total;
+    dados.arquivos_upload_concluidos = registro.arquivos_upload_concluidos;
+    dados.arquivo_atual_bytes_enviados =
+        registro.arquivo_atual_bytes_enviados;
+    dados.arquivo_atual_bytes_total = registro.arquivo_atual_bytes_total;
+    dados.velocidade_upload_bytes_s = registro.velocidade_upload_bytes_s;
+    dados.tempo_restante_upload_s = registro.tempo_restante_upload_s;
+    dados.ultimo_resultado_sincronizacao =
+        static_cast<int32_t>(registro.ultimo_resultado_sincronizacao);
+    dados.arquivos_ultima_sincronizacao =
+        registro.arquivos_ultima_sincronizacao;
+    dados.bytes_ultima_sincronizacao = registro.bytes_ultima_sincronizacao;
+    dados.duracao_ultima_sincronizacao_ms =
+        registro.duracao_ultima_sincronizacao_ms;
+    dados.fim_ultima_sincronizacao_ms =
+        registro.fim_ultima_sincronizacao_ms;
+    copiar_texto(dados.arquivo_em_upload, sizeof(dados.arquivo_em_upload),
+                 registro.arquivo_em_upload);
     std::memcpy(resposta, &dados, sizeof(dados));
     *tamanho_resposta = sizeof(dados);
     return RESPOSTA_COMANDO_OK;
@@ -752,6 +816,7 @@ constexpr RegistroComando COMANDOS[] = {
     {COMANDO_OBTER_REDE_WIFI_SALVA, responder_rede_wifi_salva},
     {COMANDO_CONSULTAR_SATELITE, consultar_satelite_remoto},
     {COMANDO_OBTER_DIAGNOSTICO_MESTRE, responder_diagnostico_mestre},
+    {COMANDO_OBTER_ESTADO_SINCRONIZACAO, responder_sincronizacao_mestre},
 };
 
 const RegistroComando* localizar_comando(uint16_t codigo) {

@@ -1,5 +1,7 @@
 # Atualização OTA do mestre e dos satélites
 
+[Índice da documentação](README.md)
+
 O mestre consulta periodicamente `manifesto-firmwares.json` no último GitHub
 Release. O arquivo descreve separadamente os firmwares `mestre-s3`, `equipe-s3` e
 `visitantes-s3`, cada um com sua própria versão, tamanho, URL e SHA-256.

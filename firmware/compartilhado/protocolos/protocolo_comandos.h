@@ -24,8 +24,16 @@
 #define CAPACIDADE_COMANDO_TERMINAL (1u << 8)
 #define CAPACIDADE_COMANDO_CONTROLE_OPERACIONAL (1u << 9)
 #define CAPACIDADE_COMANDO_DIAGNOSTICO (1u << 10)
+#define CAPACIDADE_COMANDO_SINCRONIZACAO (1u << 11)
 
 #define COMANDO_FORMATO_DIAGNOSTICO_MESTRE 1u
+#define COMANDO_FORMATO_SINCRONIZACAO 1u
+#define COMANDO_FORMATO_CONFIRMACAO_SINCRONIZACAO 1u
+#define SOLICITACAO_ACAO_CONFIRMACAO_SINCRONIZACAO_DETALHADA 1u
+#define SINCRONIZACAO_MESTRE_INICIADA (1u << 0)
+#define SINCRONIZACAO_MESTRE_CARTAO_DISPONIVEL (1u << 1)
+#define SINCRONIZACAO_MESTRE_EM_ANDAMENTO (1u << 2)
+#define SINCRONIZACAO_MESTRE_AGUARDANDO_CONFIRMACAO (1u << 3)
 #define DIAGNOSTICO_MESTRE_CPU_VALIDO (1u << 0)
 #define DIAGNOSTICO_MESTRE_TEMPERATURA_VALIDA (1u << 1)
 #define DIAGNOSTICO_MESTRE_PSRAM_DISPONIVEL (1u << 2)
@@ -64,6 +72,7 @@ typedef enum {
     COMANDO_OBTER_REDE_WIFI_SALVA = 33,
     COMANDO_CONSULTAR_SATELITE = 34,
     COMANDO_OBTER_DIAGNOSTICO_MESTRE = 35,
+    COMANDO_OBTER_ESTADO_SINCRONIZACAO = 36,
 } codigo_comando_t;
 
 // Uma única ação estruturada transporta as operações do menu serial sem
@@ -221,6 +230,29 @@ typedef struct __attribute__((packed)) {
     uint32_t tempo_limite_wifi_ms;
 } resposta_configuracao_mestre_t;
 
+// Retrato somente de leitura do upload. O contador de início identifica a
+// execução mais recente sem alterar a confirmação das ações existentes.
+typedef struct __attribute__((packed)) {
+    uint8_t versao_formato;
+    uint8_t indicadores;
+    uint16_t reservado;
+    uint32_t sincronizacoes_iniciadas;
+    uint32_t sincronizacoes_finalizadas;
+    uint32_t arquivos_pendentes;
+    uint32_t arquivos_upload_total;
+    uint32_t arquivos_upload_concluidos;
+    uint32_t arquivo_atual_bytes_enviados;
+    uint32_t arquivo_atual_bytes_total;
+    uint32_t velocidade_upload_bytes_s;
+    uint32_t tempo_restante_upload_s;
+    int32_t ultimo_resultado_sincronizacao;
+    uint32_t arquivos_ultima_sincronizacao;
+    uint32_t bytes_ultima_sincronizacao;
+    uint32_t duracao_ultima_sincronizacao_ms;
+    uint32_t fim_ultima_sincronizacao_ms;
+    char arquivo_em_upload[64];
+} resposta_sincronizacao_mestre_t;
+
 typedef struct __attribute__((packed)) {
     uint8_t indice;
 } solicitacao_rede_wifi_salva_t;
@@ -296,6 +328,15 @@ typedef struct __attribute__((packed)) {
     uint32_t tempo_mestre_ms;
 } resposta_comando_acao_t;
 
+// Quando solicitada pelo campo reservado da ação de sincronização, a extensão
+// preserva os 8 bytes da confirmação comum e acrescenta o ID da execução.
+typedef struct __attribute__((packed)) {
+    resposta_comando_acao_t confirmacao;
+    uint8_t versao_formato;
+    uint8_t reservado[3];
+    uint32_t sincronizacao_id;
+} resposta_comando_acao_sincronizacao_t;
+
 #define COMANDO_TAMANHO_CABECALHO ((size_t)sizeof(cabecalho_quadro_comando_t))
 #define COMANDO_TAMANHO_CRC ((size_t)sizeof(uint32_t))
 #define COMANDO_TAMANHO_MAXIMO_QUADRO \
@@ -311,12 +352,17 @@ static_assert(sizeof(resposta_comando_ota_detalhada_t) ==
               "A resposta OTA detalhada deve ocupar 128 bytes");
 static_assert(sizeof(resposta_comando_acao_t) == 8,
               "A confirmação de ação deve ter 8 bytes");
+static_assert(sizeof(resposta_comando_acao_sincronizacao_t) == 16,
+              "A confirmação de sincronização deve ter 16 bytes");
 static_assert(sizeof(solicitacao_acao_mestre_t) ==
                   COMANDO_TAMANHO_MAXIMO_CARGA,
               "A solicitação operacional deve ocupar 128 bytes");
 static_assert(sizeof(resposta_configuracao_mestre_t) <=
                   COMANDO_TAMANHO_MAXIMO_CARGA,
               "A configuração deve caber na carga de comando");
+static_assert(sizeof(resposta_sincronizacao_mestre_t) <=
+                  COMANDO_TAMANHO_MAXIMO_CARGA,
+              "A sincronização deve caber na carga de comando");
 static_assert(sizeof(resposta_diagnostico_mestre_t) ==
                   COMANDO_TAMANHO_MAXIMO_CARGA,
               "O diagnóstico do mestre deve ocupar 128 bytes");
@@ -330,12 +376,17 @@ _Static_assert(sizeof(resposta_comando_ota_detalhada_t) ==
                "A resposta OTA detalhada deve ocupar 128 bytes");
 _Static_assert(sizeof(resposta_comando_acao_t) == 8,
                "A confirmação de ação deve ter 8 bytes");
+_Static_assert(sizeof(resposta_comando_acao_sincronizacao_t) == 16,
+               "A confirmação de sincronização deve ter 16 bytes");
 _Static_assert(sizeof(solicitacao_acao_mestre_t) ==
                    COMANDO_TAMANHO_MAXIMO_CARGA,
                "A solicitação operacional deve ocupar 128 bytes");
 _Static_assert(sizeof(resposta_configuracao_mestre_t) <=
                    COMANDO_TAMANHO_MAXIMO_CARGA,
                "A configuração deve caber na carga de comando");
+_Static_assert(sizeof(resposta_sincronizacao_mestre_t) <=
+                   COMANDO_TAMANHO_MAXIMO_CARGA,
+               "A sincronização deve caber na carga de comando");
 _Static_assert(sizeof(resposta_diagnostico_mestre_t) ==
                    COMANDO_TAMANHO_MAXIMO_CARGA,
                "O diagnóstico do mestre deve ocupar 128 bytes");

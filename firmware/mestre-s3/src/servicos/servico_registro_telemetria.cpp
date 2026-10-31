@@ -1175,6 +1175,7 @@ esp_err_t servico_registro_telemetria_solicitar_sincronizacao() {
         return ESP_ERR_INVALID_STATE;
     }
     estado.sincronizacao_em_andamento = true;
+    estado.sincronizacoes_iniciadas++;
     estado.aguardando_confirmacao_upload = false;
     estado.arquivos_upload_total = 0;
     estado.arquivos_upload_concluidos = 0;

@@ -21,6 +21,7 @@ struct EstadoRegistroTelemetria {
     uint32_t arquivo_atual_bytes_total = 0;
     uint32_t velocidade_upload_bytes_s = 0;
     uint32_t tempo_restante_upload_s = 0;
+    uint32_t sincronizacoes_iniciadas = 0;
     uint32_t sincronizacoes_finalizadas = 0;
     uint32_t arquivos_ultima_sincronizacao = 0;
     uint32_t bytes_ultima_sincronizacao = 0;

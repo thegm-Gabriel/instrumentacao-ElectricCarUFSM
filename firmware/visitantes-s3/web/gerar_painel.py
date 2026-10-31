@@ -21,6 +21,7 @@ def main() -> None:
     for offset in range(0, len(html), 900):
         chunk = html[offset:offset + 900]
         escaped = chunk.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+        escaped = escaped.replace("??", "?\\?")
         lines.append(f'    "{escaped}"')
     lines[-1] += ";"
     TARGET.write_text("\n".join(lines) + "\n", encoding="utf-8")

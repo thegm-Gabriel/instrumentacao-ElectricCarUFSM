@@ -1,5 +1,7 @@
 # Telemetria diária no Google
 
+[Índice da documentação](README.md)
+
 O mestre transmite telemetria ao vivo aos satélites a 4 Hz e registra uma cópia
 histórica independente a 1 Hz. Os CSVs são gravados no cartão SD durante o uso e
 só são enviados quando a equipe escolhe a opção **Enviar telemetria pendente ao
@@ -16,7 +18,7 @@ pela equipe.
    Drive uma pasta chamada `Telemetria Carro` e copie da URL o texto que aparece
    depois de `/folders/`; esse é o ID da pasta.
 2. Acesse [script.google.com](https://script.google.com/), crie um projeto e
-   cole nele todo o conteúdo do arquivo `Code.gs` desta pasta.
+   cole nele o conteúdo de [`telemetria-google/Code.gs`](telemetria-google/Code.gs).
 3. Abra **Configurações do projeto > Propriedades do script** e crie:
 
    - `ID_PASTA_TELEMETRIA`: o ID copiado no passo 1;

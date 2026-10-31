@@ -1,5 +1,7 @@
 # Pinagem atual
 
+[Índice da documentação](README.md)
+
 Todas as UARTs usam nível lógico de 3,3 V, formato 8N1 e 1.000.000 baud. Os três
 ESP32-S3 precisam compartilhar o GND. Os firmwares devem usar a mesma taxa,
 definida uma única vez em
