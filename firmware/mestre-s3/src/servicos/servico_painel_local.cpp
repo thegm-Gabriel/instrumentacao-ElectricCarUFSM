@@ -264,13 +264,17 @@ std::size_t montar_alerta(LinhasPainel& linhas, EstadoSinalizacao estado,
     switch (causa) {
         case CausaSaudeHeapCritico:
         case CausaSaudeMemoriaBaixa:
-            copiar_linha(linhas[2], "MEMORIA INTERNA BAIXA");
-            std::snprintf(linhas[3], TAMANHO_LINHA, "LIVRE: %lu KB",
-                          static_cast<unsigned long>(
-                              saude.heap_interno_livre / 1024u));
-            std::snprintf(linhas[4], TAMANHO_LINHA, "BLOCO: %lu KB",
-                          static_cast<unsigned long>(
-                              saude.maior_bloco_heap_interno / 1024u));
+            copiar_linha(linhas[2], "MEMORIA SOB PRESSAO");
+            std::snprintf(linhas[3], TAMANHO_LINHA, "I:%hu B:%hu KB",
+                          static_cast<uint16_t>(std::min<uint32_t>(
+                              saude.heap_interno_livre / 1024u, 65535u)),
+                          static_cast<uint16_t>(std::min<uint32_t>(
+                              saude.maior_bloco_heap_interno / 1024u, 65535u)));
+            std::snprintf(linhas[4], TAMANHO_LINHA, "PS:%hu B:%hu KB",
+                          static_cast<uint16_t>(std::min<uint32_t>(
+                              saude.psram_livre / 1024u, 65535u)),
+                          static_cast<uint16_t>(std::min<uint32_t>(
+                              saude.maior_bloco_psram / 1024u, 65535u)));
             break;
         case CausaSaudePilhaCritica:
             copiar_linha(linhas[2], "PILHA QUASE ESGOTADA");

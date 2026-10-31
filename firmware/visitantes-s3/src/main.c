@@ -3,9 +3,9 @@
 
 #include "esp_log.h"
 #include "esp_ota_ops.h"
-#include "receptor_uart.h"
-#include "rede_wifi.h"
-#include "servidor_web.h"
+#include "servicos/receptor_uart.h"
+#include "gerenciadores/gerenciador_wifi.h"
+#include "servicos/servidor_web.h"
 #include "servico_ota_satelite.h"
 
 static const char *TAG = "main_visitantes";
@@ -38,7 +38,7 @@ void app_main(void)
         tratar_falha_de_inicializacao("UART", erro);
         return;
     }
-    erro = rede_wifi_iniciar();
+    erro = gerenciador_wifi_iniciar();
     if (erro != ESP_OK) {
         tratar_falha_de_inicializacao("Wi-Fi", erro);
         return;

@@ -1,5 +1,8 @@
 # Firmware do ESP32-S3 mestre
 
+O [guia técnico do mestre](../../documentacao/firmware-mestre/README.md) reúne
+o mapa de módulos, pinout, funcionalidades, estados e pontos de configuração.
+
 Alvo de hardware: **ESP32-S3-WROOM-1-N16R8**, com 16 MB de flash Quad SPI e
 8 MB de PSRAM Octal SPI.
 
@@ -10,6 +13,11 @@ o terminal identifica claramente os dados como simulados. Também verifica
 atualizações no GitHub e só executa
 o OTA após autorização pelo terminal. Consulte `ARQUITETURA.md` para a divisão
 interna e `../../documentacao/ota/README.md` para preparar os releases.
+
+O satélite da equipe pode solicitar um retrato de diagnóstico compacto e
+versionado. A resposta reúne CPU por núcleo, tarefa de maior uso, temperatura
+interna do ESP32-S3, memória interna, PSRAM, menor margem de pilha, causas de
+saúde e contadores de falha em uma única carga UART de 128 bytes.
 
 ## Redes Wi-Fi pelo terminal
 
@@ -128,6 +136,14 @@ fora da tarefa de prioridade alta e acompanha fases de aquisição, SD e rede.
 A opção 1 apresenta o resumo por seções e as tarefas em tabela, ordenadas pela
 menor margem, além de indicar qual estado dos LEDs foi comandado.
 
+O resumo de saúde usa memória interna acessível em bytes e o maior bloco
+alocável. Os mínimos históricos continuam nos relatórios, mas quedas breves
+durante Wi-Fi, TLS e OTA não mudam o estado: atenção exige 15 amostras de
+pressão de memória, falha exige 3 amostras críticas e falta extrema é imediata.
+A pilha só gera falha abaixo de 256 bytes de margem mínima. Erros isolados de
+sensor, I²C e UART permanecem nos contadores; o aviso depende de repetição ou
+perda de mensagens.
+
 No cartão, `logs/esp_<sessao>_<parte>.log` reúne identificação do firmware,
 motivo do reset, memória interna/PSRAM/DMA, tarefas e erros. Há registros a cada
 30 segundos e em mudanças relevantes, com segmentos de aproximadamente 1 MiB
@@ -139,3 +155,14 @@ Validação em bancada: exercitar aquisição junto com upload e depois OTA,
 interromper a rede, verificar os alertas e conferir os logs após reiniciar.
 Comparar memória interna, maior bloco e margens mínimas de pilha durante TLS;
 a compilação não substitui esse teste com o cartão e os periféricos reais.
+
+## Coleta temporária de voz para treinamento
+
+A opção `9` do menu serial solicita um nome e uma duração e grava o INMP441 em
+`/sdcard/audio_ia/<nome>.wav`. Os arquivos são mono, PCM 16 bits, 16 kHz e podem
+ser enviados diretamente à etapa de preparação do conjunto de dados. O recurso
+recusa a gravação durante Wi-Fi, OTA ou upload e nunca sobrescreve um arquivo.
+
+O recurso foi isolado em `servico_gravador_audio_treinamento.*` para poder ser
+removido depois do treinamento, junto da opção 9 e dos três pinos temporários em
+`configuracao_placa.h`.

@@ -59,7 +59,8 @@ segura a repetição após uma queda de rede. Planilhas criadas por versões ant
 do script não são apagadas nem migradas automaticamente.
 
 O envio não é automático durante o percurso. Ao fim da operação, use **Enviar
-telemetria pendente ao Google** no terminal ou em `http://painel.mestre`. O
+telemetria pendente ao Google** no terminal ou na aba **ESP32 — Mestre** de
+`http://192.168.4.1/`, conectado ao ponto de acesso da equipe. O
 mestre fecha o lote atual, abre uma sessão Wi-Fi temporária e processa os arquivos
 pendentes. Se a rede ou o Google falhar, o CSV permanece no cartão para uma nova
 tentativa.

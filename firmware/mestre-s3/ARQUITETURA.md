@@ -35,8 +35,10 @@ sensores, sem alocação dinâmica.
 
 ## Estado atual
 
-UART, I2C, PCNT, cartão SD e OTA possuem implementação funcional. I2S não faz
-parte do componente ativo e só deve ser adicionado quando houver um caso de uso.
+UART, I2C, PCNT, cartão SD e OTA possuem implementação funcional. O serviço
+`servico_gravador_audio_treinamento` usa I2S com um INMP441 para coletar WAVs de
+treinamento por comando do terminal; esse recurso é temporário e não participa da
+aquisição contínua de telemetria.
 
 O OTA usa Wi-Fi em modo estação, HTTPS com o pacote de certificados do ESP-IDF,
 manifesto único no GitHub Release, SHA-256, duas partições de aplicação e rollback.
@@ -179,9 +181,11 @@ SDK, com prioridade, afinidade, estado, menor margem de pilha e CPU por janela.
 CPU de 100% representa um núcleo; a primeira janela não possui medição. Os campos
 de núcleo representam afinidade, não o núcleo instantâneo de execução. Uma coleta
 sem capacidade é marcada inválida. Relatórios de tarefas são emitidos a cada 30 s;
-suas cópias e as do log usam PSRAM, sem alocação por mensagem. Alertas antecipados
-ocorrem abaixo de 48 KiB internos livres ou de 20 KiB no maior bloco; limites
-críticos são 24 KiB e 8 KiB, respectivamente.
+suas cópias e as do log usam PSRAM, sem alocação por mensagem. O diagnóstico
+mede RAM interna acessível em bytes e o maior bloco alocável. Atenção só ocorre
+após 15 amostras abaixo de 24 KiB livres ou 8 KiB de bloco; falha, após 3
+amostras abaixo de 16 KiB ou 4 KiB. Abaixo de 8 KiB livres ou 2 KiB de bloco,
+a falha é imediata. A recuperação exige 5 amostras fora da faixa de pressão.
 
 O resumo solicitado pela opção 1 do terminal é separado por seções e aguarda a
 impressão terminar antes de redesenhar o menu. A tabela de tarefas é ordenada pela

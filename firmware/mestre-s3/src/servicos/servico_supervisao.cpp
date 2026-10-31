@@ -96,6 +96,7 @@ void tarefa(void*) {
                 continue;
             }
             if (registro.estado.registrado && registro.estado.em_recuperacao &&
+                registro.estado.tempo_limite_ms != 0 &&
                 idade > registro.estado.tempo_limite_ms) {
                 registro.estado.em_recuperacao = false;
                 registro.estado.recuperacoes_com_falha++;
@@ -103,6 +104,7 @@ void tarefa(void*) {
                 registro.instante_ultimo_pulso_ms = agora_ms;
             } else if (registro.estado.registrado &&
                        !registro.estado.em_recuperacao &&
+                       registro.estado.tempo_limite_ms != 0 &&
                        idade > registro.estado.tempo_limite_ms) {
                 registro.estado.em_recuperacao = true;
                 registro.estado.falhas_detectadas++;

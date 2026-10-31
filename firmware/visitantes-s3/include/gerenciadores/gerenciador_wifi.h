@@ -3,4 +3,4 @@
 
 #include "esp_err.h"
 
-esp_err_t rede_wifi_iniciar(void);
+esp_err_t gerenciador_wifi_iniciar(void);

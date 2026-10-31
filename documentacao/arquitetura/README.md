@@ -6,9 +6,9 @@ clientes Wi-Fi e permite atualizar ou reiniciar uma interface sem interromper as
 demais funções do veículo.
 
 ```text
-                    ┌─ UART da equipe ─────► painel da equipe
+                    ┌─ UART bidirecional ──► painel da equipe
 sensores ─► mestre ─┤
-                    ├─ UART de visitantes ─► painel de visitantes
+                    ├─ UART bidirecional ──► painel de visitantes
                     ├─ SPI ────────────────► cartão SD
                     └─ Wi-Fi temporário ───► OTA e Google
 ```
@@ -28,18 +28,22 @@ No mestre:
 
 Nos satélites:
 
-- `receptor_uart` valida e armazena o último retrato de telemetria;
-- `gerenciador_uart` controla o transporte e as respostas ao mestre;
-- `rede_wifi` mantém o ponto de acesso local;
-- `servidor_web` apresenta telemetria e diagnóstico;
-- no módulo da equipe, `painel_mestre_web` concentra a interface de comandos.
+- `servicos/receptor_uart` valida a telemetria, mantém o último retrato e
+  encaminha quadros de comandos e OTA aos serviços compartilhados;
+- `gerenciadores/gerenciador_wifi` mantém o ponto de acesso local;
+- `servicos/servidor_web` publica o painel e as APIs HTTP;
+- somente na equipe, `gerenciadores/gerenciador_uart` serializa as consultas
+  feitas pelo painel ao mestre e `servicos/diagnostico_sistema` mede o estado local.
 
 ## Fluxos de dados
 
 A aquisição produz um modelo em unidades de engenharia. O serviço de telemetria
 o converte para o protocolo compacto e enfileira uma cópia para cada UART. Os
 satélites só substituem o retrato publicado depois de validar cabeçalho, tamanho,
-versão e CRC. As confirmações permitem medir atraso, perdas e disponibilidade.
+versão e CRC. Eles devolvem ACK de telemetria e respostas a comandos e OTA pelo
+fio de retorno de cada UART. As confirmações permitem medir atraso, perdas e
+disponibilidade. A equipe expõe consultas e ações do mestre por HTTP; o módulo
+de visitantes expõe somente a telemetria pública.
 
 O mesmo retrato é amostrado a 1 Hz pelo serviço de registro. Uma tarefa é a única
 proprietária dos CSVs no cartão SD; por isso, aquisição e transmissão não esperam
@@ -66,3 +70,5 @@ com efeito colateral.
 
 As regras detalhadas de dependência do mestre estão em
 [`firmware/mestre-s3/ARQUITETURA.md`](../../firmware/mestre-s3/ARQUITETURA.md).
+O comportamento das interfaces e dos enlaces dos satélites está no
+[guia técnico dos satélites](../satelites/README.md).

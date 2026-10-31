@@ -43,6 +43,16 @@ void registrar_erro(esp_err_t erro) {
 esp_err_t escrever_led(gpio_num_t pino, bool aceso) {
     return gpio_set_level(pino, nivel_led(aceso));
 }
+
+esp_err_t configurar_pwm_buzzer(uint32_t frequencia_hz) {
+    ledc_timer_config_t temporizador{};
+    temporizador.speed_mode = configuracao::MODO_PWM_BUZZER;
+    temporizador.duty_resolution = configuracao::RESOLUCAO_PWM_BUZZER;
+    temporizador.timer_num = configuracao::TEMPORIZADOR_PWM_BUZZER;
+    temporizador.freq_hz = frequencia_hz;
+    temporizador.clk_cfg = LEDC_AUTO_CLK;
+    return ledc_timer_config(&temporizador);
+}
 }  // namespace
 
 esp_err_t gerenciador_indicadores_iniciar() {
@@ -81,13 +91,7 @@ esp_err_t gerenciador_indicadores_iniciar() {
         return erro;
     }
 
-    ledc_timer_config_t temporizador{};
-    temporizador.speed_mode = configuracao::MODO_PWM_BUZZER;
-    temporizador.duty_resolution = configuracao::RESOLUCAO_PWM_BUZZER;
-    temporizador.timer_num = configuracao::TEMPORIZADOR_PWM_BUZZER;
-    temporizador.freq_hz = configuracao::FREQUENCIA_INICIAL_BUZZER_HZ;
-    temporizador.clk_cfg = LEDC_AUTO_CLK;
-    erro = ledc_timer_config(&temporizador);
+    erro = configurar_pwm_buzzer(configuracao::FREQUENCIA_INICIAL_BUZZER_HZ);
     if (erro != ESP_OK) {
         registrar_erro(erro);
         ESP_LOGE(ETIQUETA, "Falha ao configurar o PWM do buzzer: %s",
@@ -153,9 +157,9 @@ esp_err_t gerenciador_indicadores_tocar_tom(uint16_t frequencia_hz,
     if (intensidade_percentual == 0) return gerenciador_indicadores_silenciar();
 
     xSemaphoreTake(mutex_indicadores, portMAX_DELAY);
-    esp_err_t erro = ledc_set_freq(configuracao::MODO_PWM_BUZZER,
-                                   configuracao::TEMPORIZADOR_PWM_BUZZER,
-                                   frequencia_hz);
+    // ledc_set_freq reutiliza a resolução lida do timer. Após sessões de
+    // Wi-Fi ela foi lida como zero; reconfigurar restaura resolução e clock.
+    esp_err_t erro = configurar_pwm_buzzer(frequencia_hz);
     const uint32_t duty =
         (DUTY_ONDA_QUADRADA * static_cast<uint32_t>(intensidade_percentual)) / 100U;
     if (erro == ESP_OK) {

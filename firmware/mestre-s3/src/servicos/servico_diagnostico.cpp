@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <algorithm>
 
+#include "driver/temperature_sensor.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_system.h"
@@ -24,14 +25,50 @@
 namespace {
 constexpr char ETIQUETA[] = "diagnostico";
 constexpr uint32_t INTERVALO_ATUALIZACAO_MS = 1000;
+constexpr uint32_t HEAP_INTERNO_EMERGENCIA_BYTES = 8U * 1024U;
+constexpr uint32_t BLOCO_INTERNO_EMERGENCIA_BYTES = 2U * 1024U;
+constexpr uint32_t HEAP_INTERNO_CRITICO_BYTES = 16U * 1024U;
+constexpr uint32_t BLOCO_INTERNO_CRITICO_BYTES = 4U * 1024U;
+constexpr uint32_t HEAP_INTERNO_ATENCAO_BYTES = 24U * 1024U;
+constexpr uint32_t BLOCO_INTERNO_ATENCAO_BYTES = 8U * 1024U;
+constexpr uint32_t PSRAM_EMERGENCIA_BYTES = 64U * 1024U;
+constexpr uint32_t BLOCO_PSRAM_EMERGENCIA_BYTES = 8U * 1024U;
+constexpr uint32_t PSRAM_CRITICA_BYTES = 128U * 1024U;
+constexpr uint32_t PSRAM_ATENCAO_BYTES = 256U * 1024U;
+constexpr uint32_t BLOCO_PSRAM_CRITICO_BYTES = 16U * 1024U;
+constexpr uint32_t BLOCO_PSRAM_ATENCAO_BYTES = 32U * 1024U;
+constexpr uint8_t AMOSTRAS_CRITICAS_MEMORIA = 3;
+constexpr uint8_t AMOSTRAS_ALERTA_MEMORIA = 15;
+constexpr uint8_t AMOSTRAS_RECUPERACAO_MEMORIA = 5;
+constexpr uint32_t PILHA_CRITICA_BYTES = 256;
+constexpr uint8_t AMOSTRAS_SEM_RESPOSTA = 3;
+constexpr uint8_t AMOSTRAS_WIFI_FRACO = 10;
+constexpr uint8_t AMOSTRAS_WIFI_RECUPERADO = 5;
 
 struct MemoriaEstadoSaude {
     uint32_t erros_uart_observados = 0;
+    uint32_t erros_i2c_observados = 0;
     uint32_t descartes_uart_observados = 0;
     uint32_t falhas_ota_observadas = 0;
     int64_t alerta_uart_ate_ms = 0;
+    int64_t alerta_i2c_ate_ms = 0;
     int64_t alerta_ota_ate_ms = 0;
     int64_t recuperando_ate_ms = 0;
+    int64_t inicio_janela_uart_ms = 0;
+    uint32_t erros_uart_na_janela = 0;
+    int64_t inicio_janela_i2c_ms = 0;
+    uint32_t erros_i2c_na_janela = 0;
+    uint8_t amostras_memoria_critica = 0;
+    uint8_t amostras_memoria_critica_recuperada = 0;
+    uint8_t amostras_memoria_baixa = 0;
+    uint8_t amostras_memoria_recuperada = 0;
+    bool alerta_memoria_ativo = false;
+    bool alerta_memoria_critica_ativo = false;
+    uint8_t amostras_equipe_sem_resposta = 0;
+    uint8_t amostras_visitantes_sem_resposta = 0;
+    uint8_t amostras_wifi_fraco = 0;
+    uint8_t amostras_wifi_recuperado = 0;
+    bool alerta_wifi_fraco_ativo = false;
 };
 
 EstatisticasSensoresDiagnostico diagnostico{};
@@ -48,6 +85,31 @@ uint64_t total_cpu_anterior = 0;
 uint32_t menor_pilha_tarefas = 0;
 char tarefa_menor_pilha[24]{};
 bool pilhas_medidas = false;
+uint32_t menor_heap_interno = UINT32_MAX;
+uint32_t menor_bloco_interno = UINT32_MAX;
+uint32_t menor_psram = UINT32_MAX;
+uint32_t menor_bloco_psram = UINT32_MAX;
+temperature_sensor_handle_t sensor_temperatura = nullptr;
+esp_err_t temperatura_ultimo_erro = ESP_ERR_INVALID_STATE;
+
+void iniciar_sensor_temperatura() {
+    if (sensor_temperatura != nullptr) return;
+    const temperature_sensor_config_t configuracao =
+        TEMPERATURE_SENSOR_CONFIG_DEFAULT(-10, 80);
+    temperatura_ultimo_erro =
+        temperature_sensor_install(&configuracao, &sensor_temperatura);
+    if (temperatura_ultimo_erro == ESP_OK) {
+        temperatura_ultimo_erro = temperature_sensor_enable(sensor_temperatura);
+    }
+    if (temperatura_ultimo_erro != ESP_OK) {
+        if (sensor_temperatura != nullptr) {
+            (void)temperature_sensor_uninstall(sensor_temperatura);
+            sensor_temperatura = nullptr;
+        }
+        ESP_LOGW(ETIQUETA, "Temperatura interna indisponível: %s",
+                 esp_err_to_name(temperatura_ultimo_erro));
+    }
+}
 
 void atualizar_tarefas() {
 #if CONFIG_FREERTOS_USE_TRACE_FACILITY
@@ -82,7 +144,10 @@ void atualizar_tarefas() {
             politica != nullptr ? politica->pilha_bytes
                                 : configuracao::pilha_tarefa_sistema(
                                       destino.nome);
-        if (destino.pilha_minima_livre_bytes < menor) {
+        // Pilhas do SDK continuam na tabela, mas não definem a saúde do
+        // aplicativo: seus tamanhos e margens pertencem ao ESP-IDF.
+        if (politica != nullptr &&
+            destino.pilha_minima_livre_bytes < menor) {
             menor = destino.pilha_minima_livre_bytes;
             nome_menor = destino.nome;
         }
@@ -100,7 +165,7 @@ void atualizar_tarefas() {
         }
 #endif
     }
-    if (quantidade != 0) {
+    if (quantidade != 0 && menor != UINT32_MAX) {
         menor_pilha_tarefas = menor;
         std::snprintf(tarefa_menor_pilha, sizeof(tarefa_menor_pilha), "%s",
                       nome_menor);
@@ -112,6 +177,12 @@ void atualizar_tarefas() {
 #endif
         }
         total_cpu_anterior = total;
+    } else {
+        // Uma coleta inválida não deve manter um alerta de pilha antigo.
+        pilhas_medidas = false;
+        menor_pilha_tarefas = 0;
+        tarefa_menor_pilha[0] = '\0';
+        total_cpu_anterior = 0;
     }
     portENTER_CRITICAL(&trava_diagnostico);
     tarefas_publicadas = tarefas_coleta;
@@ -166,12 +237,39 @@ ResumoSaudeSistema calcular_resumo() {
     std::snprintf(resumo.tarefa_menor_pilha,
                   sizeof(resumo.tarefa_menor_pilha), "%s",
                   pilhas_medidas ? tarefa_menor_pilha : "-");
-    resumo.heap_interno_livre = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    resumo.heap_interno_livre =
+        heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     resumo.maior_bloco_heap_interno =
-        heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
-    resumo.psram_livre = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+        heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    resumo.psram_livre =
+        heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     resumo.maior_bloco_psram =
-        heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+        heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    menor_heap_interno = std::min(menor_heap_interno,
+                                  resumo.heap_interno_livre);
+    menor_bloco_interno = std::min(menor_bloco_interno,
+                                   resumo.maior_bloco_heap_interno);
+    menor_psram = std::min(menor_psram, resumo.psram_livre);
+    menor_bloco_psram = std::min(menor_bloco_psram,
+                                 resumo.maior_bloco_psram);
+    resumo.menor_heap_interno_livre = menor_heap_interno;
+    resumo.menor_maior_bloco_heap_interno = menor_bloco_interno;
+    resumo.menor_psram_livre = menor_psram;
+    resumo.menor_maior_bloco_psram = menor_bloco_psram;
+    resumo.temperatura_ultimo_erro = temperatura_ultimo_erro;
+    if (sensor_temperatura != nullptr) {
+        float temperatura_c = 0.0f;
+        temperatura_ultimo_erro =
+            temperature_sensor_get_celsius(sensor_temperatura,
+                                           &temperatura_c);
+        resumo.temperatura_ultimo_erro = temperatura_ultimo_erro;
+        if (temperatura_ultimo_erro == ESP_OK) {
+            resumo.temperatura_valida = true;
+            resumo.temperatura_centesimos_c = static_cast<int32_t>(
+                temperatura_c * 100.0f +
+                (temperatura_c >= 0.0f ? 0.5f : -0.5f));
+        }
+    }
     resumo.motivo_ultimo_reset = static_cast<uint32_t>(esp_reset_reason());
     resumo.erros_sensores = sensores.adc.total + sensores.mpu6050.total +
                             sensores.encoder.total;
@@ -200,22 +298,72 @@ ResumoSaudeSistema calcular_resumo() {
 
     const int64_t instante_ms = esp_timer_get_time() / 1000;
     uint32_t causas = CausaSaudeNenhuma;
-    if (resumo.heap_interno_livre < 24U * 1024U ||
-        resumo.maior_bloco_heap_interno < 8192) {
+    const bool psram_disponivel =
+        heap_caps_get_total_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != 0;
+    const bool memoria_emergencia =
+        resumo.heap_interno_livre < HEAP_INTERNO_EMERGENCIA_BYTES ||
+        resumo.maior_bloco_heap_interno < BLOCO_INTERNO_EMERGENCIA_BYTES ||
+        (psram_disponivel &&
+         (resumo.psram_livre < PSRAM_EMERGENCIA_BYTES ||
+          resumo.maior_bloco_psram < BLOCO_PSRAM_EMERGENCIA_BYTES));
+    const bool memoria_critica =
+        resumo.heap_interno_livre < HEAP_INTERNO_CRITICO_BYTES ||
+        resumo.maior_bloco_heap_interno < BLOCO_INTERNO_CRITICO_BYTES ||
+        (psram_disponivel &&
+         (resumo.psram_livre < PSRAM_CRITICA_BYTES ||
+          resumo.maior_bloco_psram < BLOCO_PSRAM_CRITICO_BYTES));
+    const bool memoria_baixa =
+        resumo.heap_interno_livre < HEAP_INTERNO_ATENCAO_BYTES ||
+        resumo.maior_bloco_heap_interno < BLOCO_INTERNO_ATENCAO_BYTES ||
+        (psram_disponivel &&
+         (resumo.psram_livre < PSRAM_ATENCAO_BYTES ||
+          resumo.maior_bloco_psram < BLOCO_PSRAM_ATENCAO_BYTES));
+    // TLS, OTA e Wi-Fi usam RAM temporariamente. O mínimo histórico fica no
+    // retrato; a saúde considera pressão sustentada e uma faixa de emergência.
+    if (memoria_critica) {
+        memoria_saude.amostras_memoria_critica_recuperada = 0;
+        if (memoria_saude.amostras_memoria_critica < AMOSTRAS_CRITICAS_MEMORIA)
+            memoria_saude.amostras_memoria_critica++;
+    } else {
+        memoria_saude.amostras_memoria_critica = 0;
+        if (memoria_saude.amostras_memoria_critica_recuperada <
+            AMOSTRAS_RECUPERACAO_MEMORIA)
+            memoria_saude.amostras_memoria_critica_recuperada++;
+    }
+    if (memoria_emergencia ||
+        memoria_saude.amostras_memoria_critica >= AMOSTRAS_CRITICAS_MEMORIA)
+        memoria_saude.alerta_memoria_critica_ativo = true;
+    if (!memoria_critica &&
+        memoria_saude.amostras_memoria_critica_recuperada >=
+            AMOSTRAS_RECUPERACAO_MEMORIA)
+        memoria_saude.alerta_memoria_critica_ativo = false;
+
+    if (memoria_baixa) {
+        memoria_saude.amostras_memoria_recuperada = 0;
+        if (memoria_saude.amostras_memoria_baixa < AMOSTRAS_ALERTA_MEMORIA)
+            memoria_saude.amostras_memoria_baixa++;
+        if (memoria_saude.amostras_memoria_baixa >= AMOSTRAS_ALERTA_MEMORIA)
+            memoria_saude.alerta_memoria_ativo = true;
+    } else {
+        memoria_saude.amostras_memoria_baixa = 0;
+        if (memoria_saude.amostras_memoria_recuperada < AMOSTRAS_RECUPERACAO_MEMORIA)
+            memoria_saude.amostras_memoria_recuperada++;
+        if (memoria_saude.amostras_memoria_recuperada >= AMOSTRAS_RECUPERACAO_MEMORIA)
+            memoria_saude.alerta_memoria_ativo = false;
+    }
+    if (memoria_saude.alerta_memoria_critica_ativo) {
         causas |= CausaSaudeHeapCritico;
-    } else if (resumo.heap_interno_livre < 48U * 1024U ||
-               resumo.maior_bloco_heap_interno < 20U * 1024U) {
+    } else if (memoria_saude.alerta_memoria_ativo) {
         causas |= CausaSaudeMemoriaBaixa;
     }
     if (pilhas_medidas &&
-        resumo.bytes_pilha_livres < 512) {
+        resumo.bytes_pilha_livres < PILHA_CRITICA_BYTES) {
         causas |= CausaSaudePilhaCritica;
     }
-    if (sensores.adc.consecutivos != 0 ||
-        sensores.mpu6050.consecutivos != 0 ||
-        sensores.encoder.consecutivos != 0) causas |= CausaSaudeSensor;
-    if (i2c.ultimo_erro != ESP_OK) causas |= CausaSaudeI2c;
-    if (sensores.persistencia_odometro.consecutivos != 0) {
+    if (sensores.adc.consecutivos >= 3 ||
+        sensores.mpu6050.consecutivos >= 3 ||
+        sensores.encoder.consecutivos >= 3) causas |= CausaSaudeSensor;
+    if (sensores.persistencia_odometro.consecutivos >= 2) {
         causas |= CausaSaudePersistencia;
     }
     // Os últimos códigos permanecem disponíveis para diagnóstico, mas não
@@ -239,23 +387,87 @@ ResumoSaudeSistema calcular_resumo() {
         resumo.falhas_supervisao += modulo.falhas_detectadas;
         if (modulo.atrasado) causas |= CausaSaudeSupervisao;
     }
-    if (telemetria.pacotes_gerados >= 10u && !resumo.equipe_respondendo)
+    const auto contar_amostras = [](uint8_t& amostras, bool condicao,
+                                    uint8_t limite) {
+        if (!condicao) amostras = 0;
+        else if (amostras < limite) amostras++;
+        return amostras >= limite;
+    };
+    if (contar_amostras(memoria_saude.amostras_equipe_sem_resposta,
+                       telemetria.pacotes_gerados >= 10u &&
+                           !resumo.equipe_respondendo,
+                       AMOSTRAS_SEM_RESPOSTA))
         causas |= CausaSaudeEquipeSemResposta;
-    if (telemetria.pacotes_gerados >= 10u && !resumo.visitantes_respondendo)
+    if (contar_amostras(memoria_saude.amostras_visitantes_sem_resposta,
+                       telemetria.pacotes_gerados >= 10u &&
+                           !resumo.visitantes_respondendo,
+                       AMOSTRAS_SEM_RESPOSTA))
         causas |= CausaSaudeVisitantesSemResposta;
-    if (wifi.conectado && wifi.rssi_dbm < -80) causas |= CausaSaudeWifiFraco;
+    if (!wifi.conectado) {
+        memoria_saude.amostras_wifi_fraco = 0;
+        memoria_saude.amostras_wifi_recuperado = 0;
+        memoria_saude.alerta_wifi_fraco_ativo = false;
+    } else if (wifi.rssi_dbm < -85) {
+        memoria_saude.amostras_wifi_recuperado = 0;
+        if (memoria_saude.amostras_wifi_fraco < AMOSTRAS_WIFI_FRACO)
+            memoria_saude.amostras_wifi_fraco++;
+        if (memoria_saude.amostras_wifi_fraco >= AMOSTRAS_WIFI_FRACO)
+            memoria_saude.alerta_wifi_fraco_ativo = true;
+    } else if (wifi.rssi_dbm > -80) {
+        memoria_saude.amostras_wifi_fraco = 0;
+        if (memoria_saude.amostras_wifi_recuperado < AMOSTRAS_WIFI_RECUPERADO)
+            memoria_saude.amostras_wifi_recuperado++;
+        if (memoria_saude.amostras_wifi_recuperado >= AMOSTRAS_WIFI_RECUPERADO)
+            memoria_saude.alerta_wifi_fraco_ativo = false;
+    } else {
+        memoria_saude.amostras_wifi_fraco = 0;
+        memoria_saude.amostras_wifi_recuperado = 0;
+    }
+    if (memoria_saude.alerta_wifi_fraco_ativo)
+        causas |= CausaSaudeWifiFraco;
 
     portENTER_CRITICAL(&trava_diagnostico);
-    if (resumo.erros_uart > memoria_saude.erros_uart_observados ||
+    const auto rajada_recente = [instante_ms](uint32_t total,
+        uint32_t& observado, int64_t& inicio_ms, uint32_t& acumulados) {
+        if (inicio_ms == 0) {
+            inicio_ms = instante_ms;
+            observado = total;
+            return false;
+        }
+        if (total < observado) {
+            inicio_ms = instante_ms;
+            acumulados = 0;
+            observado = total;
+            return false;
+        }
+        if (instante_ms - inicio_ms >= 15000) {
+            inicio_ms = instante_ms;
+            acumulados = 0;
+        }
+        acumulados += std::min(total - observado, 3u - acumulados);
+        observado = total;
+        if (acumulados < 3u) return false;
+        acumulados = 0;
+        inicio_ms = instante_ms;
+        return true;
+    };
+    if (rajada_recente(resumo.erros_i2c, memoria_saude.erros_i2c_observados,
+                      memoria_saude.inicio_janela_i2c_ms,
+                      memoria_saude.erros_i2c_na_janela)) {
+        memoria_saude.alerta_i2c_ate_ms = instante_ms + 10000;
+    }
+    if (rajada_recente(resumo.erros_uart, memoria_saude.erros_uart_observados,
+                      memoria_saude.inicio_janela_uart_ms,
+                      memoria_saude.erros_uart_na_janela) ||
         resumo.descartes_uart > memoria_saude.descartes_uart_observados) {
         memoria_saude.alerta_uart_ate_ms = instante_ms + 5000;
     }
     if (resumo.falhas_ota > memoria_saude.falhas_ota_observadas) {
         memoria_saude.alerta_ota_ate_ms = instante_ms + 10000;
     }
-    memoria_saude.erros_uart_observados = resumo.erros_uart;
     memoria_saude.descartes_uart_observados = resumo.descartes_uart;
     memoria_saude.falhas_ota_observadas = resumo.falhas_ota;
+    if (instante_ms < memoria_saude.alerta_i2c_ate_ms) causas |= CausaSaudeI2c;
     if (instante_ms < memoria_saude.alerta_uart_ate_ms) causas |= CausaSaudeUart;
     if (instante_ms < memoria_saude.alerta_ota_ate_ms)
         causas |= CausaSaudeOtaRecente;
@@ -301,6 +513,8 @@ void servico_diagnostico_obter_tarefas(DiagnosticoTarefas* destino) {
 
 esp_err_t servico_diagnostico_iniciar() {
     if (tarefa_diagnostico != nullptr) return ESP_OK;
+    // O sensor interno é complementar e não impede o monitoramento restante.
+    iniciar_sensor_temperatura();
     const ResumoSaudeSistema inicial = calcular_resumo();
     portENTER_CRITICAL(&trava_diagnostico);
     resumo_publicado = inicial;

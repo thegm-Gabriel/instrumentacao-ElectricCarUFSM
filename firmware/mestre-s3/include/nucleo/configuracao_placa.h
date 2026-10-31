@@ -6,6 +6,7 @@
 
 #include "driver/gpio.h"
 #include "driver/i2c.h"
+#include "driver/i2s_types.h"
 #include "driver/ledc.h"
 #include "driver/uart.h"
 #include "configuracao_enlace_uart.h"
@@ -23,6 +24,14 @@ constexpr gpio_num_t PINO_I2C_SCL = GPIO_NUM_9;
 constexpr uint32_t FREQUENCIA_I2C_HZ = 400000;
 constexpr uint8_t ENDERECO_MPU6050 = 0x68;
 constexpr uint32_t TEMPO_LIMITE_I2C_MS = 100;
+
+// Ferramenta temporária de coleta para o modelo de voz. O INMP441 trabalha
+// como escravo I2S; L/R ligado ao GND seleciona o canal esquerdo.
+constexpr i2s_port_t PORTA_I2S_MICROFONE = I2S_NUM_0;
+constexpr gpio_num_t PINO_MICROFONE_I2S_BCLK = GPIO_NUM_42;
+constexpr gpio_num_t PINO_MICROFONE_I2S_WS = GPIO_NUM_47;
+constexpr gpio_num_t PINO_MICROFONE_I2S_DADOS = GPIO_NUM_48;
+constexpr bool MICROFONE_I2S_CANAL_ESQUERDO = true;
 
 // Montagem atual: X vertical (+ para cima) e Y longitudinal (+ para frente).
 // Use 0/1/2 para X/Y/Z e troque o sinal para -1,0 se a orientação mudar.

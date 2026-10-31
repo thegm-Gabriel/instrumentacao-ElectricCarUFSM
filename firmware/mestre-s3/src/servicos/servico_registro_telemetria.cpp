@@ -162,9 +162,13 @@ void registrar_diagnostico_esp() {
                          esp_get_idf_version(), chip.cores, chip.revision, flash);
             std::fprintf(arquivo, "Tempos em ms desde boot; cpu_decimos: 1000=um nucleo; nucleo=afinidade (-1=livre); estado=FreeRTOS eTaskState. Log estruturado, sem credenciais.\n");
         }
-        std::fprintf(arquivo, "ESTADO ms=%" PRIu32 " saude=%s causas=0x%" PRIx32 " interno=%" PRIu32 " bloco=%" PRIu32 " psram=%" PRIu32 " heap_min=%" PRIu32 " pilha_min=%" PRIu32 " tarefa_pilha=%s dma=%u dma_bloco=%u\n",
+        std::fprintf(arquivo, "ESTADO ms=%" PRIu32 " saude=%s causas=0x%" PRIx32 " interno=%" PRIu32 " bloco=%" PRIu32 " interno_min=%" PRIu32 " bloco_min=%" PRIu32 " psram=%" PRIu32 " psram_bloco=%" PRIu32 " psram_min=%" PRIu32 " psram_bloco_min=%" PRIu32 " heap_min=%" PRIu32 " pilha_min=%" PRIu32 " tarefa_pilha=%s dma=%u dma_bloco=%u\n",
                      instante, servico_diagnostico_nome_estado(saude.estado), saude.causas_ativas,
-                     saude.heap_interno_livre, saude.maior_bloco_heap_interno, saude.psram_livre,
+                     saude.heap_interno_livre, saude.maior_bloco_heap_interno,
+                     saude.menor_heap_interno_livre,
+                     saude.menor_maior_bloco_heap_interno, saude.psram_livre,
+                     saude.maior_bloco_psram, saude.menor_psram_livre,
+                     saude.menor_maior_bloco_psram,
                      saude.menor_heap_livre, saude.bytes_pilha_livres,
                      saude.tarefa_menor_pilha,
                      static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA)),

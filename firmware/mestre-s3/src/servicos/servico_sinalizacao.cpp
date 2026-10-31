@@ -130,7 +130,12 @@ int64_t agora_ms() {
 }
 
 void registrar_resultado_hardware(esp_err_t erro) {
-    if (erro == ESP_OK) return;
+    if (erro == ESP_OK) {
+        portENTER_CRITICAL(&trava_situacao);
+        situacao.ultimo_erro = ESP_OK;
+        portEXIT_CRITICAL(&trava_situacao);
+        return;
+    }
     portENTER_CRITICAL(&trava_situacao);
     situacao.falhas_hardware++;
     situacao.ultimo_erro = erro;

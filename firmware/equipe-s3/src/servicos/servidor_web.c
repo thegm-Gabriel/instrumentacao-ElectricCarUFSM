@@ -1,13 +1,13 @@
 // Implementa as rotas HTTP e publica a telemetria recebida.
-#include "servidor_web.h"
+#include "servicos/servidor_web.h"
 
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
 
-#include "configuracao.h"
+#include "nucleo/configuracao.h"
+#include "servicos/diagnostico_sistema.h"
 #include "esp_check.h"
 #include "esp_http_server.h"
 #include "esp_app_desc.h"
@@ -18,169 +18,42 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "gerenciador_uart.h"
-#include "lwip/sockets.h"
-#include "painel_mestre_web.h"
+#include "gerenciadores/gerenciador_uart.h"
+#include "servicos/painel_web.h"
 #include "protocolo_comandos.h"
-#include "receptor_uart.h"
+#include "servicos/receptor_uart.h"
 #include "servico_comandos_satelite.h"
 #include "servico_ota_satelite.h"
 
 static const char *TAG = "servidor_web";
 
-static const char pagina_html[] =
-    "<!doctype html><html lang='pt-BR'><head><meta charset='utf-8'>"
-    "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-    "<meta name='theme-color' content='#050b12'><title>Painel da equipe | UFSM Carro</title><style>"
-    ":root{color-scheme:dark;--fundo:#09111a;--superficie:#111d29;--elevado:#172635;"
-    "--borda:#26394a;--texto:#f2f5f7;--fraco:#91a3b3;--amarelo:#f5b942;"
-    "--verde:#5ddd91;--vermelho:#ff7480;--azul:#62b7f5;--ciano:#54d2d2}"
-    "*{box-sizing:border-box}html{background:var(--fundo)}body{margin:0;min-height:100vh;"
-    "background:radial-gradient(circle at 85% 0,#17324a 0,transparent 32rem),var(--fundo);"
-    "color:var(--texto);font:15px system-ui,-apple-system,Segoe UI,sans-serif}"
-    "body:before{content:'';position:fixed;inset:0;pointer-events:none;opacity:.18;"
-    "background-image:linear-gradient(#fff1 1px,transparent 1px),linear-gradient(90deg,#fff1 1px,transparent 1px);background-size:42px 42px;mask-image:linear-gradient(to bottom,#000,transparent 65%)}"
-    "main{position:relative;max-width:1240px;margin:auto;padding:22px 24px 34px}"
-    ".topo{display:flex;justify-content:space-between;align-items:center;gap:18px;margin-bottom:22px}"
-    ".marca{display:flex;align-items:center;gap:13px}.simbolo{display:grid;place-items:center;width:44px;height:44px;border-radius:13px;background:linear-gradient(145deg,#f8c95e,#d89720);color:#171109;font-size:1.15rem;font-weight:900;box-shadow:0 9px 30px #f5b9422b}"
-    ".sobretitulo,.rotulo{color:var(--fraco);font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase}"
-    "h1{font-size:1.35rem;line-height:1.1;margin:4px 0 0}nav{display:flex;gap:6px;padding:5px;background:#0b151fbb;border:1px solid var(--borda);border-radius:12px;backdrop-filter:blur(10px)}"
-    "nav a{color:var(--fraco);text-decoration:none;font-weight:650;padding:9px 13px;border-radius:8px;transition:.18s}nav a:hover{color:var(--texto);background:#ffffff0b}nav a.ativo{color:#171109;background:var(--amarelo)}"
-    ".estado{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:14px;padding:12px 15px;border:1px solid var(--borda);border-radius:12px;background:#0d1823d9;box-shadow:0 12px 32px #0002}"
-    ".estado-principal{display:flex;align-items:center;gap:10px;font-weight:700}.ponto{width:9px;height:9px;border-radius:50%;background:var(--fraco);box-shadow:0 0 0 4px #91a3b31c}.estado small{color:var(--fraco);white-space:nowrap}.estado.online{border-color:#2c6446}.estado.online .ponto{background:var(--verde);box-shadow:0 0 0 4px #5ddd9120,0 0 16px #5ddd91}.estado.simulado{border-color:#7a632d}.estado.simulado .ponto{background:var(--amarelo);box-shadow:0 0 0 4px #f5b94220}.estado.offline{border-color:#663740}.estado.offline .ponto{background:var(--vermelho)}"
-    ".grade-destaque{display:grid;grid-template-columns:1.35fr repeat(3,minmax(0,1fr));gap:12px;margin-bottom:24px}"
-    ".cartao{position:relative;overflow:hidden;background:linear-gradient(150deg,var(--elevado),#101b26);border:1px solid var(--borda);border-radius:15px;padding:17px;box-shadow:0 14px 35px #0002}"
-    ".cartao:after{content:'';position:absolute;width:120px;height:120px;border-radius:50%;right:-60px;top:-65px;background:var(--brilho,#62b7f5);opacity:.07;filter:blur(2px)}"
-    ".velocidade{min-height:184px;display:flex;flex-direction:column;justify-content:space-between;--brilho:var(--amarelo);background:linear-gradient(145deg,#242516,#121d27 72%)}"
-    ".valor-gigante{font-size:clamp(3.2rem,7vw,5.7rem);font-weight:760;line-height:.9;letter-spacing:-.07em}.unidade{font-size:.9rem;color:var(--fraco);font-weight:650;letter-spacing:0}.fonte{display:inline-flex;align-items:center;gap:6px;color:var(--fraco);font-size:.78rem}.fonte:before{content:'';width:6px;height:6px;border-radius:50%;background:var(--azul)}"
-    ".valor{font-size:1.7rem;font-weight:750;margin-top:11px;line-height:1.08;letter-spacing:-.025em}.detalhe{color:var(--fraco);font-size:.82rem;line-height:1.4;margin-top:7px}.linha-detalhes{display:flex;gap:12px;flex-wrap:wrap;color:var(--fraco);font-size:.82rem;margin-top:9px}.linha-detalhes b{color:var(--texto)}"
-    ".barra{height:7px;margin-top:14px;background:#071019;border-radius:99px;overflow:hidden}.barra span{display:block;width:0;height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--ciano),var(--verde));transition:width .35s ease}.barra.amarela span{background:linear-gradient(90deg,#d69520,var(--amarelo))}.barra.vermelha span{background:linear-gradient(90deg,#ac3847,var(--vermelho))}"
-    ".titulo-secao{display:flex;justify-content:space-between;align-items:end;gap:12px;margin:0 0 11px}.titulo-secao h2{font-size:1rem;margin:0}.titulo-secao p{color:var(--fraco);font-size:.8rem;margin:0}.grade-operacao{display:grid;grid-template-columns:repeat(12,1fr);gap:12px;margin-bottom:24px}.marcha{grid-column:span 2}.pedais{grid-column:span 4}.proximidade{grid-column:span 3}.celulas{grid-column:span 3}.mpu{grid-column:1/-1}.grade-mpu{display:grid;grid-template-columns:repeat(6,1fr);gap:9px;margin-top:13px}.posicao{grid-column:span 5}.comunicacao{grid-column:span 7}"
-    ".marcha .valor{font-size:3.4rem;color:var(--amarelo)}.pedal{display:grid;grid-template-columns:76px 1fr 48px;align-items:center;gap:9px;margin-top:13px;font-size:.8rem}.pedal .barra{margin:0}.pedal b{text-align:right}.duplo{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:15px}.mini{background:#0c1721;border:1px solid #203343;border-radius:10px;padding:11px}.mini strong{display:block;font-size:1.2rem;margin-top:5px}.lista-celulas{display:flex;flex-wrap:wrap;gap:7px;margin-top:13px}.celula{background:#0b1620;border:1px solid #263d50;color:#c6d4df;border-radius:7px;padding:6px 8px;font:650 .76rem ui-monospace,SFMono-Regular,monospace}"
-    ".coordenadas{font:650 1.08rem ui-monospace,SFMono-Regular,monospace;line-height:1.55;margin-top:10px}.metricas-link{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--borda);border:1px solid var(--borda);border-radius:11px;overflow:hidden;margin-top:13px}.metrica-link{background:#0c1721;padding:11px}.metrica-link span{display:block;color:var(--fraco);font-size:.68rem;text-transform:uppercase;letter-spacing:.07em}.metrica-link b{display:block;margin-top:5px;font-size:1rem}.alerta{color:var(--vermelho)!important}.bom{color:var(--verde)!important}"
-    "footer{display:flex;justify-content:space-between;gap:12px;color:var(--fraco);font-size:.78rem;padding-top:2px}footer span:last-child{text-align:right}"
-    ".offline .cartao{filter:saturate(.72)}@media(max-width:980px){.grade-destaque{grid-template-columns:1.25fr 1fr 1fr}.grade-destaque .percurso-card{grid-column:1/-1}.marcha{grid-column:span 3}.pedais{grid-column:span 5}.proximidade{grid-column:span 4}.celulas{grid-column:span 5}.grade-mpu{grid-template-columns:repeat(3,1fr)}.posicao{grid-column:span 7}.comunicacao{grid-column:1/-1}}"
-    "@media(max-width:680px){main{padding:16px 14px 28px}.topo{align-items:flex-start;flex-direction:column}nav{width:100%;overflow:auto}nav a{flex:1;text-align:center;white-space:nowrap}.estado{align-items:flex-start;flex-direction:column;gap:6px}.grade-destaque{grid-template-columns:1fr 1fr}.velocidade,.grade-destaque .percurso-card{grid-column:1/-1}.velocidade{min-height:160px}.grade-operacao>*{grid-column:1/-1}.grade-mpu{grid-template-columns:1fr 1fr}.metricas-link{grid-template-columns:1fr 1fr}.valor-gigante{font-size:4.4rem}footer{flex-direction:column}footer span:last-child{text-align:left}}"
-    "@media(max-width:410px){.grade-destaque{grid-template-columns:1fr}.grade-destaque .percurso-card{grid-column:auto}.duplo{grid-template-columns:1fr}.simbolo{width:40px;height:40px}.metricas-link{grid-template-columns:1fr 1fr}}"
-    "[hidden]{display:none!important}:root{--fundo:#050b12;--superficie:#0b1722;--elevado:#102130;--borda:#20384b;--texto:#f7fbff;--fraco:#94aabd;--amarelo:#ffca46;--verde:#46dfa0;--vermelho:#ff687c;--azul:#4aaef1;--ciano:#36d2e2}"
-    "body{background:radial-gradient(circle at 88% -8%,#123d59 0,transparent 34rem),radial-gradient(circle at -10% 55%,#13332f 0,transparent 30rem),var(--fundo);font-feature-settings:'tnum' 1}body:before{opacity:.12;background-size:48px 48px}body:after{content:'';position:fixed;inset:0;pointer-events:none;background:linear-gradient(115deg,transparent 0 46%,#35d5e504 50%,transparent 54%);z-index:-1}"
-    "main{max-width:1320px;padding:25px 28px 38px}.topo{margin-bottom:20px}.simbolo{width:52px;height:52px;border-radius:17px;background:linear-gradient(145deg,#ffe080,#e5a329);font-size:.78rem;letter-spacing:.04em;box-shadow:0 12px 34px #f5b94232,0 0 0 1px #ffe08a66 inset}.marca h1{font-size:1.48rem;letter-spacing:-.025em}.topo-direita{display:flex;align-items:center;gap:12px}.selo-live{display:flex;align-items:center;gap:7px;color:#a9f7d2;border:1px solid #2c6850;background:#0b211bbd;border-radius:99px;padding:9px 12px;font-size:.7rem;font-weight:800;letter-spacing:.08em;white-space:nowrap}.selo-live i{width:7px;height:7px;border-radius:50%;background:var(--verde);box-shadow:0 0 14px var(--verde);animation:pulsar 1.8s ease-in-out infinite}"
-    "nav{border-radius:99px;padding:4px;box-shadow:0 12px 30px #0003}nav a{border-radius:99px;padding:9px 15px}.estado{min-height:51px;border-radius:17px;background:linear-gradient(110deg,#0c1a26e8,#0a151fe8);box-shadow:0 16px 40px #0003}.estado small{white-space:normal}.estado-info{display:flex;align-items:center;gap:12px}.botao-atualizar{border:1px solid #2b465b;background:#112433;color:var(--texto);border-radius:10px;padding:8px 11px;font:700 .75rem system-ui;cursor:pointer}.botao-atualizar:hover{border-color:var(--ciano);background:#153044}.botao-atualizar:focus-visible{outline:2px solid var(--amarelo);outline-offset:2px}"
-    ".grade-destaque{grid-template-columns:1.7fr repeat(3,minmax(0,1fr));gap:14px}.cartao{border-radius:20px;padding:19px;background:linear-gradient(145deg,#112432,#0a151f);box-shadow:0 16px 40px #0003;transition:transform .2s ease,border-color .2s ease,box-shadow .2s ease}.cartao:before{content:'';position:absolute;left:18px;right:18px;top:0;height:2px;border-radius:0 0 3px 3px;background:linear-gradient(90deg,var(--brilho,var(--azul)),transparent);opacity:.7}.cartao:hover{transform:translateY(-2px);border-color:#34556c;box-shadow:0 20px 46px #0004}.velocidade{min-height:248px;--brilho:var(--amarelo);background:radial-gradient(circle at 85% 15%,#5e4a1729,transparent 45%),linear-gradient(145deg,#18251f,#0b1722 70%)}.valor-gigante{font-size:clamp(4.1rem,7.6vw,6.8rem);font-weight:800}.grafico-velocidade{display:block;width:100%;height:75px;margin:8px 0 7px}.fonte{position:relative;z-index:1}.bateria-card{--brilho:var(--verde)}.energia-card{--brilho:var(--ciano)}.percurso-card{--brilho:var(--azul)}"
-    ".anel-bateria{--nivel-carga:0deg;--cor-carga:var(--verde);position:relative;display:grid;place-items:center;width:112px;height:112px;margin:15px auto 10px;border-radius:50%;background:conic-gradient(var(--cor-carga) var(--nivel-carga),#07121b var(--nivel-carga));box-shadow:0 0 28px color-mix(in srgb,var(--cor-carga) 18%,transparent)}.anel-bateria:before{content:'';position:absolute;inset:10px;border-radius:50%;background:linear-gradient(145deg,#122737,#09141e);box-shadow:inset 0 0 0 1px #ffffff0b}.anel-bateria .valor{position:relative;margin:0;font-size:1.42rem}.bateria-card .detalhe{text-align:center}.bateria-card>.barra{display:none}"
-    ".titulo-secao{margin-top:2px}.titulo-secao h2{font-size:1.12rem}.grade-operacao{gap:14px}.marcha{--brilho:var(--amarelo)}.pedais{--brilho:#ff9f50}.proximidade{--brilho:var(--verde)}.celulas{--brilho:#ba8cff}.mpu{--brilho:var(--ciano)}.posicao{--brilho:var(--azul)}.comunicacao{--brilho:var(--verde)}.mini{border-radius:13px;background:#091721;border-color:#1e3a4d}.celula{border-radius:9px;background:#08151f}.metricas-link{border-radius:14px}.metrica-link{background:#091721;min-width:0}.metrica-link b{overflow-wrap:anywhere}"
-    "footer{border-top:1px solid #173044;padding-top:16px}.rodape-frequencia{display:inline-flex;align-items:center;gap:7px}.rodape-frequencia:before{content:'';width:6px;height:6px;border-radius:50%;background:var(--ciano);box-shadow:0 0 10px var(--ciano)}@keyframes pulsar{50%{opacity:.45;transform:scale(.75)}}"
-    "@media(max-width:1080px){.grade-destaque{grid-template-columns:1.35fr 1fr 1fr}.grade-destaque .percurso-card{grid-column:1/-1}}@media(max-width:760px){main{padding:17px 14px 29px}.topo,.topo-direita{width:100%;align-items:flex-start;flex-direction:column}.topo-direita{gap:9px}.selo-live{position:absolute;right:14px;top:19px}nav{width:100%;overflow:auto}.estado{align-items:flex-start}.estado-info{width:100%;justify-content:space-between}.grade-destaque{grid-template-columns:1fr 1fr}.velocidade,.grade-destaque .percurso-card{grid-column:1/-1}.velocidade{min-height:225px}.metricas-link{grid-template-columns:1fr 1fr}}@media(max-width:430px){.selo-live{font-size:.62rem;padding:7px 9px}.marca h1{font-size:1.25rem}.valor-gigante{font-size:4.7rem}.grade-destaque{grid-template-columns:1fr}.grade-destaque .percurso-card{grid-column:auto}.anel-bateria{margin-left:0}.bateria-card .detalhe{text-align:left}}"
-    "@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}"
-    "</style></head><body><main><header class='topo'><div class='marca'><div class='simbolo'>CS</div><div><div class='sobretitulo'>UFSM-CS · ESP32-S3</div><h1>Painel da equipe</h1></div></div>"
-    "<div class='topo-direita'><span class='selo-live'><i></i>AO VIVO · 4 Hz</span><nav aria-label='Navegação principal'><a class='ativo' href='http://painel.equipe/'>Equipe</a><a href='http://painel.diagnostico/'>Diagnóstico</a><a href='http://painel.mestre/'>Mestre</a></nav></div></header>"
-    "<div id='estado' class='estado' aria-live='polite'><div class='estado-principal'><span class='ponto'></span><span id='estadoTexto'>Aguardando telemetria</span></div><div class='estado-info'><small id='ultimaAtualizacao'>Conectando ao receptor UART...</small><button id='atualizarAgora' class='botao-atualizar' type='button'>Atualizar agora</button></div></div>"
-    "<section class='grade-destaque' aria-label='Indicadores principais'><article class='cartao velocidade'><div><div class='rotulo'>Velocidade atual</div><div class='valor-gigante'><span id='velocidade'>—</span> <span class='unidade'>km/h</span></div></div><canvas id='graficoVelocidade' class='grafico-velocidade' aria-label='Histórico recente da velocidade'></canvas><span id='fonte' class='fonte'>Fonte ainda não identificada</span></article>"
-    "<article class='cartao bateria-card'><div class='rotulo'>Bateria</div><div id='medidorBateria' class='anel-bateria'><div id='carga' class='valor'>—</div></div><div class='barra'><span id='cargaBarra'></span></div><div id='bateriaDetalhe' class='detalhe'>Aguardando tensão do pacote</div></article>"
-    "<article class='cartao energia-card'><div class='rotulo'>Potência instantânea</div><div id='potencia' class='valor'>—</div><div class='linha-detalhes'><span><b id='tensao'>—</b> V</span><span><b id='corrente'>—</b> A</span></div><div class='detalhe'>Tensão e corrente do pacote</div></article>"
-    "<article class='cartao percurso-card'><div class='rotulo'>Autonomia estimada</div><div id='autonomia' class='valor'>—</div><div class='linha-detalhes'><span>Percurso <b id='percurso'>—</b></span></div><div class='detalhe'>Distância acumulada nesta operação</div></article></section>"
-    "<div class='titulo-secao'><div><div class='sobretitulo'>Veículo</div><h2>Operação e sensores</h2></div><p>Dados recebidos do mestre em tempo real</p></div>"
-    "<section class='grade-operacao'><article class='cartao marcha'><div class='rotulo'>Marcha</div><div id='marcha' class='valor'>—</div><div class='detalhe'>Posição do seletor</div></article>"
-    "<article class='cartao pedais'><div class='rotulo'>Comandos do piloto</div><div class='pedal'><span>Acelerador</span><div class='barra amarela'><span id='aceleradorBarra'></span></div><b id='acelerador'>—</b></div><div class='pedal'><span>Freio</span><div class='barra vermelha'><span id='freioBarra'></span></div><b id='freio'>—</b></div></article>"
-    "<article class='cartao proximidade'><div class='rotulo'>Proximidade</div><div class='duplo'><div class='mini'><span class='rotulo'>Frente</span><strong id='frente'>—</strong></div><div class='mini'><span class='rotulo'>Traseira</span><strong id='traseira'>—</strong></div></div></article>"
-    "<article class='cartao celulas'><div class='rotulo'>Tensão das células</div><div id='celulas' class='lista-celulas'><span class='celula'>Aguardando</span></div></article>"
-    "<article class='cartao mpu'><div class='rotulo'>MPU6050 · dinâmica longitudinal</div><div class='grade-mpu'><div class='mini'><span class='rotulo'>Longitudinal</span><strong id='mpuLongitudinal'>—</strong></div><div class='mini'><span class='rotulo'>Sentido do vetor</span><strong id='mpuSentido'>—</strong></div><div class='mini'><span class='rotulo'>Aceleração X / Y / Z</span><strong id='mpuAceleracao'>—</strong></div><div class='mini'><span class='rotulo'>Giro X / Y / Z</span><strong id='mpuGiro'>—</strong></div><div class='mini'><span class='rotulo'>Temperatura</span><strong id='mpuTemperatura'>—</strong></div><div class='mini'><span class='rotulo'>Aquisição</span><strong id='mpuEstado'>—</strong></div></div><div class='detalhe'>Frente/trás indica o sentido da aceleração no eixo configurado, não o sentido de deslocamento.</div></article>"
-    "<article class='cartao posicao'><div class='rotulo'>Posição GNSS</div><div class='coordenadas'><div id='latitude'>—</div><div id='longitude'>—</div></div><div class='linha-detalhes'><span>Rumo <b id='rumo'>—</b></span><span>Odômetro <b id='odometro'>—</b></span></div><div class='detalhe'>Latitude e longitude em graus decimais</div></article>"
-    "<article class='cartao comunicacao'><div class='rotulo'>Qualidade do enlace</div><div class='metricas-link'><div class='metrica-link'><span>Recepção</span><b id='taxa'>—</b></div><div class='metrica-link'><span>Perda</span><b id='perda'>—</b></div><div class='metrica-link'><span>Idade</span><b id='idade'>—</b></div><div class='metrica-link'><span>Sequência</span><b id='sequencia'>—</b></div><div class='metrica-link'><span>Válidos</span><b id='validos'>0</b></div><div class='metrica-link'><span>Inválidos</span><b id='invalidos'>0</b></div><div class='metrica-link'><span>Perdidos</span><b id='perdidos'>0</b></div><div class='metrica-link'><span>Duplicados</span><b id='duplicados'>0</b></div><div class='metrica-link'><span>CRC-32</span><b id='crcs'>0</b></div><div class='metrica-link'><span>Cabeçalho</span><b id='cabecalhos'>0</b></div><div class='metrica-link'><span>Conteúdo</span><b id='conteudos'>0</b></div><div class='metrica-link'><span>Reinícios mestre</span><b id='reinicios'>0</b></div></div><div class='linha-detalhes'><span>Intervalo / jitter <b id='jitter'>—</b></span><span>Atraso relativo <b id='latencia'>—</b></span></div></article></section>"
-    "<footer><span class='rodape-frequencia'>Atualização automática a 4 Hz</span><span>Acesso local · painel.equipe</span></footer></main><script>"
-    "const $=id=>document.getElementById(id);let consultando=false,historicoVelocidade=[];function texto(id,valor){$(id).textContent=valor}"
-    "function percentual(valor){return Math.max(0,Math.min(100,Number(valor)||0))}function barra(id,valor){let e=$(id);e.style.width=percentual(valor)+'%';e.parentElement.setAttribute('aria-valuenow',percentual(valor))}"
-    "function classeNumero(id,valor,limite){let e=$(id);e.classList.toggle('alerta',Number(valor)>limite);e.classList.toggle('bom',Number(valor)===0)}"
-    "function desenharGraficoVelocidade(valor){let tela=$('graficoVelocidade'),caixa=tela.getBoundingClientRect();if(!caixa.width)return;let escala=Math.min(window.devicePixelRatio||1,2),largura=Math.round(caixa.width*escala),altura=Math.round(caixa.height*escala);if(tela.width!==largura||tela.height!==altura){tela.width=largura;tela.height=altura}let ctx=tela.getContext('2d'),w=caixa.width,h=caixa.height;ctx.setTransform(escala,0,0,escala,0,0);ctx.clearRect(0,0,w,h);historicoVelocidade.push(Number(valor)||0);if(historicoVelocidade.length>64)historicoVelocidade.shift();let maximo=Math.max(30,...historicoVelocidade)*1.12,passo=w/Math.max(1,historicoVelocidade.length-1);ctx.strokeStyle='#8bb6cf18';ctx.lineWidth=1;for(let y=12;y<h;y+=22){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke()}let pontos=historicoVelocidade.map((v,i)=>[i*passo,h-7-(v/maximo)*(h-14)]);if(!pontos.length)return;ctx.beginPath();pontos.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.lineTo(pontos[pontos.length-1][0],h);ctx.lineTo(0,h);ctx.closePath();let gradiente=ctx.createLinearGradient(0,0,0,h);gradiente.addColorStop(0,'#36d2e238');gradiente.addColorStop(1,'#36d2e200');ctx.fillStyle=gradiente;ctx.fill();ctx.beginPath();pontos.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.strokeStyle='#47dce9';ctx.lineWidth=2;ctx.lineJoin='round';ctx.stroke();let ultimo=pontos[pontos.length-1];ctx.beginPath();ctx.arc(ultimo[0],ultimo[1],3.5,0,Math.PI*2);ctx.fillStyle='#ffca46';ctx.fill()}"
-    "function mostrarCelulas(valores){let lista=$('celulas');lista.replaceChildren();(valores||[]).forEach((valor,indice)=>{let item=document.createElement('span');item.className='celula';item.textContent='C'+(indice+1)+'  '+(valor/1000).toFixed(3)+' V';lista.append(item)});if(!lista.children.length){let item=document.createElement('span');item.className='celula';item.textContent='Sem leituras';lista.append(item)}}"
-    "function aplicar(d){let marchas=['P','N','D','R'],carga=d.carga_decimos_percentual/10,acelerador=d.acelerador_decimos_percentual/10,freio=d.freio_decimos_percentual/10;"
-    "let velocidade=d.velocidade_centesimos_kmh/100;texto('velocidade',velocidade.toFixed(1));desenharGraficoVelocidade(velocidade);texto('marcha',marchas[d.marcha]||'?');texto('carga',carga.toFixed(1)+'%');barra('cargaBarra',carga);let medidor=$('medidorBateria');medidor.style.setProperty('--nivel-carga',(percentual(carga)*3.6)+'deg');medidor.style.setProperty('--cor-carga',carga<20?'var(--vermelho)':carga<45?'var(--amarelo)':'var(--verde)');texto('bateriaDetalhe',(d.tensao_pacote_mv/1000).toFixed(2)+' V disponíveis no pacote');"
-    "texto('potencia',d.potencia_w+' W');texto('tensao',(d.tensao_pacote_mv/1000).toFixed(2));texto('corrente',(d.corrente_centesimos_a/100).toFixed(2));texto('autonomia',(d.autonomia_decimos_km/10).toFixed(1)+' km');texto('percurso',(d.percurso_metros/1000).toFixed(3)+' km');"
-    "texto('acelerador',acelerador.toFixed(1)+'%');texto('freio',freio.toFixed(1)+'%');barra('aceleradorBarra',acelerador);barra('freioBarra',freio);texto('frente',d.distancias_cm[0]+' cm');texto('traseira',d.distancias_cm[4]+' cm');mostrarCelulas(d.tensoes_celulas_mv);"
-    "let mpuAtivo=(d.estado_mpu&1)!==0,mpuCalibrado=(d.estado_mpu&2)!==0,eixoOk=(d.estado_mpu&4)!==0,sentido=(d.estado_mpu>>3)&3,eixo=['X','Y','Z'][(d.estado_mpu>>5)&3]||'?';texto('mpuLongitudinal',mpuAtivo?(d.aceleracao_longitudinal_milesimos_g/1000).toFixed(3)+' g · '+(d.aceleracao_milesimos_ms2/1000).toFixed(3)+' m/s²':'Indisponível');texto('mpuSentido',mpuCalibrado?(sentido===1?'Para frente':sentido===2?'Para trás':'Neutro'):'Aguardando');texto('mpuAceleracao',mpuAtivo?[d.aceleracao_x_milesimos_g,d.aceleracao_y_milesimos_g,d.aceleracao_z_milesimos_g].map(x=>(x/1000).toFixed(3)).join(' / ')+' g':'—');texto('mpuGiro',mpuAtivo?[d.giroscopio_x_centesimos_graus_s,d.giroscopio_y_centesimos_graus_s,d.giroscopio_z_centesimos_graus_s].map(x=>(x/100).toFixed(2)).join(' / ')+' °/s':'—');texto('mpuTemperatura',mpuAtivo?(d.temperatura_mpu_centesimos_c/100).toFixed(1)+' °C':'—');texto('mpuEstado',!mpuAtivo?'Sem leitura':!eixoOk?'Verificar eixo '+eixo:mpuCalibrado?'Calibrado · eixo '+eixo:'Calibrando · eixo '+eixo);"
-    "texto('latitude',(d.latitude_micrograus/1e6).toFixed(6)+'°');texto('longitude',(d.longitude_micrograus/1e6).toFixed(6)+'°');texto('rumo',(d.rumo_decimos_grau/10).toFixed(1)+'°');texto('odometro',(d.odometro_metros/1000).toFixed(2)+' km');texto('sequencia','#'+d.sequencia);texto('validos',d.pacotes_validos);texto('invalidos',d.pacotes_invalidos);texto('perdidos',d.pacotes_perdidos);texto('duplicados',d.pacotes_duplicados);texto('crcs',d.falhas_crc);texto('cabecalhos',d.falhas_cabecalho);texto('conteudos',d.falhas_conteudo);texto('reinicios',d.reinicios_mestre);"
-    "texto('taxa',(d.taxa_pacotes_centesimos_hz/100).toFixed(2)+' pkt/s');texto('jitter',d.intervalo_medio_ms+' / '+d.jitter_medio_ms+' ms');texto('latencia',d.latencia_relativa_ms+' ms');texto('perda',(d.taxa_perda_centesimos_percentual/100).toFixed(2)+'%');texto('idade',d.idade_ms+' ms');classeNumero('invalidos',d.pacotes_invalidos,0);classeNumero('perdidos',d.pacotes_perdidos,0);classeNumero('duplicados',d.pacotes_duplicados,0);classeNumero('crcs',d.falhas_crc,0);classeNumero('cabecalhos',d.falhas_cabecalho,0);classeNumero('conteudos',d.falhas_conteudo,0);"
-    "let recente=d.valido&&d.idade_ms<2000,estado=$('estado');estado.className='estado '+(recente?(d.simulado?'simulado':'online'):'offline');texto('estadoTexto',recente?(d.simulado?'Telemetria simulada ativa':'Telemetria real recebida'):'Sem telemetria recente');texto('fonte',d.simulado?'Dados gerados pelo simulador':'Sensores reais do veículo');texto('ultimaAtualizacao',recente?'Amostra com '+d.idade_ms+' ms · atualizada às '+new Date().toLocaleTimeString():'Última amostra com '+d.idade_ms+' ms');document.body.classList.toggle('offline',!recente)}"
-    "async function atualizar(){if(consultando)return;consultando=true;try{let resposta=await fetch('/api/telemetria',{cache:'no-store'});if(!resposta.ok)throw new Error('HTTP '+resposta.status);aplicar(await resposta.json())}catch(erro){let estado=$('estado');estado.className='estado offline';texto('estadoTexto','Painel sem comunicação');texto('ultimaAtualizacao','Não foi possível consultar a API local');document.body.classList.add('offline')}finally{consultando=false}}"
-    "$('atualizarAgora').onclick=atualizar;atualizar();setInterval(atualizar,250);</script></body></html>";
-
-static const char pagina_diagnostico_html[] =
-    "<!doctype html><html lang='pt-BR'><head><meta charset='utf-8'>"
-    "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-    "<meta name='theme-color' content='#050b12'><title>Diagnóstico | UFSM Carro</title><style>"
-    ":root{color-scheme:dark;--fundo:#050b12;--painel:#102130;--borda:#20394d;--texto:#f7fbff;--fraco:#94aabd;--amarelo:#ffca46;--verde:#46dfa0;--vermelho:#ff687c;--azul:#4aaef1;--ciano:#36d2e2}*{box-sizing:border-box}html{background:var(--fundo)}body{margin:0;min-height:100vh;background:radial-gradient(circle at 88% -8%,#123d59 0,transparent 34rem),var(--fundo);color:var(--texto);font:15px system-ui,-apple-system,Segoe UI,sans-serif;font-feature-settings:'tnum' 1}body:before{content:'';position:fixed;inset:0;pointer-events:none;opacity:.11;background-image:linear-gradient(#fff1 1px,transparent 1px),linear-gradient(90deg,#fff1 1px,transparent 1px);background-size:48px 48px;mask-image:linear-gradient(to bottom,#000,transparent 70%)}"
-    "main{position:relative;max-width:1260px;margin:auto;padding:25px 28px 38px}.topo{display:flex;justify-content:space-between;align-items:center;gap:18px;margin-bottom:24px}.marca{display:flex;align-items:center;gap:13px}.simbolo{display:grid;place-items:center;width:52px;height:52px;border-radius:17px;background:linear-gradient(145deg,#ffe080,#e5a329);color:#171109;font-size:.78rem;font-weight:900;letter-spacing:.04em;box-shadow:0 12px 34px #f5b94232}.sobretitulo,.rotulo{color:var(--fraco);font-size:.69rem;font-weight:750;letter-spacing:.1em;text-transform:uppercase}h1{font-size:1.48rem;line-height:1.1;margin:4px 0 0;letter-spacing:-.025em}nav{display:flex;gap:6px;padding:4px;background:#0b151fbb;border:1px solid var(--borda);border-radius:99px;backdrop-filter:blur(10px)}nav a{color:var(--fraco);text-decoration:none;font-weight:650;padding:9px 15px;border-radius:99px}nav a:hover{color:var(--texto);background:#ffffff0b}nav a.ativo{color:#171109;background:var(--amarelo)}"
-    ".abertura{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:17px;padding:20px 21px;border:1px solid var(--borda);border-radius:19px;background:linear-gradient(135deg,#0f2230,#091620);box-shadow:0 16px 40px #0003}.abertura h2{font-size:1.75rem;letter-spacing:-.035em;margin:5px 0}.abertura p{color:var(--fraco);line-height:1.5;margin:0;max-width:690px}.selo{display:flex;align-items:center;gap:9px;white-space:nowrap;padding:10px 13px;border:1px solid var(--borda);background:#081720;border-radius:99px;font-weight:700}.selo:before{content:'';width:8px;height:8px;border-radius:50%;background:var(--fraco)}.selo.ok{color:var(--verde);border-color:#2c6446}.selo.ok:before{background:var(--verde);box-shadow:0 0 12px var(--verde)}.selo.erro{color:var(--vermelho);border-color:#663740}.selo.erro:before{background:var(--vermelho)}"
-    ".secao{margin-top:25px}.titulo-secao{display:flex;justify-content:space-between;align-items:end;gap:12px;margin-bottom:11px}.titulo-secao h2{font-size:1.05rem;margin:2px 0 0}.titulo-secao p{color:var(--fraco);font-size:.8rem;margin:0}.grade{display:grid;grid-template-columns:repeat(12,1fr);gap:12px}.cartao{position:relative;overflow:hidden;grid-column:span 3;min-height:125px;background:linear-gradient(145deg,#112432,#091721);border:1px solid var(--borda);border-radius:17px;padding:17px;box-shadow:0 14px 35px #0002}.cartao:before{content:'';position:absolute;left:16px;right:16px;top:0;height:2px;background:linear-gradient(90deg,var(--acento,var(--azul)),transparent)}.cartao[data-tom='ok']{--acento:var(--verde)}.cartao[data-tom='erro']{--acento:var(--vermelho)}.cartao[data-tom='alerta']{--acento:var(--amarelo)}.cartao.largo{grid-column:span 6}.valor{font-size:1.3rem;font-weight:760;line-height:1.25;letter-spacing:-.02em;margin-top:10px;overflow-wrap:anywhere}.detalhe{color:var(--fraco);font-size:.78rem;line-height:1.42;margin-top:7px}.memoria,.progresso{height:7px;margin-top:13px;background:#050e15;border-radius:99px;overflow:hidden}.memoria span,.progresso span{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--ciano),var(--verde));border-radius:inherit;transition:width .3s}.legenda{display:flex;gap:15px;flex-wrap:wrap;color:var(--fraco);font-size:.75rem;margin-top:8px}.legenda b{color:var(--texto)}footer{display:flex;justify-content:space-between;gap:12px;color:var(--fraco);font-size:.78rem;margin-top:28px;padding-top:16px;border-top:1px solid #173044}"
-    "@media(max-width:900px){.cartao{grid-column:span 6}.cartao.largo{grid-column:1/-1}}@media(max-width:620px){main{padding:17px 14px 29px}.topo,.abertura{align-items:flex-start;flex-direction:column}.topo{margin-bottom:21px}nav{width:100%;overflow:auto}nav a{flex:1;text-align:center;white-space:nowrap}.abertura{padding:17px}.cartao,.cartao.largo{grid-column:1/-1;min-height:112px}.titulo-secao{align-items:flex-start;flex-direction:column}.simbolo{width:44px;height:44px}footer{flex-direction:column}}@media(prefers-reduced-motion:reduce){*{transition:none!important}}"
-    "</style></head><body><main><header class='topo'><div class='marca'><div class='simbolo'>CS</div><div><div class='sobretitulo'>UFSM-CS · ESP32-S3</div><h1>Painel da equipe</h1></div></div><nav aria-label='Navegação principal'><a href='http://painel.equipe/'>Equipe</a><a class='ativo' href='http://painel.diagnostico/'>Diagnóstico</a><a href='http://painel.mestre/'>Mestre</a></nav></header>"
-    "<section class='abertura'><div><div class='sobretitulo'>Satélite da equipe</div><h2>Diagnóstico</h2><p>Estado local do ESP32, integridade da UART e serviços de comunicação. Os contadores são acumulados desde a inicialização.</p></div><div id='estado' class='selo' role='status' aria-live='polite'>Consultando</div></section>"
-    "<section class='secao'><div class='titulo-secao'><div><div class='sobretitulo'>Sistema</div><h2>Execução e rede</h2></div><p>Identificação, memória e ponto de acesso</p></div><div class='grade'>"
-    "<article id='cartaoVersao' class='cartao'><div class='rotulo'>Firmware</div><div id='versao' class='valor'>—</div><div id='compilacao' class='detalhe'>—</div></article><article class='cartao'><div class='rotulo'>Tempo ativo</div><div id='uptime' class='valor'>—</div><div class='detalhe'>Desde a última inicialização</div></article><article id='cartaoReinicio' class='cartao'><div class='rotulo'>Última inicialização</div><div id='reinicio' class='valor'>—</div><div class='detalhe'>Motivo informado pelo ESP-IDF</div></article><article class='cartao'><div class='rotulo'>Clientes Wi-Fi</div><div id='clientes' class='valor'>—</div><div class='detalhe'>Dispositivos conectados ao AP</div></article>"
-    "<article id='cartaoMemoria' class='cartao largo'><div class='rotulo'>Memória interna</div><div id='heap' class='valor'>—</div><div class='memoria'><span id='heapBarra'></span></div><div class='legenda'><span>Livre <b id='heapLivre'>—</b></span><span>Mínimo <b id='heapMinimo'>—</b></span><span>Maior bloco <b id='heapMaior'>—</b></span></div></article><article class='cartao largo'><div class='rotulo'>Acesso local</div><div id='rede' class='valor'>—</div><div id='radio' class='detalhe'>—</div></article></div></section>"
-    "<section class='secao'><div class='titulo-secao'><div><div class='sobretitulo'>Telemetria</div><h2>Qualidade dos dados</h2></div><p>Recepção e continuidade dos pacotes</p></div><div class='grade'>"
-    "<article id='cartaoTelemetria' class='cartao'><div class='rotulo'>Amostra atual</div><div id='telemetriaEstado' class='valor'>—</div><div id='telemetriaDetalhe' class='detalhe'>—</div></article><article class='cartao'><div class='rotulo'>Taxa e período</div><div id='taxa' class='valor'>—</div><div class='detalhe'>Pacotes por segundo e intervalo médio</div></article><article id='cartaoPerda' class='cartao'><div class='rotulo'>Perda estimada</div><div id='perda' class='valor'>—</div><div class='detalhe'>Calculada pela sequência recebida</div></article><article class='cartao'><div class='rotulo'>Jitter e atraso</div><div id='atraso' class='valor'>—</div><div class='detalhe'>Variação / atraso relativo</div></article>"
-    "<article id='cartaoPacotes' class='cartao largo'><div class='rotulo'>Integridade de protocolo</div><div id='pacotes' class='valor'>—</div><div id='pacotesDetalhe' class='detalhe'>—</div></article><article id='cartaoSequencia' class='cartao largo'><div class='rotulo'>Continuidade</div><div id='sequencia' class='valor'>—</div><div id='sequenciaDetalhe' class='detalhe'>—</div></article></div></section>"
-    "<section class='secao'><div class='titulo-secao'><div><div class='sobretitulo'>UART</div><h2>Camada física</h2></div><p>Tráfego e erros do driver serial</p></div><div class='grade'>"
-    "<article id='cartaoUart' class='cartao'><div class='rotulo'>Driver</div><div id='uartEstado' class='valor'>—</div><div class='detalhe'>Estado do gerenciador UART</div></article><article id='cartaoQuadros' class='cartao'><div class='rotulo'>Quadros TX / RX</div><div id='quadrosUart' class='valor'>—</div><div id='quadrosDetalhe' class='detalhe'>—</div></article><article class='cartao'><div class='rotulo'>Volume RX / TX</div><div id='bytes' class='valor'>—</div><div class='detalhe'>Bytes acumulados desde o boot</div></article><article id='cartaoFisicos' class='cartao'><div class='rotulo'>Erros físicos</div><div id='fisicos' class='valor'>—</div><div id='fisicosDetalhe' class='detalhe'>—</div></article><article id='cartaoErrosUart' class='cartao largo'><div class='rotulo'>Últimos resultados do driver</div><div id='errosUart' class='valor'>—</div><div class='detalhe'>Códigos ESP de transmissão / recepção</div></article><article id='cartaoValidacao' class='cartao largo'><div class='rotulo'>Falhas de validação</div><div id='validacao' class='valor'>—</div><div class='detalhe'>CRC / cabeçalho / conteúdo</div></article></div></section>"
-    "<section class='secao'><div class='titulo-secao'><div><div class='sobretitulo'>Serviços</div><h2>Comandos e OTA local</h2></div><p>Operações entre o satélite e o mestre</p></div><div class='grade'>"
-    "<article class='cartao largo'><div class='rotulo'>Comandos enviados</div><div id='comandosFluxo' class='valor'>—</div><div id='comandosDetalhe' class='detalhe'>—</div></article><article id='cartaoComandosErro' class='cartao largo'><div class='rotulo'>Confiabilidade dos comandos</div><div id='comandosErros' class='valor'>—</div><div id='comandosUltimo' class='detalhe'>—</div></article><article id='cartaoOtaLocal' class='cartao largo'><div class='rotulo'>Recepção OTA do satélite</div><div id='otaEstado' class='valor'>—</div><div class='progresso'><span id='otaBarra'></span></div><div id='otaDetalhe' class='detalhe'>—</div></article><article class='cartao largo'><div class='rotulo'>Firmware de destino</div><div id='otaVersao' class='valor'>—</div><div class='detalhe'>Versão anunciada na sessão OTA atual</div></article></div></section>"
-    "<footer><span>Atualização automática a cada segundo</span><span>Acesso local · painel.equipe</span></footer></main><script>"
-    "const $=id=>document.getElementById(id);let consultando=false;const motivos={0:'Desconhecido',1:'Energia ligada',2:'Reset externo',3:'Reinício por software',4:'Exceção ou pânico',5:'Watchdog interno',6:'Watchdog de tarefa',7:'Watchdog',8:'Saída de sono profundo',9:'Queda de tensão',10:'Reset SDIO'};function texto(id,valor){$(id).textContent=valor}function tempo(ms){let s=Math.floor((Number(ms)||0)/1000),d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return d?d+' d '+h+' h':h?h+' h '+m+' min':m?m+' min '+s%60+' s':s+' s'}function bytes(v){v=Number(v)||0;return v>=1048576?(v/1048576).toFixed(2)+' MiB':v>=1024?(v/1024).toFixed(1)+' KiB':v+' B'}function erro(v){return Number(v)===0?'ESP_OK':String(v)}function tom(id,valor){$(id).dataset.tom=valor||''}"
-    "function aplicar(d){let recente=d.valido&&d.idade_ms<2000,estado=$('estado');estado.textContent=recente?'Enlace ativo · '+d.idade_ms+' ms':'Sem telemetria recente';estado.className='selo '+(recente?'ok':'erro');texto('versao',d.versao_firmware+' · protocolo v'+d.versao_protocolo);texto('compilacao','Compilado em '+d.compilacao_data+' às '+d.compilacao_hora);texto('uptime',tempo(d.tempo_ativo_ms));texto('reinicio',motivos[d.motivo_reinicio]||('Código '+d.motivo_reinicio));tom('cartaoReinicio',[4,5,6,7,9].includes(d.motivo_reinicio)?'alerta':'ok');texto('clientes',d.clientes_wifi);texto('rede','http://'+d.nome_local);texto('radio','Canal '+d.wifi_canal+' · potência máxima '+(d.wifi_potencia_quartos_dbm/4).toFixed(2)+' dBm');"
-    "let livre=d.heap_livre/1024,minimo=d.heap_minimo/1024,maior=d.heap_maior_bloco/1024,razao=d.heap_livre?d.heap_maior_bloco/d.heap_livre:0;texto('heap',livre.toFixed(1)+' KiB livres');texto('heapLivre',livre.toFixed(1)+' KiB');texto('heapMinimo',minimo.toFixed(1)+' KiB');texto('heapMaior',maior.toFixed(1)+' KiB');$('heapBarra').style.width=Math.max(4,Math.min(100,livre/320*100))+'%';tom('cartaoMemoria',livre<32||razao<.25?'erro':livre<64||razao<.45?'alerta':'ok');"
-    "texto('telemetriaEstado',recente?'Atual':'Atrasada');texto('telemetriaDetalhe','Sequência #'+d.sequencia+' · idade '+d.idade_ms+' ms');tom('cartaoTelemetria',recente?'ok':'erro');texto('taxa',(d.taxa_pacotes_centesimos_hz/100).toFixed(2)+' pkt/s · '+d.intervalo_medio_ms+' ms');let perda=d.taxa_perda_centesimos_percentual/100;texto('perda',perda.toFixed(2)+'%');tom('cartaoPerda',perda>2?'erro':perda>0?'alerta':'ok');texto('atraso',d.jitter_medio_ms+' / '+d.latencia_relativa_ms+' ms');texto('pacotes',d.pacotes_validos+' válidos · '+d.pacotes_invalidos+' inválidos');texto('pacotesDetalhe','CRC '+d.falhas_crc+' · cabeçalho '+d.falhas_cabecalho+' · conteúdo '+d.falhas_conteudo);tom('cartaoPacotes',d.pacotes_invalidos?'erro':'ok');texto('sequencia',d.pacotes_perdidos+' perdidos · '+d.pacotes_duplicados+' duplicados');texto('sequenciaDetalhe',d.reinicios_mestre+' reinício(s) do mestre detectado(s)');tom('cartaoSequencia',d.pacotes_perdidos||d.pacotes_duplicados?'alerta':'ok');"
-    "texto('uartEstado',d.uart_inicializada?'Inicializada':'Indisponível');tom('cartaoUart',d.uart_inicializada?'ok':'erro');texto('quadrosUart',d.uart_envios_ok+' / '+d.uart_recepcoes_ok);texto('quadrosDetalhe',d.uart_erros_envio+' erro(s) TX · '+d.uart_erros_recepcao+' erro(s) RX');tom('cartaoQuadros',d.uart_erros_envio||d.uart_erros_recepcao?'erro':'ok');texto('bytes',bytes(d.bytes_recebidos)+' / '+bytes(d.bytes_enviados));let fisicos=d.uart_estouros_fifo+d.uart_buffers_cheios+d.uart_erros_quadro+d.uart_erros_paridade+d.uart_sinais_break;texto('fisicos',fisicos);texto('fisicosDetalhe','FIFO '+d.uart_estouros_fifo+' · buffer '+d.uart_buffers_cheios+' · quadro '+d.uart_erros_quadro+' · paridade '+d.uart_erros_paridade+' · break '+d.uart_sinais_break);tom('cartaoFisicos',fisicos?'erro':'ok');texto('errosUart',erro(d.uart_ultimo_erro_envio)+' / '+erro(d.uart_ultimo_erro_recepcao));tom('cartaoErrosUart',d.uart_ultimo_erro_envio||d.uart_ultimo_erro_recepcao?'alerta':'ok');texto('validacao',d.falhas_crc+' / '+d.falhas_cabecalho+' / '+d.falhas_conteudo);tom('cartaoValidacao',d.falhas_crc+d.falhas_cabecalho+d.falhas_conteudo?'erro':'ok');"
-    "texto('comandosFluxo',d.comandos_solicitacoes_enviadas+' solicitações · '+d.comandos_ok+' respostas');texto('comandosDetalhe',d.comandos_solicitacoes_recebidas+' recebidas do mestre · '+d.comandos_respostas_enviadas+' respondidas');texto('comandosErros',d.comandos_timeout+' timeout(s) · '+d.comandos_invalidos+' inválido(s) · '+d.comandos_repeticoes+' repetição(ões)');texto('comandosUltimo','Último resultado: '+erro(d.comandos_ultimo_erro));tom('cartaoComandosErro',d.comandos_timeout||d.comandos_invalidos||d.comandos_ultimo_erro?'erro':'ok');let progresso=d.ota_tamanho_total?d.ota_bytes_recebidos/d.ota_tamanho_total*100:0;texto('otaEstado',d.ota_recebendo?'Recebendo firmware':d.ota_iniciado?'Pronta':'Não inicializada');$('otaBarra').style.width=Math.max(0,Math.min(100,progresso))+'%';texto('otaDetalhe',progresso.toFixed(1)+'% · sessão '+d.ota_sessao+' · '+d.ota_quadros_recebidos+' quadro(s) · '+d.ota_falhas+' falha(s) · '+bytes(d.ota_bytes_recebidos));texto('otaVersao',d.ota_versao_destino||'Nenhuma sessão ativa');tom('cartaoOtaLocal',d.ota_falhas||d.ota_ultimo_erro?'erro':d.ota_recebendo?'alerta':'ok')}"
-    "async function atualizar(){if(consultando)return;consultando=true;try{let resposta=await fetch('/api/diagnostico',{cache:'no-store'});if(!resposta.ok)throw new Error('HTTP '+resposta.status);aplicar(await resposta.json())}catch(erro){let estado=$('estado');estado.textContent='Diagnóstico indisponível';estado.className='selo erro'}finally{consultando=false}}atualizar();setInterval(atualizar,1000);</script></body></html>";
-
-static bool requisicao_usa_host(httpd_req_t *requisicao, const char *esperado)
-{
-    char host[64] = {0};
-    if (httpd_req_get_hdr_value_str(requisicao, "Host", host,
-                                    sizeof(host)) != ESP_OK) {
-        return false;
-    }
-    char *porta = strchr(host, ':');
-    if (porta != NULL) *porta = '\0';
-    return strcasecmp(host, esperado) == 0;
-}
-
-static const char *pagina_para_host(httpd_req_t *requisicao)
-{
-    if (requisicao_usa_host(requisicao, NOME_LOCAL_MESTRE)) {
-        return PAGINA_MESTRE_WEB;
-    }
-    if (requisicao_usa_host(requisicao, NOME_LOCAL_DIAGNOSTICO)) {
-        return pagina_diagnostico_html;
-    }
-    return pagina_html;
-}
-
-static const char *url_para_host(httpd_req_t *requisicao)
-{
-    if (requisicao_usa_host(requisicao, NOME_LOCAL_MESTRE)) {
-        return URL_LOCAL_MESTRE;
-    }
-    if (requisicao_usa_host(requisicao, NOME_LOCAL_DIAGNOSTICO)) {
-        return URL_LOCAL_DIAGNOSTICO;
-    }
-    return URL_LOCAL_EQUIPE;
-}
 
 static esp_err_t responder_painel(httpd_req_t *requisicao)
 {
+    ESP_LOGI(TAG, "Recebido GET / do cliente");
     httpd_resp_set_hdr(requisicao, "Cache-Control", "no-store, max-age=0");
     httpd_resp_set_type(requisicao, "text/html; charset=utf-8");
-    return httpd_resp_send(requisicao, pagina_para_host(requisicao),
-                           HTTPD_RESP_USE_STRLEN);
+    const esp_err_t erro = httpd_resp_send(
+        requisicao, PAGINA_WEB, HTTPD_RESP_USE_STRLEN);
+    if (erro != ESP_OK) {
+        ESP_LOGW(TAG, "Falha ao enviar a página principal: %s",
+                 esp_err_to_name(erro));
+    }
+    return erro;
+}
+
+static esp_err_t responder_painel_equipe(httpd_req_t *requisicao)
+{
+    httpd_resp_set_hdr(requisicao, "Cache-Control", "no-store, max-age=0");
+    httpd_resp_set_type(requisicao, "text/html; charset=utf-8");
+    return httpd_resp_send(requisicao, PAGINA_WEB, HTTPD_RESP_USE_STRLEN);
 }
 
 static esp_err_t responder_mestre_pagina(httpd_req_t *requisicao)
 {
     httpd_resp_set_hdr(requisicao, "Cache-Control", "no-store, max-age=0");
     httpd_resp_set_type(requisicao, "text/html; charset=utf-8");
-    return httpd_resp_send(requisicao, PAGINA_MESTRE_WEB,
+    return httpd_resp_send(requisicao, PAGINA_WEB,
                            HTTPD_RESP_USE_STRLEN);
 }
 
@@ -212,6 +85,8 @@ static codigo_comando_t localizar_consulta_mestre(const char *consulta)
     if (strcmp(consulta, "uart") == 0) return COMANDO_OBTER_ESTADO_UART;
     if (strcmp(consulta, "ota") == 0) return COMANDO_OBTER_ESTADO_OTA;
     if (strcmp(consulta, "wifi") == 0) return COMANDO_OBTER_ESTADO_WIFI;
+    if (strcmp(consulta, "diagnostico_mestre") == 0)
+        return COMANDO_OBTER_DIAGNOSTICO_MESTRE;
     if (strcmp(consulta, "configuracao") == 0)
         return COMANDO_OBTER_CONFIGURACAO_MESTRE;
     if (strcmp(consulta, "rede_wifi_salva") == 0)
@@ -588,7 +463,7 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
         return enviar_json_comando(requisicao, "409 Conflict", json);
     }
 
-    char json[1536];
+    char json[3072];
     int tamanho = -1;
     if (comando == COMANDO_PING && tamanho_resposta == sizeof(resposta_comando_ping_t)) {
         resposta_comando_ping_t dados;
@@ -642,6 +517,76 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
             (unsigned long)dados.causas_ativas,
             (unsigned long)dados.tempo_ativo_ms, (unsigned long)dados.heap_livre,
             (unsigned long)dados.erros_historicos);
+    } else if (comando == COMANDO_OBTER_DIAGNOSTICO_MESTRE &&
+               tamanho_resposta == sizeof(resposta_diagnostico_mestre_t)) {
+        resposta_diagnostico_mestre_t dados;
+        char tarefa_cpu[31];
+        char tarefa_pilha[31];
+        memcpy(&dados, resposta, sizeof(dados));
+        if (dados.versao_formato != COMANDO_FORMATO_DIAGNOSTICO_MESTRE) {
+            return enviar_json_comando(
+                requisicao, "502 Bad Gateway",
+                "{\"ok\":false,\"erro\":\"formato de diagnóstico não suportado\"}");
+        }
+        dados.tarefa_cpu_pico[sizeof(dados.tarefa_cpu_pico) - 1] = '\0';
+        dados.tarefa_menor_pilha[
+            sizeof(dados.tarefa_menor_pilha) - 1] = '\0';
+        escapar_texto_json(tarefa_cpu, sizeof(tarefa_cpu),
+                           dados.tarefa_cpu_pico);
+        escapar_texto_json(tarefa_pilha, sizeof(tarefa_pilha),
+                           dados.tarefa_menor_pilha);
+        tamanho = snprintf(json, sizeof(json),
+            "{\"ok\":true,\"consulta\":\"diagnostico_mestre\",\"comando\":%u,"
+            "\"solicitacao\":%lu,\"resultado\":0,\"tentativas\":%u,\"duracao_ms\":%lu,"
+            "\"formato\":%u,\"cpu_valida\":%s,\"cpu_total_decimos_percentual\":%u,"
+            "\"cpu_nucleo_0_decimos_percentual\":%u,\"cpu_nucleo_1_decimos_percentual\":%u,"
+            "\"cpu_tarefa_pico_decimos_percentual\":%u,\"cpu_tarefa_pico\":\"%s\","
+            "\"temperatura_valida\":%s,\"temperatura_centesimos_c\":%d,"
+            "\"temperatura_ultimo_erro\":%ld,\"tempo_ativo_ms\":%lu,"
+            "\"heap_livre\":%lu,\"heap_minimo\":%lu,\"heap_interno_livre\":%lu,"
+            "\"heap_interno_minimo\":%lu,\"heap_interno_maior_bloco\":%lu,"
+            "\"heap_interno_menor_bloco\":%lu,\"psram_disponivel\":%s,"
+            "\"psram_livre\":%lu,\"psram_minima\":%lu,\"psram_maior_bloco\":%lu,"
+            "\"psram_menor_bloco\":%lu,\"pilha_valida\":%s,\"menor_pilha_livre_bytes\":%lu,"
+            "\"tarefa_menor_pilha\":\"%s\",\"tarefas_ativas\":%u,\"causas_ativas\":%lu,"
+            "\"motivo_ultimo_reset\":%lu,\"erros_sensores\":%lu,\"erros_i2c\":%lu,"
+            "\"erros_uart\":%lu,\"descartes_uart\":%lu,\"falhas_ota\":%lu,"
+            "\"falhas_supervisao\":%lu}",
+            (unsigned)comando, (unsigned long)informacoes.identificador,
+            (unsigned)informacoes.tentativas,
+            (unsigned long)informacoes.duracao_ms,
+            (unsigned)dados.versao_formato,
+            (dados.indicadores & DIAGNOSTICO_MESTRE_CPU_VALIDO) ? "true" : "false",
+            (unsigned)dados.cpu_total_decimos_percentual,
+            (unsigned)dados.cpu_nucleo_0_decimos_percentual,
+            (unsigned)dados.cpu_nucleo_1_decimos_percentual,
+            (unsigned)dados.cpu_tarefa_pico_decimos_percentual, tarefa_cpu,
+            (dados.indicadores & DIAGNOSTICO_MESTRE_TEMPERATURA_VALIDA) ? "true" : "false",
+            dados.temperatura_centesimos_c,
+            (long)dados.temperatura_ultimo_erro,
+            (unsigned long)dados.tempo_ativo_ms,
+            (unsigned long)dados.heap_livre,
+            (unsigned long)dados.menor_heap_livre,
+            (unsigned long)dados.heap_interno_livre,
+            (unsigned long)dados.menor_heap_interno_livre,
+            (unsigned long)dados.maior_bloco_heap_interno,
+            (unsigned long)dados.menor_maior_bloco_heap_interno,
+            (dados.indicadores & DIAGNOSTICO_MESTRE_PSRAM_DISPONIVEL) ? "true" : "false",
+            (unsigned long)dados.psram_livre,
+            (unsigned long)dados.menor_psram_livre,
+            (unsigned long)dados.maior_bloco_psram,
+            (unsigned long)dados.menor_maior_bloco_psram,
+            (dados.indicadores & DIAGNOSTICO_MESTRE_PILHA_VALIDA) ? "true" : "false",
+            (unsigned long)dados.menor_pilha_livre_bytes, tarefa_pilha,
+            (unsigned)dados.tarefas_ativas,
+            (unsigned long)dados.causas_ativas,
+            (unsigned long)dados.motivo_ultimo_reset,
+            (unsigned long)dados.erros_sensores,
+            (unsigned long)dados.erros_i2c,
+            (unsigned long)dados.erros_uart,
+            (unsigned long)dados.descartes_uart,
+            (unsigned long)dados.falhas_ota,
+            (unsigned long)dados.falhas_supervisao);
     } else if (comando == COMANDO_OBTER_TELEMETRIA &&
                tamanho_resposta == sizeof(resposta_comando_telemetria_t)) {
         resposta_comando_telemetria_t dados;
@@ -972,7 +917,7 @@ static esp_err_t responder_diagnostico_pagina(httpd_req_t *requisicao)
 {
     httpd_resp_set_hdr(requisicao, "Cache-Control", "no-store, max-age=0");
     httpd_resp_set_type(requisicao, "text/html; charset=utf-8");
-    return httpd_resp_send(requisicao, pagina_diagnostico_html, HTTPD_RESP_USE_STRLEN);
+    return httpd_resp_send(requisicao, PAGINA_WEB, HTTPD_RESP_USE_STRLEN);
 }
 
 static esp_err_t responder_diagnostico_api(httpd_req_t *requisicao)
@@ -983,26 +928,42 @@ static esp_err_t responder_diagnostico_api(httpd_req_t *requisicao)
         servico_comandos_satelite_obter_estatisticas();
     const situacao_servico_ota_satelite_t ota =
         servico_ota_satelite_obter_situacao();
+    const diagnostico_sistema_t sistema = diagnostico_sistema_obter();
     wifi_sta_list_t clientes = {0};
     uint8_t canal_wifi = 0;
     wifi_second_chan_t canal_secundario = WIFI_SECOND_CHAN_NONE;
+    wifi_bandwidth_t largura_wifi = WIFI_BW_HT20;
     int8_t potencia_wifi = 0;
     receptor_uart_obter_dados(&dados);
     gerenciador_uart_obter_estatisticas(&uart);
     (void)esp_wifi_ap_get_sta_list(&clientes);
     (void)esp_wifi_get_channel(&canal_wifi, &canal_secundario);
+    (void)esp_wifi_get_bandwidth(WIFI_IF_AP, &largura_wifi);
     (void)esp_wifi_get_max_tx_power(&potencia_wifi);
     const uint32_t agora_ms = (uint32_t)(esp_timer_get_time() / 1000);
     const uint32_t idade_ms = dados.ultimo_recebimento_ms == 0
                                   ? UINT32_MAX : agora_ms - dados.ultimo_recebimento_ms;
     char versao_ota[sizeof(ota.versao_destino) * 2 + 1];
     escapar_texto_json(versao_ota, sizeof(versao_ota), ota.versao_destino);
-    char json[3072];
+    char tarefa_cpu[sizeof(sistema.cpu_tarefa_pico) * 2 + 1];
+    char tarefa_pilha[sizeof(sistema.tarefa_menor_pilha) * 2 + 1];
+    escapar_texto_json(tarefa_cpu, sizeof(tarefa_cpu),
+                       sistema.cpu_tarefa_pico);
+    escapar_texto_json(tarefa_pilha, sizeof(tarefa_pilha),
+                       sistema.tarefa_menor_pilha);
+    char json[4096];
     const int tamanho = snprintf(json, sizeof(json),
         "{\"valido\":%s,\"idade_ms\":%lu,\"versao_firmware\":\"%s\",\"versao_protocolo\":%u,"
         "\"compilacao_data\":\"%s\",\"compilacao_hora\":\"%s\",\"tempo_ativo_ms\":%lu,\"motivo_reinicio\":%u,"
         "\"heap_livre\":%lu,\"heap_minimo\":%lu,\"heap_maior_bloco\":%lu,\"clientes_wifi\":%u,"
-        "\"nome_local\":\"%s\",\"wifi_canal\":%u,\"wifi_potencia_quartos_dbm\":%d,"
+        "\"heap_interno_total\":%lu,\"heap_interno_livre\":%lu,\"heap_interno_minimo\":%lu,\"heap_interno_maior_bloco\":%lu,"
+        "\"psram_total\":%lu,\"psram_livre\":%lu,\"psram_minima\":%lu,\"psram_maior_bloco\":%lu,"
+        "\"dma_livre\":%lu,\"dma_maior_bloco\":%lu,\"cpu_valida\":%s,\"cpu_total_decimos_percentual\":%u,"
+        "\"cpu_nucleo_0_decimos_percentual\":%u,\"cpu_nucleo_1_decimos_percentual\":%u,\"cpu_tarefa_pico_decimos_percentual\":%u,"
+        "\"cpu_tarefa_pico\":\"%s\",\"tarefas_ativas\":%lu,\"menor_pilha_livre_bytes\":%lu,\"tarefa_menor_pilha\":\"%s\","
+        "\"temperatura_valida\":%s,\"temperatura_centesimos_c\":%ld,\"temperatura_ultimo_erro\":%ld,"
+        "\"nome_local\":\"%s\",\"wifi_ssid\":\"%s\",\"wifi_ip\":\"%s\",\"wifi_largura_mhz\":%u,"
+        "\"wifi_canal\":%u,\"wifi_potencia_quartos_dbm\":%d,"
         "\"sequencia\":%u,\"reinicios_mestre\":%lu,\"taxa_perda_centesimos_percentual\":%lu,"
         "\"taxa_pacotes_centesimos_hz\":%lu,\"intervalo_medio_ms\":%lu,\"jitter_medio_ms\":%lu,\"latencia_relativa_ms\":%lu,"
         "\"pacotes_validos\":%lu,\"pacotes_invalidos\":%lu,\"pacotes_perdidos\":%lu,\"pacotes_duplicados\":%lu,"
@@ -1022,7 +983,29 @@ static esp_err_t responder_diagnostico_api(httpd_req_t *requisicao)
         (unsigned long)esp_get_free_heap_size(),
         (unsigned long)esp_get_minimum_free_heap_size(),
         (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
-        (unsigned)clientes.num, NOME_LOCAL_EQUIPE, (unsigned)canal_wifi,
+        (unsigned)clientes.num,
+        (unsigned long)sistema.heap_interno_total,
+        (unsigned long)sistema.heap_interno_livre,
+        (unsigned long)sistema.heap_interno_minimo,
+        (unsigned long)sistema.heap_interno_maior_bloco,
+        (unsigned long)sistema.psram_total,
+        (unsigned long)sistema.psram_livre,
+        (unsigned long)sistema.psram_minima,
+        (unsigned long)sistema.psram_maior_bloco,
+        (unsigned long)sistema.dma_livre,
+        (unsigned long)sistema.dma_maior_bloco,
+        sistema.cpu_valida ? "true" : "false",
+        (unsigned)sistema.cpu_total_decimos_percentual,
+        (unsigned)sistema.cpu_nucleo_0_decimos_percentual,
+        (unsigned)sistema.cpu_nucleo_1_decimos_percentual,
+        (unsigned)sistema.cpu_tarefa_pico_decimos_percentual,
+        tarefa_cpu, (unsigned long)sistema.tarefas_ativas,
+        (unsigned long)sistema.menor_pilha_livre_bytes, tarefa_pilha,
+        sistema.temperatura_valida ? "true" : "false",
+        (long)sistema.temperatura_centesimos_c,
+        (long)sistema.temperatura_ultimo_erro,
+        WIFI_IP_AP_TEXTO, WIFI_SSID, WIFI_IP_AP_TEXTO,
+        largura_wifi == WIFI_BW_HT40 ? 40u : 20u, (unsigned)canal_wifi,
         (int)potencia_wifi, (unsigned)dados.sequencia,
         (unsigned long)dados.reinicios_mestre,
         (unsigned long)dados.taxa_perda_centesimos_percentual,
@@ -1061,41 +1044,19 @@ static esp_err_t responder_diagnostico_api(httpd_req_t *requisicao)
     return httpd_resp_send(requisicao, json, tamanho);
 }
 
-static void tarefa_dns_cativo(void *argumento)
-{
-    (void)argumento;
-    int soquete = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (soquete < 0) vTaskDelete(NULL);
-    struct sockaddr_in endereco = { .sin_family = AF_INET, .sin_port = htons(PORTA_DNS), .sin_addr.s_addr = htonl(INADDR_ANY) };
-    if (bind(soquete, (struct sockaddr *)&endereco, sizeof(endereco)) < 0) { close(soquete); vTaskDelete(NULL); }
-    while (true) {
-        uint8_t pacote[512]; struct sockaddr_in cliente; socklen_t tamanho_cliente = sizeof(cliente);
-        int tamanho = recvfrom(soquete, pacote, sizeof(pacote), 0, (struct sockaddr *)&cliente, &tamanho_cliente);
-        if (tamanho < 17) {
-            /* Evita uso total da CPU caso a pilha de rede reporte erro repetidamente. */
-            vTaskDelay(pdMS_TO_TICKS(10));
-            continue;
-        }
-        int fim_nome = 12;
-        while (fim_nome < tamanho && pacote[fim_nome] != 0) fim_nome += pacote[fim_nome] + 1;
-        if (fim_nome + 5 > tamanho) continue;
-        int fim_pergunta = fim_nome + 5;
-        pacote[2] = 0x81; pacote[3] = 0x80; pacote[6] = 0; pacote[7] = 1; pacote[8] = pacote[9] = pacote[10] = pacote[11] = 0;
-        const uint8_t resposta[] = {0xC0,0x0C,0,1,0,1,0,0,0,0,0,4,192,168,4,1};
-        if (fim_pergunta + (int)sizeof(resposta) <= (int)sizeof(pacote)) {
-            memcpy(&pacote[fim_pergunta], resposta, sizeof(resposta));
-            sendto(soquete, pacote, fim_pergunta + sizeof(resposta), 0, (struct sockaddr *)&cliente, tamanho_cliente);
-        }
-    }
-}
-
 static esp_err_t responder_redirecionamento_cativo(
     httpd_req_t *requisicao, httpd_err_code_t codigo)
 {
     (void)codigo;
-    httpd_resp_set_status(requisicao, "303 See Other");
-    httpd_resp_set_hdr(requisicao, "Location", url_para_host(requisicao));
+    static uint32_t redirecionamentos;
+    if (++redirecionamentos == 1 || redirecionamentos % 20 == 0) {
+        ESP_LOGI(TAG, "Portal HTTP: %lu redirecionamento(s); último caminho=%s",
+                 (unsigned long)redirecionamentos, requisicao->uri);
+    }
+    httpd_resp_set_status(requisicao, "302 Found");
+    httpd_resp_set_hdr(requisicao, "Location", URL_IP_LOCAL_EQUIPE);
     httpd_resp_set_hdr(requisicao, "Cache-Control", "no-store, max-age=0");
+    httpd_resp_set_hdr(requisicao, "Connection", "close");
     return httpd_resp_send(requisicao, "Abrindo o painel local...",
                            HTTPD_RESP_USE_STRLEN);
 }
@@ -1105,11 +1066,22 @@ esp_err_t servidor_web_iniciar(void)
     httpd_handle_t servidor = NULL;
     httpd_config_t configuracao = HTTPD_DEFAULT_CONFIG();
     configuracao.server_port = PORTA_HTTP;
+    configuracao.max_uri_handlers = 8;
+    // Reserva descritores para as demais tarefas de rede do ESP.
+    configuracao.max_open_sockets = 10;
+    configuracao.lru_purge_enable = true;
+    configuracao.recv_wait_timeout = 10;
+    configuracao.send_wait_timeout = 15;
     // Os manipuladores montam respostas de diagnóstico e OTA na pilha.
     configuracao.stack_size = 8192;
     esp_err_t erro = httpd_start(&servidor, &configuracao);
-    if (erro != ESP_OK) return erro;
+    if (erro != ESP_OK) {
+        ESP_LOGE(TAG, "HTTP não iniciou na porta %u: %s",
+                 (unsigned)PORTA_HTTP, esp_err_to_name(erro));
+        return erro;
+    }
     const httpd_uri_t rota_painel = { .uri = "/", .method = HTTP_GET, .handler = responder_painel };
+    const httpd_uri_t rota_painel_direta = { .uri = "/painel", .method = HTTP_GET, .handler = responder_painel_equipe };
     const httpd_uri_t rota_api = { .uri = "/api/telemetria", .method = HTTP_GET, .handler = responder_telemetria };
     const httpd_uri_t rota_diagnostico = { .uri = "/diagnostico", .method = HTTP_GET, .handler = responder_diagnostico_pagina };
     const httpd_uri_t rota_api_diagnostico = { .uri = "/api/diagnostico", .method = HTTP_GET, .handler = responder_diagnostico_api };
@@ -1119,22 +1091,20 @@ esp_err_t servidor_web_iniciar(void)
     erro = httpd_register_err_handler(servidor, HTTPD_404_NOT_FOUND,
                                       responder_redirecionamento_cativo);
     if (erro == ESP_OK) erro = httpd_register_uri_handler(servidor, &rota_painel);
+    if (erro == ESP_OK) erro = httpd_register_uri_handler(servidor, &rota_painel_direta);
     if (erro == ESP_OK) erro = httpd_register_uri_handler(servidor, &rota_api);
     if (erro == ESP_OK) erro = httpd_register_uri_handler(servidor, &rota_diagnostico);
     if (erro == ESP_OK) erro = httpd_register_uri_handler(servidor, &rota_api_diagnostico);
     if (erro == ESP_OK) erro = httpd_register_uri_handler(servidor, &rota_mestre);
     if (erro == ESP_OK) erro = httpd_register_uri_handler(servidor, &rota_api_mestre);
     if (erro == ESP_OK) erro = httpd_register_uri_handler(servidor, &rota_api_mestre_acao);
-    if (erro != ESP_OK ||
-        xTaskCreate(tarefa_dns_cativo, "dns_cativo", 4096, NULL, 4, NULL) !=
-            pdPASS) {
-        if (erro == ESP_OK) erro = ESP_ERR_NO_MEM;
+    if (erro != ESP_OK) {
         httpd_stop(servidor);
         ESP_LOGE(TAG, "Inicialização web incompleta; servidor encerrado: %s",
                  esp_err_to_name(erro));
         return erro;
     }
-    ESP_LOGI(TAG, "Painéis disponíveis em %s, %s e %s", URL_LOCAL_EQUIPE,
-             URL_LOCAL_MESTRE, URL_LOCAL_DIAGNOSTICO);
+    ESP_LOGI(TAG, "Painéis HTTP disponíveis em %s, %s e %s",
+             URL_IP_PORTAL_ENTRADA, URL_IP_LOCAL_EQUIPE, URL_IP_LOCAL_BASE "/diagnostico");
     return ESP_OK;
 }

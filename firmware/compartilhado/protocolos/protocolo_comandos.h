@@ -23,6 +23,13 @@
 #define CAPACIDADE_COMANDO_CONTROLE_OTA (1u << 7)
 #define CAPACIDADE_COMANDO_TERMINAL (1u << 8)
 #define CAPACIDADE_COMANDO_CONTROLE_OPERACIONAL (1u << 9)
+#define CAPACIDADE_COMANDO_DIAGNOSTICO (1u << 10)
+
+#define COMANDO_FORMATO_DIAGNOSTICO_MESTRE 1u
+#define DIAGNOSTICO_MESTRE_CPU_VALIDO (1u << 0)
+#define DIAGNOSTICO_MESTRE_TEMPERATURA_VALIDA (1u << 1)
+#define DIAGNOSTICO_MESTRE_PSRAM_DISPONIVEL (1u << 2)
+#define DIAGNOSTICO_MESTRE_PILHA_VALIDA (1u << 3)
 
 typedef enum {
     NO_COMANDO_DESCONHECIDO = 0,
@@ -56,6 +63,7 @@ typedef enum {
     COMANDO_OBTER_CONFIGURACAO_MESTRE = 32,
     COMANDO_OBTER_REDE_WIFI_SALVA = 33,
     COMANDO_CONSULTAR_SATELITE = 34,
+    COMANDO_OBTER_DIAGNOSTICO_MESTRE = 35,
 } codigo_comando_t;
 
 // Uma única ação estruturada transporta as operações do menu serial sem
@@ -222,6 +230,42 @@ typedef struct __attribute__((packed)) {
     char ssid[33];
 } resposta_rede_wifi_salva_t;
 
+// Retrato compacto e versionado do monitoramento interno do mestre. O formato
+// ocupa exatamente uma carga UART para evitar paginação ou fragmentação.
+typedef struct __attribute__((packed)) {
+    uint8_t versao_formato;
+    uint8_t indicadores;
+    uint16_t tarefas_ativas;
+    uint16_t cpu_total_decimos_percentual;
+    uint16_t cpu_nucleo_0_decimos_percentual;
+    uint16_t cpu_nucleo_1_decimos_percentual;
+    uint16_t cpu_tarefa_pico_decimos_percentual;
+    int16_t temperatura_centesimos_c;
+    int32_t temperatura_ultimo_erro;
+    uint32_t tempo_ativo_ms;
+    uint32_t heap_livre;
+    uint32_t menor_heap_livre;
+    uint32_t heap_interno_livre;
+    uint32_t menor_heap_interno_livre;
+    uint32_t maior_bloco_heap_interno;
+    uint32_t menor_maior_bloco_heap_interno;
+    uint32_t psram_livre;
+    uint32_t menor_psram_livre;
+    uint32_t maior_bloco_psram;
+    uint32_t menor_maior_bloco_psram;
+    uint32_t menor_pilha_livre_bytes;
+    uint32_t causas_ativas;
+    uint32_t motivo_ultimo_reset;
+    uint32_t erros_sensores;
+    uint32_t erros_i2c;
+    uint32_t erros_uart;
+    uint32_t descartes_uart;
+    uint32_t falhas_ota;
+    uint32_t falhas_supervisao;
+    char tarefa_cpu_pico[15];
+    char tarefa_menor_pilha[15];
+} resposta_diagnostico_mestre_t;
+
 typedef enum {
     CONSULTA_SATELITE_PING = 1,
     CONSULTA_SATELITE_VERSAO = 2,
@@ -273,6 +317,9 @@ static_assert(sizeof(solicitacao_acao_mestre_t) ==
 static_assert(sizeof(resposta_configuracao_mestre_t) <=
                   COMANDO_TAMANHO_MAXIMO_CARGA,
               "A configuração deve caber na carga de comando");
+static_assert(sizeof(resposta_diagnostico_mestre_t) ==
+                  COMANDO_TAMANHO_MAXIMO_CARGA,
+              "O diagnóstico do mestre deve ocupar 128 bytes");
 #else
 _Static_assert(sizeof(cabecalho_quadro_comando_t) == 16,
                "O cabeçalho de comando deve ter 16 bytes");
@@ -289,6 +336,9 @@ _Static_assert(sizeof(solicitacao_acao_mestre_t) ==
 _Static_assert(sizeof(resposta_configuracao_mestre_t) <=
                    COMANDO_TAMANHO_MAXIMO_CARGA,
                "A configuração deve caber na carga de comando");
+_Static_assert(sizeof(resposta_diagnostico_mestre_t) ==
+                   COMANDO_TAMANHO_MAXIMO_CARGA,
+               "O diagnóstico do mestre deve ocupar 128 bytes");
 #endif
 
 static inline int protocolo_comandos_no_valido(uint8_t no)

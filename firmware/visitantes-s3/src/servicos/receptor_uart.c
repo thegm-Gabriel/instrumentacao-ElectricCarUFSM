@@ -1,10 +1,10 @@
 // Recebe e valida telemetria, comandos e quadros OTA do mestre.
-#include "receptor_uart.h"
+#include "servicos/receptor_uart.h"
 
 #include <stdio.h>
 #include <string.h>
 
-#include "configuracao.h"
+#include "nucleo/configuracao.h"
 #include "driver/uart.h"
 #include "esp_check.h"
 #include "esp_app_desc.h"

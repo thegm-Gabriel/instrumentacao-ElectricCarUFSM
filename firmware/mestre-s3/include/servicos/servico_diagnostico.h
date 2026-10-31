@@ -40,8 +40,15 @@ struct ResumoSaudeSistema {
     char tarefa_menor_pilha[24]{};
     uint32_t heap_interno_livre = 0;
     uint32_t maior_bloco_heap_interno = 0;
+    uint32_t menor_heap_interno_livre = 0;
+    uint32_t menor_maior_bloco_heap_interno = 0;
     uint32_t psram_livre = 0;
     uint32_t maior_bloco_psram = 0;
+    uint32_t menor_psram_livre = 0;
+    uint32_t menor_maior_bloco_psram = 0;
+    bool temperatura_valida = false;
+    int32_t temperatura_centesimos_c = 0;
+    esp_err_t temperatura_ultimo_erro = ESP_ERR_INVALID_STATE;
     uint32_t motivo_ultimo_reset = 0;
     uint32_t erros_sensores = 0;
     uint32_t erros_i2c = 0;

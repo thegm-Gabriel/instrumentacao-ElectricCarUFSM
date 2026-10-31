@@ -32,11 +32,13 @@ inline constexpr PoliticaTarefa TAREFAS[] = {
     {"servico_ota", 14336, 4, 0},
     {"registro_csv", 10240, 3, 0},
     {"upload_csv", 10240, 3, 0},
-    {"terminal", 4096, 3, tskNO_AFFINITY},
-    {"sinalizacao", 4096, 3, tskNO_AFFINITY},
-    {"painel_local", 4096, 2, tskNO_AFFINITY},
+    {"terminal", 6144, 3, tskNO_AFFINITY},
+    {"sinalizacao", 8192, 3, tskNO_AFFINITY},
+    // A montagem do painel consulta estados de OTA, Wi-Fi e diagnóstico e
+    // percorre o driver I2C; 4 KiB estouraram durante a inicialização.
+    {"painel_local", 8192, 2, tskNO_AFFINITY},
     {"relatorios", 6144, 2, tskNO_AFFINITY},
-    {"diagnostico", 6144, 4, tskNO_AFFINITY},
+    {"diagnostico", 8192, 4, tskNO_AFFINITY},
 };
 
 inline const PoliticaTarefa* politica_tarefa(const char* nome) {

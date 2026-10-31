@@ -1,9 +1,9 @@
 // Mantém o ponto de acesso e o estado da rede Wi-Fi dos visitantes.
-#include "rede_wifi.h"
+#include "gerenciadores/gerenciador_wifi.h"
 
 #include <string.h>
 
-#include "configuracao.h"
+#include "nucleo/configuracao.h"
 #include "esp_check.h"
 #include "esp_event.h"
 #include "esp_log.h"
@@ -23,7 +23,7 @@ static void ao_evento_wifi(void *argumento, esp_event_base_t base, int32_t id, v
     if (id == WIFI_EVENT_AP_STADISCONNECTED) ESP_LOGI(TAG, "Visitante desconectado do painel");
 }
 
-esp_err_t rede_wifi_iniciar(void)
+esp_err_t gerenciador_wifi_iniciar(void)
 {
     esp_err_t erro = nvs_flash_init();
     if (erro == ESP_ERR_NVS_NO_FREE_PAGES || erro == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -43,6 +43,23 @@ esp_err_t rede_wifi_iniciar(void)
     IP4_ADDR(&ip_info.netmask, 255, 255, 255, 0);
     ESP_RETURN_ON_ERROR(esp_netif_dhcps_stop(interface_ap), TAG, "parar DHCP");
     ESP_RETURN_ON_ERROR(esp_netif_set_ip_info(interface_ap, &ip_info), TAG, "IP do AP");
+    esp_netif_dns_info_t servidor_dns = {0};
+    servidor_dns.ip.type = ESP_IPADDR_TYPE_V4;
+    servidor_dns.ip.u_addr.ip4 = ip_info.ip;
+    esp_err_t erro_opcional = esp_netif_set_dns_info(
+        interface_ap, ESP_NETIF_DNS_MAIN, &servidor_dns);
+    if (erro_opcional != ESP_OK) {
+        ESP_LOGW(TAG, "DNS local indisponível: %s",
+                 esp_err_to_name(erro_opcional));
+    }
+    uint8_t oferecer_dns = 0x02;
+    erro_opcional = esp_netif_dhcps_option(
+        interface_ap, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER,
+        &oferecer_dns, sizeof(oferecer_dns));
+    if (erro_opcional != ESP_OK) {
+        ESP_LOGW(TAG, "DHCP não anunciou o DNS local: %s",
+                 esp_err_to_name(erro_opcional));
+    }
     ESP_RETURN_ON_ERROR(esp_netif_dhcps_start(interface_ap), TAG, "iniciar DHCP");
 
     wifi_init_config_t configuracao_inicial = WIFI_INIT_CONFIG_DEFAULT();
@@ -62,16 +79,24 @@ esp_err_t rede_wifi_iniciar(void)
     ESP_RETURN_ON_ERROR(esp_wifi_set_bandwidth(WIFI_IF_AP, largura), TAG,
                         "configurar largura do canal");
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "iniciar AP");
-    ESP_RETURN_ON_ERROR(
-        esp_wifi_set_max_tx_power((int8_t)(WIFI_POTENCIA_MAXIMA_DBM * 4)),
-        TAG, "configurar potência do rádio");
+    esp_err_t erro_potencia =
+        esp_wifi_set_max_tx_power((int8_t)(WIFI_POTENCIA_MAXIMA_DBM * 4));
+    if (erro_potencia != ESP_OK) {
+        ESP_LOGW(TAG, "Potência solicitada indisponível; mantendo a do driver: %s",
+                 esp_err_to_name(erro_potencia));
+    }
     int8_t potencia_aplicada = 0;
-    ESP_RETURN_ON_ERROR(esp_wifi_get_max_tx_power(&potencia_aplicada), TAG,
-                        "consultar potência do rádio");
+    erro_potencia = esp_wifi_get_max_tx_power(&potencia_aplicada);
+    if (erro_potencia != ESP_OK) {
+        ESP_LOGW(TAG, "Não foi possível consultar a potência do rádio: %s",
+                 esp_err_to_name(erro_potencia));
+    }
     ESP_LOGI(TAG, "AP '%s' ativo em " IPSTR, WIFI_SSID, IP2STR(&ip_info.ip));
-    ESP_LOGI(TAG,
-             "Rádio AP: canal=%u, largura=%u MHz, potência máxima=%d.%02d dBm",
-             (unsigned)WIFI_CANAL, (unsigned)WIFI_LARGURA_CANAL_MHZ,
-             potencia_aplicada / 4, (potencia_aplicada % 4) * 25);
+    if (erro_potencia == ESP_OK) {
+        ESP_LOGI(TAG,
+                 "Rádio AP: canal=%u, largura=%u MHz, potência máxima=%d.%02d dBm",
+                 (unsigned)WIFI_CANAL, (unsigned)WIFI_LARGURA_CANAL_MHZ,
+                 potencia_aplicada / 4, (potencia_aplicada % 4) * 25);
+    }
     return ESP_OK;
 }

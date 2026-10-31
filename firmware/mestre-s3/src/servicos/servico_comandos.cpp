@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "esp_app_desc.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_timer.h"
@@ -36,7 +37,8 @@ constexpr uint32_t CAPACIDADES_MESTRE =
     CAPACIDADE_COMANDO_UART | CAPACIDADE_COMANDO_OTA |
     CAPACIDADE_COMANDO_WIFI | CAPACIDADE_COMANDO_CONTROLE_OTA |
     CAPACIDADE_COMANDO_TERMINAL |
-    CAPACIDADE_COMANDO_CONTROLE_OPERACIONAL;
+    CAPACIDADE_COMANDO_CONTROLE_OPERACIONAL |
+    CAPACIDADE_COMANDO_DIAGNOSTICO;
 
 struct RespostaPendente {
     DestinoUart origem;
@@ -492,6 +494,90 @@ codigo_resposta_comando_t responder_rede_wifi_salva(
     return RESPOSTA_COMANDO_OK;
 }
 
+codigo_resposta_comando_t responder_diagnostico_mestre(
+    DestinoUart, const uint8_t*, uint16_t tamanho_carga, uint8_t* resposta,
+    uint16_t* tamanho_resposta) {
+    const codigo_resposta_comando_t valido = validar_sem_carga(tamanho_carga);
+    if (valido != RESPOSTA_COMANDO_OK) return valido;
+
+    const ResumoSaudeSistema saude = servico_diagnostico_obter_resumo();
+    DiagnosticoTarefas tarefas{};
+    servico_diagnostico_obter_tarefas(&tarefas);
+    resposta_diagnostico_mestre_t dados{};
+    dados.versao_formato = COMANDO_FORMATO_DIAGNOSTICO_MESTRE;
+    dados.tarefas_ativas = static_cast<uint16_t>(std::min<std::size_t>(
+        tarefas.quantidade, UINT16_MAX));
+
+    bool encontrou_idle_0 = false;
+    bool encontrou_idle_1 = false;
+    uint16_t maior_cpu = 0;
+    for (std::size_t indice = 0; indice < tarefas.quantidade; ++indice) {
+        const DiagnosticoTarefa& tarefa = tarefas.tarefas[indice];
+        if (!tarefa.cpu_valida) continue;
+        if (std::strcmp(tarefa.nome, "IDLE0") == 0) {
+            dados.cpu_nucleo_0_decimos_percentual =
+                static_cast<uint16_t>(1000U -
+                    std::min<uint16_t>(tarefa.cpu_decimos, 1000U));
+            encontrou_idle_0 = true;
+        } else if (std::strcmp(tarefa.nome, "IDLE1") == 0) {
+            dados.cpu_nucleo_1_decimos_percentual =
+                static_cast<uint16_t>(1000U -
+                    std::min<uint16_t>(tarefa.cpu_decimos, 1000U));
+            encontrou_idle_1 = true;
+        } else if (tarefa.cpu_decimos > maior_cpu) {
+            maior_cpu = tarefa.cpu_decimos;
+            dados.cpu_tarefa_pico_decimos_percentual = tarefa.cpu_decimos;
+            copiar_texto(dados.tarefa_cpu_pico,
+                         sizeof(dados.tarefa_cpu_pico), tarefa.nome);
+        }
+    }
+    if (tarefas.valido && encontrou_idle_0 && encontrou_idle_1) {
+        dados.indicadores |= DIAGNOSTICO_MESTRE_CPU_VALIDO;
+        dados.cpu_total_decimos_percentual = static_cast<uint16_t>(
+            (dados.cpu_nucleo_0_decimos_percentual +
+             dados.cpu_nucleo_1_decimos_percentual) / 2U);
+    }
+    if (saude.temperatura_valida) {
+        dados.indicadores |= DIAGNOSTICO_MESTRE_TEMPERATURA_VALIDA;
+    }
+    if (heap_caps_get_total_size(MALLOC_CAP_SPIRAM) != 0) {
+        dados.indicadores |= DIAGNOSTICO_MESTRE_PSRAM_DISPONIVEL;
+    }
+    if (saude.bytes_pilha_livres != 0) {
+        dados.indicadores |= DIAGNOSTICO_MESTRE_PILHA_VALIDA;
+    }
+    dados.temperatura_centesimos_c = static_cast<int16_t>(std::clamp<int32_t>(
+        saude.temperatura_centesimos_c, INT16_MIN, INT16_MAX));
+    dados.temperatura_ultimo_erro = saude.temperatura_ultimo_erro;
+    dados.tempo_ativo_ms = static_cast<uint32_t>(saude.tempo_ativo_ms);
+    dados.heap_livre = saude.heap_livre;
+    dados.menor_heap_livre = saude.menor_heap_livre;
+    dados.heap_interno_livre = saude.heap_interno_livre;
+    dados.menor_heap_interno_livre = saude.menor_heap_interno_livre;
+    dados.maior_bloco_heap_interno = saude.maior_bloco_heap_interno;
+    dados.menor_maior_bloco_heap_interno =
+        saude.menor_maior_bloco_heap_interno;
+    dados.psram_livre = saude.psram_livre;
+    dados.menor_psram_livre = saude.menor_psram_livre;
+    dados.maior_bloco_psram = saude.maior_bloco_psram;
+    dados.menor_maior_bloco_psram = saude.menor_maior_bloco_psram;
+    dados.menor_pilha_livre_bytes = saude.bytes_pilha_livres;
+    dados.causas_ativas = saude.causas_ativas;
+    dados.motivo_ultimo_reset = saude.motivo_ultimo_reset;
+    dados.erros_sensores = saude.erros_sensores;
+    dados.erros_i2c = saude.erros_i2c;
+    dados.erros_uart = saude.erros_uart;
+    dados.descartes_uart = saude.descartes_uart;
+    dados.falhas_ota = saude.falhas_ota;
+    dados.falhas_supervisao = saude.falhas_supervisao;
+    copiar_texto(dados.tarefa_menor_pilha,
+                 sizeof(dados.tarefa_menor_pilha),
+                 saude.tarefa_menor_pilha);
+    std::memcpy(resposta, &dados, sizeof(dados));
+    *tamanho_resposta = sizeof(dados);
+    return RESPOSTA_COMANDO_OK;
+}
+
 codigo_resposta_comando_t consultar_satelite_remoto(
     DestinoUart origem, const uint8_t* carga, uint16_t tamanho_carga,
     uint8_t* resposta, uint16_t* tamanho_resposta) {
@@ -665,6 +751,7 @@ constexpr RegistroComando COMANDOS[] = {
     {COMANDO_OBTER_CONFIGURACAO_MESTRE, responder_configuracao_mestre},
     {COMANDO_OBTER_REDE_WIFI_SALVA, responder_rede_wifi_salva},
     {COMANDO_CONSULTAR_SATELITE, consultar_satelite_remoto},
+    {COMANDO_OBTER_DIAGNOSTICO_MESTRE, responder_diagnostico_mestre},
 };
 
 const RegistroComando* localizar_comando(uint16_t codigo) {

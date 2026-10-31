@@ -18,6 +18,7 @@
 #include "servicos/servico_aceleracao.h"
 #include "servicos/servico_comandos.h"
 #include "servicos/servico_diagnostico.h"
+#include "servicos/servico_gravador_audio_treinamento.h"
 #include "servicos/servico_odometro.h"
 #include "servicos/servico_ota.h"
 #include "servicos/servico_registro_telemetria.h"
@@ -43,6 +44,8 @@ enum class TelaTerminal : uint8_t {
     Intervalos,
     EscolherIntervalo,
     ComandosSatelites,
+    AudioTreinamentoNome,
+    AudioTreinamentoDuracao,
     Wifi,
     WifiNovaSsid,
     WifiNovaSenha,
@@ -104,6 +107,10 @@ constexpr OpcaoMenu OPCOES_PRINCIPAL_CONECTIVIDADE[] = {
     {8, "Enviar telemetria pendente ao Google"},
 };
 
+constexpr OpcaoMenu OPCOES_PRINCIPAL_FERRAMENTAS[] = {
+    {9, "Gravar áudio WAV para treinamento de IA (temporário)"},
+};
+
 constexpr OpcaoMenu OPCOES_SATELITES[] = {
     {1, "Ping do satélite da equipe"},
     {2, "Ping do satélite de visitantes"},
@@ -136,6 +143,11 @@ struct ContextoWifiTerminal {
 };
 
 ContextoWifiTerminal contexto_wifi{};
+struct ContextoAudioTreinamentoTerminal {
+    char nome[TAMANHO_MAXIMO_LINHA]{};
+};
+
+ContextoAudioTreinamentoTerminal contexto_audio{};
 int caractere_pendente = EOF;
 bool entrada_console_nao_bloqueante = false;
 
@@ -178,6 +190,8 @@ void mostrar_menu_principal() {
     imprimir_opcoes(OPCOES_PRINCIPAL_MONITORAMENTO, "    ");
     std::printf("\r\n  CONECTIVIDADE E MANUTENÇÃO\r\n");
     imprimir_opcoes(OPCOES_PRINCIPAL_CONECTIVIDADE, "    ");
+    std::printf("\r\n  FERRAMENTA TEMPORÁRIA\r\n");
+    imprimir_opcoes(OPCOES_PRINCIPAL_FERRAMENTAS, "    ");
     std::printf("\r\n    [0] Redesenhar este menu\r\n");
     imprimir_prompt("Digite uma opção e pressione Enter. Enter vazio redesenha o menu.");
 }
@@ -830,6 +844,86 @@ void alternar_pausa() {
                 pausados ? "pausados" : "retomados");
 }
 
+void solicitar_nome_audio_treinamento() {
+    tela_atual = TelaTerminal::AudioTreinamentoNome;
+    std::memset(&contexto_audio, 0, sizeof(contexto_audio));
+    imprimir_titulo("GRAVAÇÃO DO INMP441 | TREINAMENTO DE IA");
+    std::printf("O arquivo será salvo em /sdcard/audio_ia no formato WAV,\r\n");
+    std::printf("mono, PCM 16 bits e 16 kHz. Um arquivo existente não será alterado.\r\n");
+    imprimir_prompt("Digite o nome da amostra. Enter vazio cancela.", "nome");
+}
+
+void tratar_duracao_audio_treinamento(unsigned long duracao_segundos) {
+    if (duracao_segundos < 1 || duracao_segundos > 60) {
+        std::printf("\r\nDuração inválida. Digite um valor entre 1 e 60 segundos.\r\n> ");
+        std::fflush(stdout);
+        return;
+    }
+
+    const EstadoRegistroTelemetria registro =
+        servico_registro_telemetria_obter_estado();
+    const ResumoWifi wifi = servico_wifi_obter_resumo();
+    if (!registro.cartao_disponivel) {
+        std::printf("\r\n[ERRO] O cartão SD não está disponível.\r\n");
+        tela_atual = TelaTerminal::Principal;
+        mostrar_menu_principal();
+        return;
+    }
+    if (registro.sincronizacao_em_andamento || wifi.sessao_em_andamento) {
+        std::printf(
+            "\r\n[AVISO] Aguarde o término do upload, Wi-Fi ou OTA antes de gravar.\r\n");
+        tela_atual = TelaTerminal::Principal;
+        mostrar_menu_principal();
+        return;
+    }
+
+    std::printf("\r\nPrepare-se. A gravação começará em 3 segundos...\r\n");
+    std::fflush(stdout);
+    for (int contagem = 3; contagem > 0; --contagem) {
+        std::printf("  %d...\r\n", contagem);
+        std::fflush(stdout);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+    std::printf("  GRAVANDO — fale agora.\r\n");
+    std::fflush(stdout);
+
+    ResultadoGravacaoAudioTreinamento resultado{};
+    const esp_err_t erro = servico_gravador_audio_treinamento_gravar(
+        contexto_audio.nome, static_cast<uint32_t>(duracao_segundos),
+        &resultado);
+    if (erro == ESP_OK) {
+        const float pico_percentual =
+            resultado.pico_absoluto * 100.0f / 32767.0f;
+        std::printf("\r\n[OK] Gravação concluída.\r\n");
+        std::printf("Arquivo     : %s\r\n", resultado.caminho);
+        std::printf("Áudio       : %.2f s | %lu amostras\r\n",
+                    resultado.amostras_gravadas / 16000.0f,
+                    static_cast<unsigned long>(resultado.amostras_gravadas));
+        std::printf("Nível       : pico %.1f%% | saturadas=%lu\r\n",
+                    pico_percentual,
+                    static_cast<unsigned long>(resultado.amostras_saturadas));
+        if (pico_percentual < 3.0f) {
+            std::printf(
+                "[AVISO] Sinal muito baixo; confira alimentação, canal L/R e distância.\r\n");
+        } else if (resultado.amostras_saturadas > 0) {
+            std::printf(
+                "[AVISO] Houve saturação; aumente a distância ou reduza o ganho.\r\n");
+        }
+    } else if (resultado.arquivo_existente) {
+        std::printf("\r\n[ERRO] %s já existe; escolha outro nome.\r\n",
+                    resultado.caminho);
+    } else {
+        std::printf("\r\n[ERRO] A gravação falhou: %s.\r\n",
+                    esp_err_to_name(erro));
+        if (resultado.arquivo_parcial && resultado.caminho[0] != '\0') {
+            std::printf("O áudio parcial foi preservado em %s.\r\n",
+                        resultado.caminho);
+        }
+    }
+    tela_atual = TelaTerminal::Principal;
+    mostrar_menu_principal();
+}
+
 void tratar_menu_principal(unsigned long opcao) {
     switch (opcao) {
         case 0:
@@ -892,6 +986,9 @@ void tratar_menu_principal(unsigned long opcao) {
             mostrar_menu_principal();
             break;
         }
+        case 9:
+            solicitar_nome_audio_treinamento();
+            break;
         default:
             std::printf("\r\nOpção inválida. Escolha um número do menu.\r\n> ");
             std::fflush(stdout);
@@ -1673,6 +1770,10 @@ void voltar_uma_tela() {
                tela_atual == TelaTerminal::SensorI2c) {
         tela_atual = TelaTerminal::Sensores;
         mostrar_menu_sensores();
+    } else if (tela_atual == TelaTerminal::AudioTreinamentoNome ||
+               tela_atual == TelaTerminal::AudioTreinamentoDuracao) {
+        tela_atual = TelaTerminal::Principal;
+        mostrar_menu_principal();
     } else if (tela_atual == TelaTerminal::Ota ||
                tela_atual == TelaTerminal::Sensores ||
                tela_atual == TelaTerminal::Intervalos ||
@@ -1717,6 +1818,8 @@ constexpr RotaTerminal ROTAS_TERMINAL[] = {
     {TelaTerminal::Intervalos, tratar_menu_intervalos},
     {TelaTerminal::EscolherIntervalo, tratar_escolha_intervalo},
     {TelaTerminal::ComandosSatelites, tratar_menu_comandos_satelites},
+    {TelaTerminal::AudioTreinamentoDuracao,
+     tratar_duracao_audio_treinamento},
     {TelaTerminal::Wifi, tratar_menu_wifi},
     {TelaTerminal::WifiPolitica, tratar_menu_politica_wifi},
     {TelaTerminal::WifiPoliticaValor, tratar_valor_politica_wifi},
@@ -1776,6 +1879,17 @@ void tarefa_terminal(void*) {
 
         if (tela_recebe_texto_wifi()) {
             tratar_texto_wifi(linha);
+            continue;
+        }
+
+        if (tela_atual == TelaTerminal::AudioTreinamentoNome) {
+            std::strncpy(contexto_audio.nome, linha,
+                         sizeof(contexto_audio.nome) - 1);
+            contexto_audio.nome[sizeof(contexto_audio.nome) - 1] = '\0';
+            tela_atual = TelaTerminal::AudioTreinamentoDuracao;
+            imprimir_prompt(
+                "Digite a duração entre 1 e 60 segundos. Enter vazio cancela.",
+                "segundos");
             continue;
         }
 

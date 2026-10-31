@@ -1,5 +1,5 @@
 // Recebe e valida telemetria, comandos e quadros OTA do mestre.
-#include "receptor_uart.h"
+#include "servicos/receptor_uart.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -8,14 +8,14 @@
 #include "esp_app_desc.h"
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "configuracao.h"
+#include "nucleo/configuracao.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "protocolo_enlace_uart.h"
 #include "servico_comandos_satelite.h"
 #include "servico_ota_satelite.h"
-#include "gerenciador_uart.h"
+#include "gerenciadores/gerenciador_uart.h"
 
 static const char *TAG = "receptor_uart";
 static dados_telemetria_t dados_compartilhados;

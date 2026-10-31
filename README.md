@@ -11,9 +11,8 @@ que apresentam os dados à equipe e aos visitantes.
 Sensores e encoders
         │
         ▼
-ESP32-S3 mestre ── UART ──► ESP32-S3 da equipe ── Wi-Fi ──► painel.equipe
-        │                              └───────────────► painel.mestre
-        ├────────── UART ──► ESP32-S3 de visitantes ─► portal público
+ESP32-S3 mestre ◄─ UART ─► ESP32-S3 da equipe ── Wi-Fi ──► painel em 192.168.4.1
+        ├────────── UART ◄─► ESP32-S3 de visitantes ─► painel em 192.168.4.1
         ├────────── microSD ──► CSVs a 1 Hz
         └────────── Wi-Fi ────► Google Drive/Sheets e releases OTA
 ```
@@ -82,20 +81,23 @@ O quadro de telemetria v4 possui 105 bytes e está definido uma única vez em
 versão, tipo, tamanho e CRC-16 antes de publicar a amostra. Comandos e OTA usam
 quadros próprios, confirmação, limite de tempo e repetição controlada.
 
-Ao conectar à rede `UFSM-Carro-Equipe`, use HTTP, não HTTPS:
+Ao conectar à rede `UFSM-Carro-Equipe`, abra `http://192.168.4.1/`. As rotas
+`/painel`, `/diagnostico` e `/mestre` entregam a mesma interface com três abas;
+`/api/telemetria`, `/api/diagnostico` e `/api/mestre` fornecem os dados. O AP da
+equipe não oferece DNS local: use o IP e HTTP explícito. O DHCP tenta anunciar o
+portal pela opção 114, mas a abertura automática depende do cliente.
 
-- `http://painel.equipe` — telemetria de condução e energia;
-- `http://painel.diagnostico` — estado técnico do satélite e da comunicação;
-- `http://painel.mestre` — consultas e operações confirmadas no mestre.
-
-Esses nomes são respondidos pelo DNS local do próprio satélite e só funcionam
-enquanto o dispositivo estiver conectado ao ponto de acesso da equipe. Caso o
-navegador force HTTPS ou DNS seguro, desative essa opção para a rede local e
-abra novamente o endereço com `http://` explícito.
+O módulo de visitantes cria a rede `UFSM-Carro-Visitantes` e serve a página
+pública em `http://192.168.4.1/`. Sua API é apenas `/api/telemetria`. O DNS
+cativo responde consultas IPv4 com o IP local quando disponível. Cada endereço
+`192.168.4.1` pertence ao AP ao qual o dispositivo está conectado naquele momento.
 
 ## Documentação
 
+- [Mapa de todos os guias](documentacao/README.md)
 - [Arquitetura geral](documentacao/arquitetura/README.md)
+- [Guia técnico do mestre](documentacao/firmware-mestre/README.md)
+- [Guia técnico dos satélites e APIs](documentacao/satelites/README.md)
 - [Arquitetura interna do mestre](firmware/mestre-s3/ARQUITETURA.md)
 - [Atualização OTA](documentacao/ota/README.md)
 - [Telemetria no Google Drive e Sheets](documentacao/telemetria-google/README.md)

@@ -347,6 +347,75 @@ SituacaoOtaSatelite avaliar_satelite(const EstatisticasLinkTelemetria& link,
     return resultado;
 }
 
+bool estado_satelite_reconciliavel(EstadoOtaSatelite estado) {
+    return estado == EstadoOtaSatelite::Desconhecido ||
+           estado == EstadoOtaSatelite::Indisponivel ||
+           estado == EstadoOtaSatelite::NaoSuportado ||
+           estado == EstadoOtaSatelite::Atualizado ||
+           estado == EstadoOtaSatelite::AguardandoAutorizacao ||
+           estado == EstadoOtaSatelite::Falha;
+}
+
+// O resultado da consulta ao manifesto e a disponibilidade do enlace têm
+// ciclos de vida diferentes. Mantém o manifesto em cache, mas reavalia versão,
+// capacidade e comunicação dos satélites para não perpetuar um estado offline.
+void reconciliar_satelites_com_enlace_atual() {
+    if (mutex_estado == nullptr) return;
+
+    ManifestoOta manifesto{};
+    bool pode_reconciliar = false;
+    xSemaphoreTake(mutex_estado, portMAX_DELAY);
+    pode_reconciliar =
+        (situacao.estado == EstadoServicoOta::Atualizado ||
+         situacao.estado == EstadoServicoOta::AguardandoAutorizacao) &&
+        manifesto_disponivel.equipe.versao[0] != '\0' &&
+        manifesto_disponivel.visitantes.versao[0] != '\0';
+    if (pode_reconciliar) manifesto = manifesto_disponivel;
+    xSemaphoreGive(mutex_estado);
+    if (!pode_reconciliar) return;
+
+    const SituacaoOtaSatelite equipe = avaliar_satelite(
+        servico_telemetria_obter_estatisticas_link(SateliteTelemetria::Equipe),
+        manifesto.equipe);
+    const SituacaoOtaSatelite visitantes = avaliar_satelite(
+        servico_telemetria_obter_estatisticas_link(
+            SateliteTelemetria::Visitantes),
+        manifesto.visitantes);
+
+    xSemaphoreTake(mutex_estado, portMAX_DELAY);
+    if (situacao.estado == EstadoServicoOta::Baixando ||
+        situacao.estado == EstadoServicoOta::Verificando ||
+        alvo_autorizado != AlvoOta::Nenhum) {
+        xSemaphoreGive(mutex_estado);
+        return;
+    }
+    const EstadoOtaSatelite equipe_anterior = situacao.equipe.estado;
+    const EstadoOtaSatelite visitantes_anterior = situacao.visitantes.estado;
+    if (estado_satelite_reconciliavel(equipe_anterior)) {
+        situacao.equipe = equipe;
+    }
+    if (estado_satelite_reconciliavel(visitantes_anterior)) {
+        situacao.visitantes = visitantes;
+    }
+    const bool possui_pendente = situacao.versao_disponivel[0] != '\0' ||
+        situacao.equipe.estado == EstadoOtaSatelite::AguardandoAutorizacao ||
+        situacao.visitantes.estado == EstadoOtaSatelite::AguardandoAutorizacao;
+    situacao.estado = possui_pendente ? EstadoServicoOta::AguardandoAutorizacao
+                                      : EstadoServicoOta::Atualizado;
+    situacao.ultimo_erro = ESP_OK;
+    const EstadoOtaSatelite equipe_atual = situacao.equipe.estado;
+    const EstadoOtaSatelite visitantes_atual = situacao.visitantes.estado;
+    xSemaphoreGive(mutex_estado);
+
+    if (equipe_anterior != equipe_atual ||
+        visitantes_anterior != visitantes_atual) {
+        ESP_LOGI(ETIQUETA,
+                 "Estado OTA reconciliado com os enlaces: equipe=%s, visitantes=%s",
+                 servico_ota_nome_estado_satelite(equipe_atual),
+                 servico_ota_nome_estado_satelite(visitantes_atual));
+    }
+}
+
 esp_err_t verificar_atualizacao() {
     xSemaphoreTake(mutex_estado, portMAX_DELAY);
     situacao.verificacoes++;
@@ -545,6 +614,41 @@ esp_err_t aguardar_confirmacao_satelite(
 
 esp_err_t executar_atualizacao_satelite(
     AlvoOta alvo, const FirmwareManifestoOta& firmware) {
+    const SateliteTelemetria satelite = alvo == AlvoOta::Equipe
+                                            ? SateliteTelemetria::Equipe
+                                            : SateliteTelemetria::Visitantes;
+    const SituacaoOtaSatelite pre_validacao = avaliar_satelite(
+        servico_telemetria_obter_estatisticas_link(satelite), firmware);
+    if (pre_validacao.estado == EstadoOtaSatelite::Atualizado) {
+        xSemaphoreTake(mutex_estado, portMAX_DELAY);
+        SituacaoOtaSatelite* estado = alvo == AlvoOta::Equipe
+                                          ? &situacao.equipe
+                                          : &situacao.visitantes;
+        *estado = pre_validacao;
+        xSemaphoreGive(mutex_estado);
+        ESP_LOGI(ETIQUETA,
+                 "OTA de %s dispensada: a versão esperada já está ativa",
+                 servico_ota_nome_alvo(alvo));
+        return ESP_OK;
+    }
+    if (pre_validacao.estado != EstadoOtaSatelite::AguardandoAutorizacao) {
+        xSemaphoreTake(mutex_estado, portMAX_DELAY);
+        SituacaoOtaSatelite* estado = alvo == AlvoOta::Equipe
+                                          ? &situacao.equipe
+                                          : &situacao.visitantes;
+        *estado = pre_validacao;
+        estado->ultimo_erro = ESP_ERR_INVALID_STATE;
+        situacao.estado = EstadoServicoOta::AguardandoAutorizacao;
+        situacao.alvo_ativo = AlvoOta::Nenhum;
+        situacao.ultimo_erro = ESP_ERR_INVALID_STATE;
+        xSemaphoreGive(mutex_estado);
+        ESP_LOGW(ETIQUETA,
+                 "OTA de %s adiada após pré-validação: %s",
+                 servico_ota_nome_alvo(alvo),
+                 servico_ota_nome_estado_satelite(pre_validacao.estado));
+        return ESP_ERR_INVALID_STATE;
+    }
+
     xSemaphoreTake(mutex_estado, portMAX_DELAY);
     SituacaoOtaSatelite* estado = alvo == AlvoOta::Equipe
                                       ? &situacao.equipe : &situacao.visitantes;
@@ -891,6 +995,7 @@ esp_err_t servico_ota_autorizar_atualizacao_todos() {
     if (wifi_ocupado_para_ota("Autorização OTA conjunta")) {
         return ESP_ERR_INVALID_STATE;
     }
+    reconciliar_satelites_com_enlace_atual();
     xSemaphoreTake(mutex_estado, portMAX_DELAY);
     const auto alvo_disponivel = [](EstadoOtaSatelite estado) {
         return estado == EstadoOtaSatelite::Atualizado ||
@@ -929,6 +1034,7 @@ esp_err_t servico_ota_autorizar_atualizacao_satelite(AlvoOta alvo) {
     if (wifi_ocupado_para_ota("Autorização OTA de satélite")) {
         return ESP_ERR_INVALID_STATE;
     }
+    reconciliar_satelites_com_enlace_atual();
     xSemaphoreTake(mutex_estado, portMAX_DELAY);
     const SituacaoOtaSatelite& satelite = alvo == AlvoOta::Equipe
                                               ? situacao.equipe : situacao.visitantes;
@@ -992,6 +1098,7 @@ SituacaoOta servico_ota_obter_situacao() {
                      sizeof(inicial.versao_atual) - 1);
         return inicial;
     }
+    reconciliar_satelites_com_enlace_atual();
     xSemaphoreTake(mutex_estado, portMAX_DELAY);
     const SituacaoOta copia = situacao;
     xSemaphoreGive(mutex_estado);

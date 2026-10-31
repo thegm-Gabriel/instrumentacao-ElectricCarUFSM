@@ -12,7 +12,18 @@ o mestre antigo.
 
 O mestre usa o módulo ESP32-S3-WROOM-1-N16R8. Como a PSRAM é Octal, reserve os
 GPIOs 33 a 37 para a interface interna de memória e não os use em periféricos. A
- pinagem atual usa GPIO 4 a 18 e 21, portanto não há conflito com a PSRAM.
+pinagem também usa GPIO 38 a 42, 47 e 48, sem ocupar os pinos da PSRAM.
+
+## Entrada ADC do mestre
+
+| Função | GPIO do mestre | Implementação atual |
+|---|---:|---|
+| Leitura analógica de tensão | GPIO 4 | ADC oneshot, atenuação de 12 dB; publica a contagem bruta de 0 a 4095 |
+
+`leitor_tensao.cpp` não aplica calibração nem converte essa contagem em volts.
+Qualquer tensão externa precisa de condicionamento elétrico apropriado para a
+entrada de 3,3 V do ESP32-S3; os campos de tensão do pacote do veículo não devem
+ser interpretados como medição do conjunto de baterias a partir desse ADC.
 
 ## LEDs e buzzer do mestre
 
@@ -93,8 +104,9 @@ do ESP32-S3.
 | Mestre RX ← visitantes TX | GPIO 16 | GPIO 6 |
 | Referência elétrica | GND | GND |
 
-Atualmente os módulos da equipe e de visitantes apenas recebem telemetria, mas os
-fios de retorno já podem ficar previstos para uso futuro.
+Os dois fios de retorno são necessários no firmware atual: os satélites enviam
+ACK de telemetria, respostas a comandos e confirmações de blocos OTA. Ligue TX de
+cada satélite ao RX correspondente do mestre e mantenha GND comum.
 
 ## Cartão microSD do mestre
 
@@ -112,3 +124,21 @@ GPIOs 33 a 37 continuam reservados para a PSRAM Octal.
 
 Esses pinos são uma definição de firmware e precisam ser conferidos com a placa
 e o módulo usados antes de fabricar o chicote.
+
+## Microfone INMP441 temporário para treinamento
+
+A opção 9 do terminal grava amostras WAV para `/sdcard/audio_ia`. Esta ligação é
+temporária para formar o conjunto de treinamento do reconhecedor de voz.
+
+| Pino do INMP441 | ESP32-S3 mestre | Observação |
+|---|---:|---|
+| VDD | 3,3 V | Não alimentar com 5 V |
+| GND | GND | Referência comum |
+| SCK / BCLK | GPIO 42 | Clock I2S |
+| WS / LRCL | GPIO 47 | Seleção de palavra I2S |
+| SD | GPIO 48 | Dados do microfone para o mestre |
+| L/R | GND | Seleciona o canal esquerdo configurado no firmware |
+
+Os pinos ficam centralizados em `configuracao_placa.h`. O gravador produz áudio
+mono PCM de 16 bits a 16 kHz, não sobrescreve amostras existentes e aceita de 1
+a 60 segundos por arquivo.

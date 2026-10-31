@@ -70,8 +70,9 @@ No terminal de 115200 baud, escolha `2 - Atualização OTA`. O submenu permite:
 O mestre só oferece OTA ao satélite que esteja respondendo, anuncie a capacidade
 OTA e tenha uma versão menor que a descrita no manifesto.
 
-As mesmas autorizações estão disponíveis em `http://painel.mestre` quando o
-operador está conectado ao ponto de acesso do módulo da equipe. A página exige
+As mesmas autorizações estão disponíveis na aba **ESP32 — Mestre** de
+`http://192.168.4.1/`, quando o operador está conectado ao ponto de acesso do
+módulo da equipe. A página exige
 confirmação para ações que alteram estado e acompanha o resultado pela UART.
 
 ## Preparar um release

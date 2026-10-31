@@ -192,13 +192,16 @@ void exibir_relatorios(const DadosTelemetriaVeiculo& dados) {
                  static_cast<unsigned long long>(total_segundos % 60u),
                  static_cast<unsigned long>(saude.motivo_ultimo_reset));
         ESP_LOGI(ETIQUETA,
-                 "[MEMÓRIA] heap livre=%lu KiB | interno=%lu KiB (bloco=%lu KiB) | PSRAM=%lu KiB (bloco=%lu KiB) | mínimo=%lu KiB | menor pilha=%lu bytes (%s)",
-                 static_cast<unsigned long>(saude.heap_livre / 1024u),
+                 "[MEMÓRIA] interno=%lu KiB (mín=%lu, bloco=%lu/mín=%lu) | PSRAM=%lu KiB (mín=%lu, bloco=%lu/mín=%lu) | heap total=%lu KiB | menor pilha=%lu bytes (%s)",
                  static_cast<unsigned long>(saude.heap_interno_livre / 1024u),
+                 static_cast<unsigned long>(saude.menor_heap_interno_livre / 1024u),
                  static_cast<unsigned long>(saude.maior_bloco_heap_interno / 1024u),
+                 static_cast<unsigned long>(saude.menor_maior_bloco_heap_interno / 1024u),
                  static_cast<unsigned long>(saude.psram_livre / 1024u),
+                 static_cast<unsigned long>(saude.menor_psram_livre / 1024u),
                  static_cast<unsigned long>(saude.maior_bloco_psram / 1024u),
-                 static_cast<unsigned long>(saude.menor_heap_livre / 1024u),
+                 static_cast<unsigned long>(saude.menor_maior_bloco_psram / 1024u),
+                 static_cast<unsigned long>(saude.heap_livre / 1024u),
                  static_cast<unsigned long>(saude.bytes_pilha_livres),
                  saude.tarefa_menor_pilha);
         ESP_LOGI(ETIQUETA,
@@ -245,11 +248,11 @@ void exibir_relatorios(const DadosTelemetriaVeiculo& dados) {
                                   static_cast<unsigned long>(
                                       t.pilha_reservada_bytes));
                 }
-                const char* margem = t.pilha_minima_livre_bytes < 512
-                                         ? "FALHA"
-                                     : t.pilha_minima_livre_bytes < 1024
-                                         ? "ATENCAO"
-                                         : "OK";
+                const bool tarefa_propria =
+                    configuracao::politica_tarefa(t.nome) != nullptr;
+                const char* margem = !tarefa_propria ? "SDK"
+                    : t.pilha_minima_livre_bytes < 512 ? "FALHA"
+                    : t.pilha_minima_livre_bytes < 1024 ? "ATENCAO" : "OK";
                 ESP_LOGI(ETIQUETA,
                          "| %-20.20s | %6s | %4d | %3lu | %6s | %6lu | %-6s |",
                          t.nome, cpu, t.nucleo,
