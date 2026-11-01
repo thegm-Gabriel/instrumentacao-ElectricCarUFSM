@@ -16,7 +16,7 @@ multibyte dos quadros compactados usam little-endian, ordem nativa dos ESP32-S3.
 | Família | Sentido usual | Integridade | Uso |
 |---|---|---|---|
 | Telemetria v4 | Mestre → satélites | CRC-16/CCITT-FALSE | Retrato periódico do veículo. |
-| ACK de telemetria | Satélites → mestre | CRC-16/CCITT-FALSE | Sequência, versão e capacidades. |
+| ACK de telemetria | Satélites → mestre | CRC-16/CCITT-FALSE | Sequência, versão e saúde do enlace. |
 | Comandos v1 | Bidirecional | CRC-32 | Consultas, ações e respostas. |
 | OTA de satélite v1 | Bidirecional | CRC-32 e SHA-256 final | Início, blocos, finalização e cancelamento. |
 
@@ -44,7 +44,8 @@ zero não comprova medição física.
 Cada satélite responde a um quadro válido com uma confirmação de 20 bytes. Ela
 repete a sequência e o tempo do mestre para permitir a medição do tempo de ida
 e volta sem sincronização de relógios, usando o mesmo CRC-16. A resposta também
-informa tipo do satélite, versão do firmware e capacidades disponíveis.
+informa tipo do satélite e versão do firmware. Um campo interno permite ao mestre
+selecionar recursos compatíveis para a OTA; ele não é uma informação do painel.
 O receptor classifica sequência contínua, perda, duplicata ou fora de ordem;
 tempo do mestre retrocedendo indica reinício e resincroniza o histórico.
 
@@ -60,8 +61,8 @@ O cabeçalho carrega marcador, versão, tipo solicitação/resposta, origem/dest
 código, identificador, resultado e tamanho. A carga tem no máximo 128 bytes.
 Resultados possíveis incluem OK, não suportado, carga inválida, ocupado,
 negado, erro interno e timeout. O destinatário valida cabeçalho, tamanho e CRC
-antes de interpretar a carga. Códigos existentes não garantem que um alvo
-implemente a operação: consulte os bits de capacidade anunciados.
+antes de interpretar a carga. O destinatário responde quando uma operação não
+é suportada.
 
 A resposta detalhada de estado OTA usa o formato 2 e informa separadamente o
 mestre, o satélite da equipe e o satélite de visitantes. A estrutura antiga foi
@@ -73,6 +74,11 @@ estruturado. O campo `acao` identifica a operação e os campos tipados carregam
 cada botão da interface. Consultas de configuração e de redes salvas permanecem
 separadas por não terem efeito colateral. A repetição de uma solicitação devolve
 a resposta memorizada e não executa a ação novamente.
+
+`COMANDO_OBTER_ESTADO_SIMULADOR` (código 37) consulta o simulador e
+`ACAO_MESTRE_DEFINIR_SIMULADOR` (ação 16, valor 0 ou 1) altera sua fonte.
+A resposta informa estado atual, padrão compilado, dinâmica e total de amostras geradas. A mudança
+é volátil: uma reinicialização restaura `USAR_TELEMETRIA_SIMULADA`.
 
 ## OTA dos satélites
 

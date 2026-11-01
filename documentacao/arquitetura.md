@@ -152,8 +152,9 @@ relatórios sem dependência circular.
 
 `servicos/servico_simulador_telemetria.cpp` é uma fonte substituível de dados de
 teste. Ele simula movimento, bateria, posição e sensores de proximidade, mas não
-conhece UART nem páginas web. O `main.cpp` escolhe essa fonte por configuração e
-entrega o mesmo modelo ao `servico_telemetria` usado pelos sensores reais.
+conhece UART nem páginas web. O `main.cpp` usa a configuração como estado inicial;
+o comando remoto da equipe pode trocar a fonte durante a sessão. Em ambos os
+casos, entrega o mesmo modelo ao `servico_telemetria` usado pelos sensores reais.
 
 A transmissão UART usa uma fila independente por destino. O protocolo compartilhado
 v4 identifica versão, tipo e tamanho da carga, transporta as grandezas processadas
@@ -180,7 +181,7 @@ forma, apenas as estruturas transitórias do analisador JSON permanecem dinâmic
 A apresentação ao vivo usa um retrato a 4 Hz. Em paralelo,
 `servico_registro_telemetria` reduz esse mesmo retrato para 1 Hz e o entrega por
 fila a uma única tarefa proprietária dos CSVs. O arquivo ativo é sincronizado a
-cada dez segundos, fechado a cada hora ou 2 MiB e recuperado após reinicialização.
+cada dez segundos, fechado a cada hora ou 8 MiB e recuperado após reinicialização.
 Se o cartão não estiver disponível na partida, o mestre mantém a telemetria ao
 vivo e tenta habilitar novamente o histórico a cada trinta segundos.
 O upload é iniciado explicitamente, abre uma sessão Wi-Fi temporária, transmite
@@ -271,17 +272,35 @@ resistor, polaridade ou ligação física incorreta.
 
 #### Registro de diagnóstico no cartão
 
-A tarefa de registro existente também mantém `/sdcard/logs/esp_<sessao>_<parte>.log`.
+A tarefa de registro existente também mantém `/sdcard/logs/esp_00000001.log`,
+`esp_00000002.log` e assim por diante, em sequência global no cartão.
 Grava versão do firmware/IDF, chip, flash, motivo numérico do último reset, memória
 interna/PSRAM/DMA, pilhas, CPU, erros dos sensores e comunicação, fases supervisionadas
-e resultado dos uploads. Os tempos são relativos ao boot. Há registro periódico
-a cada 30 s e em mudanças de estado/contadores, agregando rajadas em até um registro
-por segundo; isso não é uma cópia integral do console nem um core dump.
+e resultado dos uploads. Os tempos incluem milissegundos desde o boot e UTC
+quando obtido de um cabeçalho HTTPS `Date` válido. Uma tarefa sem I/O no SD
+guarda a 1 Hz as últimas 120 amostras compactas na PSRAM; se ela faltar,
+guarda 30 amostras na RAM interna. O SD recebe um resumo a cada 30 s em
+operação normal. Quando surge uma falha, recebe o histórico anterior e o
+contexto do incidente, identificado por sequência, e passa temporariamente
+à cadência de 2 s por 2 min ou 1 s por 5 min para falhas graves; novos erros
+podem antecipar um registro, com limite de um por segundo. O lote é
+liberado da RAM após sincronização no SD; se o cartão falhar, o primeiro lote
+aguarda uma nova tentativa e os demais incidentes são contados. Há limite de
+capturas por janela para evitar crescimento excessivo. Isso não é uma cópia
+integral do console nem um core dump.
 
-Os segmentos giram em aproximadamente 1 MiB e a sessão limita o diagnóstico a
-aproximadamente 8 MiB (pode exceder pelo último registro). Ao atingir o limite,
+Os segmentos giram em aproximadamente 8 MiB e a sessão limita o diagnóstico a
+aproximadamente 16 MiB (pode exceder pelo último registro). Ao atingir o limite,
 somente o log para; CSV continua. Arquivos anteriores são preservados e não são
 enviados ao Google. Não há retenção global: é necessário acompanhar o espaço livre
 entre sessões. Cada registro é sincronizado e fechado; falhas de SD têm nova
 tentativa em 30 s. Falha do cartão ou queda brusca de energia ainda pode impedir
 a persistência do último evento. Credenciais não são incluídas.
+
+O retrato `/sdcard/configuracao_atual.txt` usa checksum, sequência e arquivo
+temporário recuperável. O odômetro é restaurado automaticamente desse retrato
+somente se a chave correspondente estiver ausente na NVS. Política Wi-Fi,
+intervalos OTA e de relatórios e parâmetros do CSV ficam documentados para
+recuperação manual; senhas não são copiadas ao SD. O retrato é regravado em
+intervalos de 60 s durante a operação normal, portanto um corte de energia pode deixar uma diferença
+de aproximadamente 1 min em relação ao valor mais recente.

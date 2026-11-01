@@ -10,38 +10,45 @@
   const tone = (id, name) => { const el = $(id); if (el) el.className = 'dot ' + name; };
   const badge = (id, text, name) => { const el = $(id); if (el) { el.textContent = text; el.className = 'badge ' + name; } };
   const message = (text, kind = '') => { const el = $('notice'); el.hidden = false; el.textContent = text; el.className = 'notice ' + kind; };
-  const state = { tab: 'telemetria', range: 30, signal: 'power', telemetry: null, local: null, localAt: 0, master: {}, visitors: {}, browserOnline: false, browserChecked: false, localChecked: false, lastHttp: 0, masterOnline: false, masterChecked: false, visitorsOnline: false, visitorsChecked: false, lastSample: 0, lastSequence: null, samples: [], deviceSamples: {mestre:[],equipe:[],visitantes:[]}, deviceSignal:{mestre:'cpu',equipe:'cpu',visitantes:'rtt'}, events: [], commandEvents: [], commandRuns: [], selected: {mestre:'mestre',equipe:'equipe', visitantes:'visitantes'}, busy: false, energyWh: 0, distanceStart: null, pending: null, polls: {}, commandRefreshMs: 5000 };
+  const state = { tab: 'telemetria', range: 30, signal: 'power', signalSecondary: 'current', telemetry: null, local: null, localAt: 0, master: {}, visitors: {}, browserOnline: false, browserChecked: false, localChecked: false, lastHttp: 0, masterOnline: false, masterChecked: false, visitorsOnline: false, visitorsChecked: false, lastSample: 0, lastSequence: null, samples: [], deviceSamples: {mestre:[],equipe:[],visitantes:[]}, deviceSignal:{mestre:'cpu',equipe:'cpu',visitantes:'rtt'}, deviceSignalSecondary:{mestre:'heap',equipe:'heap',visitantes:'availability'}, events: [], commandEvents: [], commandRuns: [], selected: {mestre:'mestre',equipe:'equipe', visitantes:'visitantes'}, busy: false, energyWh: 0, distanceStart: null, pending: null, polls: {}, telemetryRefreshMs: 250, commandRefreshMs: 2000 };
   const devices = {
     mestre: {group:'mestre', name:'ESP32 mestre', id:'MESTRE', role:'Mestre', function:'Aquisição e telemetria do veículo'},
     equipe: {group:'equipe', name:'ESP32 da equipe', id:'EQUIPE', role:'Satélite / gateway', function:'Recepção UART, Wi-Fi e painel web'},
     visitantes: {group:'visitantes', name:'ESP32 de visitantes', id:'VISITANTES', role:'Satélite', function:'Painel e recepção de telemetria'}
   };
   const deviceChartOptions={
-    mestre:[{key:'cpu',label:'CPU total',unit:'%',color:'#8BC4DF'},{key:'core0',label:'CPU núcleo 0',unit:'%',color:'#8BC4DF'},{key:'core1',label:'CPU núcleo 1',unit:'%',color:'#8BC4DF'},{key:'heap',label:'Memória interna livre',unit:'KiB',color:'#79C9A3'},{key:'temp',label:'Temperatura interna',unit:'°C',color:'#EBC17F'},{key:'rtt',label:'Tempo de resposta',unit:'ms',color:'#A9B7CC'}],
-    equipe:[{key:'cpu',label:'CPU total',unit:'%',color:'#8BC4DF'},{key:'core0',label:'CPU núcleo 0',unit:'%',color:'#8BC4DF'},{key:'core1',label:'CPU núcleo 1',unit:'%',color:'#8BC4DF'},{key:'heap',label:'Memória interna livre',unit:'KiB',color:'#79C9A3'},{key:'temp',label:'Temperatura interna',unit:'°C',color:'#EBC17F'},{key:'rate',label:'Taxa de telemetria',unit:'Hz',color:'#A9B7CC'}],
-    visitantes:[{key:'rtt',label:'Tempo de resposta',unit:'ms',color:'#8BC4DF'},{key:'availability',label:'Disponibilidade',unit:'%',color:'#79C9A3'}]
+    mestre:[{key:'cpu',label:'CPU total',unit:'%',color:'#8BC4DF'},{key:'core0',label:'CPU núcleo 0',unit:'%',color:'#8BC4DF'},{key:'core1',label:'CPU núcleo 1',unit:'%',color:'#8BC4DF'},{key:'heap',label:'Memória interna livre',unit:'KiB',color:'#8BD0AF'},{key:'temp',label:'Temperatura interna',unit:'°C',color:'#EBC17F'},{key:'rtt',label:'Tempo de resposta',unit:'ms',color:'#E69B9B'}],
+    equipe:[{key:'cpu',label:'CPU total',unit:'%',color:'#8BC4DF'},{key:'core0',label:'CPU núcleo 0',unit:'%',color:'#8BC4DF'},{key:'core1',label:'CPU núcleo 1',unit:'%',color:'#8BC4DF'},{key:'heap',label:'Memória interna livre',unit:'KiB',color:'#8BD0AF'},{key:'temp',label:'Temperatura interna',unit:'°C',color:'#EBC17F'},{key:'rate',label:'Taxa de telemetria',unit:'Hz',color:'#EBC17F'}],
+    visitantes:[{key:'rtt',label:'Tempo de resposta',unit:'ms',color:'#8BC4DF'},{key:'availability',label:'Disponibilidade',unit:'%',color:'#79C9A3'},{key:'cpu',label:'CPU total',unit:'%',color:'#EBC17F'},{key:'core0',label:'CPU núcleo 0',unit:'%',color:'#8BC4DF'},{key:'core1',label:'CPU núcleo 1',unit:'%',color:'#8BC4DF'},{key:'heap',label:'Memória interna livre',unit:'KiB',color:'#8BD0AF'},{key:'temp',label:'Temperatura interna',unit:'°C',color:'#EBC17F'}]
   };
+  function selectedDeviceCharts(id){
+    const charts=[state.deviceSignal[id],state.deviceSignalSecondary[id]].map(key=>deviceChartOptions[id].find(option=>option.key===key));
+    if(charts[0].color===charts[1].color)charts[1]={...charts[1],color:'#EBC17F'};
+    return charts;
+  }
   const CAP_SYNC = 1 << 11;
-  const refreshChoices = [3000,5000,10000,20000];
-  try {const saved=Number(localStorage.getItem('nexus-command-refresh-ms'));if(refreshChoices.includes(saved))state.commandRefreshMs=saved;} catch (_) { /* O painel funciona sem armazenamento local. */ }
-  $('command-refresh-rate').value=String(state.commandRefreshMs);
+  const CAP_SIMULATOR = 1 << 12;
+  const refreshChoices = [1000,500,333,250];
+  try {const saved=Number(localStorage.getItem('nexus-telemetry-refresh-ms'));if(refreshChoices.includes(saved))state.telemetryRefreshMs=saved;} catch (_) { /* O painel funciona sem armazenamento local. */ }
+  $('command-refresh-rate').value=String(state.telemetryRefreshMs);
   $('command-refresh-rate').addEventListener('change',event=>{
     const selected=Number(event.target.value);if(!refreshChoices.includes(selected))return;
-    state.commandRefreshMs=selected;state.lastCommandPoll=0;state.lastAuxPoll=0;
-    try {localStorage.setItem('nexus-command-refresh-ms',String(selected));} catch (_) { /* Preferência válida apenas nesta sessão. */ }
-    pollCommandStates();
+    state.telemetryRefreshMs=selected;
+    clearTimeout(state.telemetryTimer);
+    try {localStorage.setItem('nexus-telemetry-refresh-ms',String(selected));} catch (_) { /* Preferência válida apenas nesta sessão. */ }
+    pollTelemetry();
   });
   const marchas = ['Estacionado','Neutro','Frente','Ré'];
 
   function showTab(tab, historyMode = 'replace') {
-    if (!['telemetria','mestre','equipe','visitantes'].includes(tab)) tab = 'telemetria';
+    if (!['telemetria','mestre','equipe','visitantes','comandos'].includes(tab)) tab = 'telemetria';
     state.tab = tab;
     document.querySelectorAll('.page').forEach(el => el.classList.toggle('active', el.id === tab));
     document.querySelectorAll('.tab').forEach(el => { const active = el.dataset.tab === tab; el.classList.toggle('active', active); el.setAttribute('aria-selected', String(active)); el.tabIndex = active ? 0 : -1; });
     if (location.hash !== '#' + tab) history[historyMode+'State'](null, '', '#' + tab);
     if (tab === 'telemetria') requestAnimationFrame(drawCharts);
     else if (tab === 'mestre') renderDevice('mestre','mestre');
-    else renderGroup(tab);
+    else if (tab === 'equipe' || tab === 'visitantes') {renderGroup(tab);pollWifiClients(tab,true);}
   }
   document.querySelectorAll('.tab').forEach(el => el.addEventListener('click', () => showTab(el.dataset.tab, 'push')));
   $('tab-telemetria').closest('.tabs').addEventListener('keydown', event => {
@@ -53,8 +60,22 @@
   addEventListener('hashchange', () => showTab(location.hash.slice(1)));
   addEventListener('popstate', () => showTab(location.hash.slice(1)));
   document.querySelectorAll('.range').forEach(el => el.addEventListener('click', () => { state.range = Number(el.dataset.range); document.querySelectorAll('.range').forEach(b => b.classList.toggle('active', b === el)); drawCharts(); }));
-  $('electric-signal').addEventListener('change', e => { state.signal = e.target.value; drawCharts(); });
-  function updateArc() {const speed=state.telemetry&&state.telemetry.valido?value(state.telemetry,'velocidade_centesimos_kmh',100):0;$('speed-fill').style.strokeDasharray=(Math.max(0,Math.min(1,(speed||0)/30))*260)+' 260';}
+  $('electric-signal').addEventListener('change', e => { const previous=state.signal;state.signal=e.target.value;if(state.signal===state.signalSecondary){state.signalSecondary=previous;$('electric-signal-2').value=previous;}drawCharts(); });
+  $('electric-signal-2').addEventListener('change', e => { const previous=state.signalSecondary;state.signalSecondary=e.target.value;if(state.signalSecondary===state.signal){state.signal=previous;$('electric-signal').value=previous;}drawCharts(); });
+  function updateArc() {
+    const d=state.telemetry&&state.telemetry.valido?state.telemetry:null;
+    const speed=d?value(d,'velocidade_centesimos_kmh',100):null;
+    const scale=Math.max(30,Math.ceil(Math.max(0,speed||0)*1.08/5)*5);
+    $('speed-fill').style.strokeDasharray=(Math.max(0,Math.min(100,(speed||0)/scale*100)))+' 100';
+    set('speed-scale-max',String(scale));
+    const throttle=d?.simulado?value(d,'acelerador_decimos_percentual',10):null;
+    const brake=d?.simulado?value(d,'freio_decimos_percentual',10):null;
+    $('throttle-arc').style.strokeDasharray=(Math.max(0,Math.min(100,throttle||0)))+' 100';
+    $('brake-arc').style.strokeDasharray=(Math.max(0,Math.min(100,brake||0)))+' 100';
+    set('throttle-arc-value',throttle===null?'—':number(throttle,0)+'%');
+    set('brake-arc-value',brake===null?'—':number(brake,0)+'%');
+    $('speed-fill').closest('svg').setAttribute('aria-label','Velocidade em escala de 0 a '+scale+' km/h; acelerador e freio em porcentagem');
+  }
 
   function event(text, kind = 'info', command = false) {
     const item = {time: Date.now(), text, kind};
@@ -125,19 +146,26 @@
     updateArc();
   }
   async function pollTelemetry() {
-    if (state.polls.telemetry) return; state.polls.telemetry = true;
+    if (document.hidden || state.polls.telemetry) return;
+    state.polls.telemetry = true;
+    const started = performance.now();
+    let failed = false;
     try {
       const d = await getJSON('/api/telemetria'); state.browserOnline = true; state.telemetry = d;
       if (d.valido && d.idade_ms < 2000) { const first = state.lastSequence === null; appendSample(d); if (first) event(d.simulado ? 'Telemetria simulada recebida.' : 'Telemetria recebida do mestre.'); renderTelemetry(d); observeOdometerRun(d); }
       else if (state.lastSequence !== null && (!state.samples.length || !state.samples[state.samples.length-1].gap)) { state.samples.push({time:Date.now(),gap:true}); event('Telemetria desatualizada.','warn'); drawCharts(); }
-    } catch (error) { state.browserOnline = Date.now() - state.lastHttp < 5000; if (state.lastSequence !== null && (!state.samples.length || !state.samples[state.samples.length-1].gap)) {state.samples.push({time:Date.now(),gap:true}); event('Conexão com a equipe interrompida.','warn'); drawCharts();} }
-    finally {state.browserChecked=true;state.polls.telemetry = false; updateStatus();}
+    } catch (error) { failed = true; state.browserOnline = Date.now() - state.lastHttp < 5000; if (state.lastSequence !== null && (!state.samples.length || !state.samples[state.samples.length-1].gap)) {state.samples.push({time:Date.now(),gap:true}); event('Conexão com a equipe interrompida.','warn'); drawCharts();} }
+    finally {
+      state.browserChecked=true;state.polls.telemetry = false; updateStatus();
+      clearTimeout(state.telemetryTimer);
+      if(!document.hidden)state.telemetryTimer=setTimeout(pollTelemetry,failed?Math.max(500,state.telemetryRefreshMs):Math.max(0,state.telemetryRefreshMs-(performance.now()-started)));
+    }
   }
   async function pollLocal() {
     if (state.polls.local) return; state.polls.local = true;
     try { state.local = await getJSON('/api/diagnostico'); state.localAt=Date.now(); state.browserOnline = true; deviceSample('equipe',{cpu:state.local.cpu_valida?value(state.local,'cpu_total_decimos_percentual',10):null,core0:state.local.cpu_valida?value(state.local,'cpu_nucleo_0_decimos_percentual',10):null,core1:state.local.cpu_valida?value(state.local,'cpu_nucleo_1_decimos_percentual',10):null,heap:value(state.local,'heap_interno_livre',1024),temp:state.local.temperatura_valida?value(state.local,'temperatura_centesimos_c',100):null,rate:value(state.local,'taxa_pacotes_centesimos_hz',100)}); }
     catch (_) { state.browserOnline = Date.now() - state.lastHttp < 5000; deviceSample('equipe',{cpu:null,core0:null,core1:null,heap:null,temp:null,rate:null}); }
-    finally {state.localChecked=true;state.browserChecked=true;state.polls.local = false; updateStatus(); renderGroup('equipe');}
+    finally {state.localChecked=true;state.browserChecked=true;state.polls.local = false; set('equipe-client-count',state.local&&Number.isFinite(state.local.clientes_wifi)?String(state.local.clientes_wifi):'—');updateStatus(); renderGroup('equipe');}
   }
   async function masterQuery(consult, quiet = true) {
     const key = 'master-' + consult; if (state.polls[key]) return state.polls[key];
@@ -152,9 +180,9 @@
   async function visitorsQuery(consult, quiet = true) {
     const key = 'visitor-' + consult; if (state.polls[key]) return null; state.polls[key] = true;
     const name = 'satelite_visitantes_' + consult;
-    try {const d = await remote(() => getJSON('/api/mestre?consulta=' + name, 18000)); state.visitors[consult] = d; state.visitorsOnline = true; if(consult==='ping')deviceSample('visitantes',{rtt:value(d,'rtt_ms'),availability:100}); if (!quiet) commandEvent('VISITANTES', consult, 'Executado', d); return d;}
-    catch (error) {if (consult === 'ping') {state.visitorsOnline = false; state.visitors.ping = {error:true};deviceSample('visitantes',{rtt:null,availability:0});} if (!quiet) commandEvent('VISITANTES', consult, error.name === 'AbortError' ? 'Tempo esgotado' : 'Falhou', null, error.message); return null;}
-    finally {if(consult==='ping')state.visitorsChecked=true;state.polls[key] = false; updateStatus(); renderGroup('visitantes');}
+    try {const d = await remote(() => getJSON('/api/mestre?consulta=' + name, 18000)); state.visitors[consult] = d; state.visitorsOnline = true; if(consult==='ping')deviceSample('visitantes',{rtt:value(d,'rtt_ms'),availability:100});if(consult==='diagnostico')deviceSample('visitantes',{cpu:d.cpu_valida?value(d,'cpu_total_decimos_percentual',10):null,core0:d.cpu_valida?value(d,'cpu_nucleo_0_decimos_percentual',10):null,core1:d.cpu_valida?value(d,'cpu_nucleo_1_decimos_percentual',10):null,heap:value(d,'heap_interno_livre',1024),temp:d.temperatura_valida?value(d,'temperatura_centesimos_c',100):null}); if (!quiet) commandEvent('VISITANTES', consult, 'Executado', d); return d;}
+    catch (error) {if (consult === 'ping') {state.visitorsOnline = false; state.visitors.ping = {error:true};deviceSample('visitantes',{rtt:null,availability:0});}if(consult==='diagnostico'){state.visitors.diagnostico=null;deviceSample('visitantes',{cpu:null,core0:null,core1:null,heap:null,temp:null});} if (!quiet) commandEvent('VISITANTES', consult, error.name === 'AbortError' ? 'Tempo esgotado' : 'Falhou', null, error.message); return null;}
+    finally {if(consult==='ping')state.visitorsChecked=true;state.polls[key] = false;set('visitantes-client-count',state.visitorsOnline&&Number.isFinite(state.visitors.diagnostico?.clientes_wifi)?String(state.visitors.diagnostico.clientes_wifi):'—');updateStatus(); renderGroup('visitantes');}
   }
   function commandEvent(target, action, status, result, error) {
     const id = result && result.solicitacao ? ' #' + result.solicitacao : '';
@@ -185,7 +213,8 @@
     const d = deviceData(id), no = 'Não disponível';
     if (id === 'equipe') return [['Firmware',d?.versao_firmware || no],['CPU',d?.cpu_valida ? format(value(d,'cpu_total_decimos_percentual',10),'%',1) : no],['Temperatura interna',d?.temperatura_valida ? format(value(d,'temperatura_centesimos_c',100),'°C',1) : no],['Wi-Fi',d ? d.wifi_ssid + ' · ' + d.clientes_wifi + ' cliente(s)' : no],['UART RX',d ? String(d.uart_recepcoes_ok) : no],['Tempo ligado',d ? age(d.tempo_ativo_ms) : no],['Heap interno livre',d ? bytes(d.heap_interno_livre) : no],['PSRAM livre',d?.psram_total ? bytes(d.psram_livre) : no],['Último reinício',d ? 'Código ' + d.motivo_reinicio : no]];
     if (id === 'mestre') {const diag=state.master.diagnostico_mestre,version=state.master.versao,ping=state.master.ping,sync=state.master.sincronizacao;return [['Firmware',version?.firmware || no],['CPU',diag?.cpu_valida ? format(value(diag,'cpu_total_decimos_percentual',10),'%',1) : no],['Temperatura interna',diag?.temperatura_valida ? format(value(diag,'temperatura_centesimos_c',100),'°C',1) : no],['Tempo ligado',ping ? age(ping.tempo_ativo_ms) : no],['Heap livre',diag ? bytes(diag.heap_livre) : no],['PSRAM',diag?.psram_disponivel ? bytes(diag.psram_livre) : no],['Último reinício',diag ? 'Código ' + diag.motivo_ultimo_reset : no],['Sincronização Google',sync ? sync.em_andamento ? 'Em andamento' : sync.sincronizacoes_finalizadas ? sync.ultimo_resultado_sincronizacao===0 ? 'Concluída' : 'Falhou' : 'Pronta' : no],['Arquivos pendentes no SD',sync ? String(sync.arquivos_pendentes) : no]];}
-    const ping=state.visitors.ping,version=state.visitors.versao;return [['Firmware',version?.firmware || no],['Tempo ligado',ping && !ping.error ? age(ping.tempo_ativo_ms) : no],['Capacidades',version?.capacidades !== undefined ? '0x'+version.capacidades.toString(16).toUpperCase() : no]];
+    const ping=state.visitors.ping,version=state.visitors.versao,diag=state.visitors.diagnostico;
+    return [['Firmware',version?.firmware || no],['CPU',diag?.cpu_valida?format(value(diag,'cpu_total_decimos_percentual',10),'%',1):no],['CPU núcleo 0',diag?.cpu_valida?format(value(diag,'cpu_nucleo_0_decimos_percentual',10),'%',1):no],['CPU núcleo 1',diag?.cpu_valida?format(value(diag,'cpu_nucleo_1_decimos_percentual',10),'%',1):no],['Temperatura interna',diag?.temperatura_valida?format(value(diag,'temperatura_centesimos_c',100),'°C',1):no],['Heap interno livre',diag?bytes(diag.heap_interno_livre):no],['Heap mínimo',diag?bytes(diag.heap_interno_minimo):no],['Maior bloco interno',diag?bytes(diag.heap_interno_maior_bloco):no],['PSRAM livre',diag?.psram_total?bytes(diag.psram_livre):no],['Tarefas ativas',diag&&Number.isFinite(diag.tarefas_ativas)?String(diag.tarefas_ativas):no],['Tempo ligado',diag?age(diag.tempo_ativo_ms):ping&&!ping.error?age(ping.tempo_ativo_ms):no],['Último reinício',diag&&Number.isFinite(diag.motivo_reinicio)?'Código '+diag.motivo_reinicio:no],['Dispositivos no Wi-Fi',diag?String(diag.clientes_wifi):no]];
   }
   function renderDevice(group,id) {
     const root=$(group+'-details'),d=devices[id],status=deviceStatus(id),rows=dataRows(id),rtt=id==='mestre'?state.master.ping?.rtt_ms:id==='visitantes'?state.visitors.ping?.rtt_ms:null;
@@ -197,11 +226,12 @@
       const communication=id==='visitantes'
         ? '<div><dt>Ligação</dt><dd>'+link+'</dd></div><div><dt>Tempo da consulta</dt><dd id="device-rtt-'+group+'">Não disponível</dd></div><div><dt>Estado do enlace</dt><dd id="device-link-'+group+'">Aguardando consulta</dd></div>'
         : '<div><dt>Ligação</dt><dd>'+link+'</dd></div><div><dt>Tempo da consulta</dt><dd id="device-rtt-'+group+'">Não disponível</dd></div><div><dt>Taxa de telemetria mestre → equipe</dt><dd id="device-rate-'+group+'">Não disponível</dd></div><div><dt>Perda estimada</dt><dd id="device-loss-'+group+'">Não disponível</dd></div>';
-      root.innerHTML='<div class="device-title"><div><h2>'+d.name+'</h2><p>'+d.id+' · ESP32-S3 · '+d.role+' · '+d.function+'</p></div><span id="device-status-'+group+'" class="badge muted"></span></div><div class="device-section"><h3>Dados e sistema</h3><dl id="device-rows-'+group+'"></dl></div><div class="device-section"><h3>Comunicação</h3><dl>'+communication+'</dl><div class="device-chart-head"><div><h3>Histórico do dispositivo</h3><p id="device-chart-label-'+group+'"></p></div><label>Visualizar<select id="device-chart-select-'+group+'" aria-label="Dados do gráfico de '+d.name+'"></select></label></div><div class="device-chart"><canvas id="device-chart-'+group+'" role="img"></canvas></div></div>';
-      const selector=$('device-chart-select-'+group);
-      deviceChartOptions[id].forEach(option=>{const item=document.createElement('option');item.value=option.key;item.textContent=option.label;selector.append(item);});
-      selector.value=state.deviceSignal[id];
-      selector.addEventListener('change',()=>{state.deviceSignal[id]=selector.value;renderDevice(group,id);});
+      root.innerHTML='<div class="device-title"><div><h2>'+d.name+'</h2><p>'+d.id+' · ESP32-S3 · '+d.role+' · '+d.function+'</p></div><span id="device-status-'+group+'" class="badge muted"></span></div><div class="device-section"><h3>Dados e sistema</h3><dl id="device-rows-'+group+'"></dl></div><div class="device-section"><h3>Comunicação</h3><dl>'+communication+'</dl></div><section class="device-history-section" aria-label="Histórico de '+d.name+'"><div class="device-chart-head"><div><h3>Histórico do dispositivo</h3><p id="device-chart-label-'+group+'"></p></div><div class="device-chart-controls"><label>Esquerda<select id="device-chart-select-'+group+'" aria-label="Sinal do eixo esquerdo de '+d.name+'"></select></label><label>Direita<select id="device-chart-select2-'+group+'" aria-label="Sinal do eixo direito de '+d.name+'"></select></label></div></div><div id="device-chart-legend-'+group+'" class="device-chart-legend"></div><div class="device-chart"><canvas id="device-chart-'+group+'" role="img"></canvas></div></section>';
+      const selector=$('device-chart-select-'+group),selector2=$('device-chart-select2-'+group);
+      deviceChartOptions[id].forEach(option=>{[selector,selector2].forEach(select=>{const item=document.createElement('option');item.value=option.key;item.textContent=option.label;select.append(item);});});
+      selector.value=state.deviceSignal[id];selector2.value=state.deviceSignalSecondary[id];
+      selector.addEventListener('change',()=>{const previous=state.deviceSignal[id];state.deviceSignal[id]=selector.value;if(state.deviceSignal[id]===state.deviceSignalSecondary[id]){state.deviceSignalSecondary[id]=previous;selector2.value=previous;}renderDevice(group,id);});
+      selector2.addEventListener('change',()=>{const previous=state.deviceSignalSecondary[id];state.deviceSignalSecondary[id]=selector2.value;if(state.deviceSignalSecondary[id]===state.deviceSignal[id]){state.deviceSignal[id]=previous;selector.value=previous;}renderDevice(group,id);});
     }
     badge('device-status-'+group,status,status==='Conectado'?'good':status==='Sem resposta'?'bad':'muted');
     const dl=$('device-rows-'+group);
@@ -210,11 +240,14 @@
     set('device-rtt-'+group,Number.isFinite(rtt)?rtt+' ms':'Não disponível');
     if(id==='visitantes')set('device-link-'+group,status==='Conectado'?'Respondendo':status==='Sem resposta'?'Sem resposta':'Aguardando consulta');
     else {set('device-rate-'+group,rate);set('device-loss-'+group,state.local&&state.local.valido?format(value(state.local,'taxa_perda_centesimos_percentual',100),'%',2):'Não disponível');}
-    const chart=deviceChartOptions[id].find(option=>option.key===state.deviceSignal[id]);
-    set('device-chart-label-'+group,chart.label+' · '+chart.unit+' · leituras nesta página');$('device-chart-'+group).setAttribute('aria-label','Histórico de '+chart.label+' de '+d.name);requestAnimationFrame(()=>drawDeviceChart(group,id));
+    const charts=selectedDeviceCharts(id);
+    set('device-chart-label-'+group,'Dois sinais · mesma linha do tempo · leituras nesta página');
+    const legend=$('device-chart-legend-'+group),signalSignature=charts.map(chart=>chart.key).join(':');
+    if(legend.dataset.signals!==signalSignature){legend.dataset.signals=signalSignature;legend.replaceChildren();charts.forEach((chart,index)=>{const item=document.createElement('span'),mark=document.createElement('i');mark.className='device-legend-key';mark.style.setProperty('--series-color',chart.color);item.append(mark,document.createTextNode((index?'Direita':'Esquerda')+' · '+chart.label+' ('+chart.unit+')'));legend.append(item);});}
+    $('device-chart-'+group).setAttribute('aria-label','Histórico de '+charts.map(chart=>chart.label+' em '+chart.unit).join(' e ')+' de '+d.name);requestAnimationFrame(()=>drawDeviceChart(group,id));
     badge(group+'-auto',status+' · atualização automática',status==='Conectado'?'good':status==='Sem resposta'?'bad':'muted');
   }
-  const actionNames={verificar_ota:'Verificar atualizações',autorizar_mestre:'Autorizar OTA do mestre',autorizar_equipe:'Autorizar OTA da Equipe',autorizar_visitantes:'Autorizar OTA de Visitantes',autorizar_todos:'Autorizar OTA de todos',cancelar_ota:'Cancelar OTA',alternar_relatorios:'Pausar ou retomar relatórios',resumo_terminal:'Solicitar resumo no terminal',sincronizar_google:'Solicitar sincronização',zerar_percurso:'Zerar percurso',intervalo_relatorio:'Alterar intervalo do relatório',intervalo_ota:'Alterar intervalo de verificação OTA',intervalo_telemetria_ota:'Alterar telemetria durante OTA',wifi_test:'Testar nova rede Wi-Fi',wifi_conectar_salva:'Conectar rede salva',wifi_excluir_salva:'Excluir rede salva',wifi_primary:'Definir nova rede principal',wifi_restaurar_principal:'Restaurar rede principal',wifi_automatico:'Alterar conexão automática',wifi_politica:'Salvar política Wi-Fi'};
+  const actionNames={verificar_ota:'Verificar atualizações',autorizar_mestre:'Autorizar OTA do mestre',autorizar_equipe:'Autorizar OTA da Equipe',autorizar_visitantes:'Autorizar OTA de Visitantes',autorizar_todos:'Autorizar OTA de todos',cancelar_ota:'Cancelar OTA',alternar_relatorios:'Pausar ou retomar relatórios',resumo_terminal:'Solicitar resumo no terminal',sincronizar_google:'Solicitar sincronização',zerar_percurso:'Zerar percurso',intervalo_relatorio:'Alterar intervalo do relatório',intervalo_ota:'Alterar intervalo de verificação OTA',intervalo_telemetria_ota:'Alterar telemetria durante OTA',simulador_telemetria:'Alterar simulador de telemetria',wifi_test:'Testar nova rede Wi-Fi',wifi_conectar_salva:'Conectar rede salva',wifi_excluir_salva:'Excluir rede salva',wifi_primary:'Definir nova rede principal',wifi_restaurar_principal:'Restaurar rede principal',wifi_automatico:'Alterar conexão automática',wifi_politica:'Salvar política Wi-Fi'};
   const timeOf = time => new Date(time).toLocaleTimeString('pt-BR');
   function runMeta(run) {
     const ids=run.requests.length ? 'Solicitação '+run.requests.map(id=>'#'+id).join(', ') : 'Número da solicitação ainda indisponível';
@@ -242,12 +275,16 @@
     const capabilities=state.master.versao?.capacidades;
     document.querySelectorAll('[data-master-action]').forEach(button=>{const mask=Number(button.dataset.cap);button.disabled=state.busy||!state.masterOnline||!Number.isFinite(capabilities)||(capabilities&mask)!==mask;});
     const sync=state.master.sincronizacao,syncButton=document.querySelector('[data-master-action="sincronizar_google"]');
-    if(syncButton&&sync&&(sync.em_andamento||!sync.iniciado||!sync.cartao_disponivel))syncButton.disabled=true;
+    if(syncButton){
+      if(sync&&(sync.em_andamento||!sync.iniciado||!sync.cartao_disponivel))syncButton.disabled=true;
+      syncButton.title=!state.masterOnline?'Mestre sem resposta':sync?.em_andamento?'Sincronização já em andamento':sync&&(!sync.iniciado||!sync.cartao_disponivel)?'Cartão SD ou registro indisponível no mestre':'Solicitar envio dos arquivos pendentes ao Google';
+    }
     $('run-master-query').disabled=state.busy;
     $('refresh-ota-state').disabled=state.busy;
     $('refresh-sync-state').disabled=state.busy||!state.masterOnline||(Number.isFinite(capabilities)&&(capabilities&CAP_SYNC)===0);
+    $('refresh-simulator-state').disabled=state.busy||!state.masterOnline||(Number.isFinite(capabilities)&&(capabilities&CAP_SIMULATOR)===0);
     const supported=Number.isFinite(capabilities)&&(capabilities&(128|256|512))!==0;
-    badge('master-command-status',state.masterChecked&&!state.masterOnline?'Mestre sem resposta':supported?'Comandos disponíveis':Number.isFinite(capabilities)?'Ações não anunciadas pelo mestre':'Aguardando capacidades do mestre',state.masterChecked&&!state.masterOnline?'bad':supported?'good':'muted');
+    badge('master-command-status',state.masterChecked&&!state.masterOnline?'Mestre sem resposta':supported?'Comandos disponíveis':Number.isFinite(capabilities)?'Ações não anunciadas pelo mestre':'Aguardando resposta do mestre',state.masterChecked&&!state.masterOnline?'bad':supported?'good':'muted');
   }
   function setField(id,newValue){const field=$(id);if(field&&!field.dataset.edited&&document.activeElement!==field)field.value=String(newValue);}
   const otaMasterStates=['Desabilitado','Inicializando','Aguardando rede','Verificando','Atualizado','Aguardando autorização','Baixando','Aplicado','Cancelado','Falha'];
@@ -348,6 +385,13 @@
     }
     if(consult==='ota')renderOtaState(data);
     if(consult==='sincronizacao')renderSyncState(data);
+    if(consult==='simulador'){
+      if(document.activeElement!==$('simulator-toggle'))$('simulator-toggle').value=data.ativo?'1':'0';
+      badge('simulator-badge',data.ativo?'Simulação ativa':'Sensores reais',data.ativo?'warn':'good');
+      set('simulator-state',(data.ativo?'Telemetria simulada ativa':'Telemetria real ativa')+' · padrão do firmware: '+(data.padrao_firmware?'simulação':'sensores reais')+' · '+(Number(data.amostras_geradas)||0)+' amostras simuladas nesta inicialização.');
+      set('simulator-checked','Estado confirmado no mestre às '+new Date().toLocaleTimeString('pt-BR')+'. A alteração via web é temporária e se perde ao reiniciar.');
+      observeOperationalRun(consult,data);
+    }
     if(consult==='wifi')set('wifi-command-state',data.conectado?'Mestre conectado a '+(data.rede||'rede não identificada')+' · RSSI '+data.rssi_dbm+' dBm':data.radio_ativo?'Rádio do mestre ativo; sem conexão informada.':'Rádio do mestre inativo.');
     if(consult==='wifi'||consult==='configuracao')observeOperationalRun(consult,data);
   }
@@ -383,6 +427,7 @@
     if(action==='zerar_percurso')plan.note='O percurso atualizado aparece na página Telemetria; a API não relaciona essa leitura ao comando.';
     if(action==='resumo_terminal')plan.note='O resumo é emitido no terminal físico do mestre; a API não devolve seu conteúdo.';
     if(action==='sincronizar_google')plan.refresh=['sincronizacao'];
+    if(action==='simulador_telemetria'){const enabled=$('simulator-toggle').value==='1';plan.steps[0].body=enabled?'1':'0';plan.refresh=['simulador'];plan.expected={field:'ativo',value:enabled,label:'Simulador de telemetria'};}
     if(action==='intervalo_relatorio'){const group=Number($('report-group').value),interval=Number(numberField('report-interval'));plan.steps[0].body=group+'\n'+interval;plan.refresh=['configuracao'];plan.expected={field:'intervalos_relatorios_ms',index:group,value:interval,label:'Intervalo do relatório'};}
     if(action==='intervalo_ota'){const interval=Number(numberField('ota-interval'));plan.steps[0].body=String(interval);plan.refresh=['configuracao'];plan.expected={field:'intervalo_ota_minutos',value:interval,label:'Verificação OTA'};}
     if(action==='intervalo_telemetria_ota'){const interval=Number(numberField('telemetry-ota-interval'));plan.steps[0].body=String(interval);plan.refresh=['configuracao'];plan.expected={field:'intervalo_telemetria_ota_ms',value:interval,label:'Telemetria durante OTA'};}
@@ -411,6 +456,9 @@
       else if(run.action==='wifi_excluir_salva')updateRun(run,'Redes consultadas','O mestre informa '+data.quantidade_redes_wifi+' rede(s) salva(s). Confira a lista atualizada antes de considerar a exclusão concluída.','warn');
       else if(run.action==='wifi_politica')updateRun(run,'Política consultada','Política atual: '+data.tentativas_wifi+' tentativa(s), '+age(data.tempo_tentativa_wifi_ms)+' por tentativa, intervalo de '+age(data.intervalo_tentativas_wifi_ms)+'.','good');
       else if(!run.refreshQueries.includes('wifi'))updateRun(run,'Estado consultado','Configuração atual do mestre consultada. Os valores do formulário refletem a última leitura.','good');
+    }else if(consult==='simulador'){
+      const enabled=!!data.ativo,matches=enabled===run.expected?.value;
+      updateRun(run,matches?'Estado confirmado':'Aguardando estado','O mestre informa telemetria '+(enabled?'simulada':'real')+'. Padrão após reiniciar: '+(data.padrao_firmware?'simulada':'real')+'.',matches?'good':'warn');
     }else if(consult==='wifi'){
       const connected=!!data.conectado,matched=connected&&run.expectedSsid&&data.rede===run.expectedSsid;
       const status=matched?'Rede observada':connected&&run.expectedSsid?'Aguardando rede':connected?'Wi-Fi consultado':'Aguardando conexão';
@@ -456,6 +504,7 @@
         const otaObserved=run.followOta&&state.master.ota&&checked?' Último estado observado: '+(otaMasterStates[state.master.ota.estado]||'desconhecido')+'.':'';
         const configObserved=observed.configuracao?observedConfiguration(plan,observed.configuracao):null;
         if(configObserved)updateRun(run,configObserved.matches?'Valor observado':'Valor divergente',configObserved.text+' A resposta inicial confirma o aceite; esta leitura mostra a configuração atual.',configObserved.matches?'good':'warn');
+        else if(observed.simulador)updateRun(run,observed.simulador.ativo===plan.expected?.value?'Estado confirmado':'Estado divergente','O mestre informa telemetria '+(observed.simulador.ativo?'simulada':'real')+'. O padrão após reiniciar é '+(observed.simulador.padrao_firmware?'simulado':'real')+'.',observed.simulador.ativo===plan.expected?.value?'good':'warn');
         else if(plan.steps[0].code==='alternar_relatorios'&&observed.configuracao)updateRun(run,'Estado consultado','Relatórios no mestre: '+(observed.configuracao.relatorios_pausados?'pausados':'ativos')+'. A consulta mostra o estado atual após a solicitação.','good');
         else if(observed.wifi)updateRun(run,'Wi-Fi consultado',observed.wifi.conectado?'Mestre conectado a '+(observed.wifi.rede||'uma rede não identificada')+'.':'O mestre ainda não informa conexão Wi-Fi ativa. Consulte novamente após a operação.','warn');
         else updateRun(run,run.followOta?'Acompanhar OTA':'Resposta recebida',run.followOta?'O mestre respondeu ao comando.'+otaObserved+' Confira o estado de cada dispositivo abaixo para acompanhar a conclusão.':plan.note|| (checked?'O mestre respondeu ao comando e o estado foi consultado. Confira os dados atuais antes de considerar a operação concluída.':'O mestre respondeu ao comando. A API não informa a conclusão posterior desta ação.'),run.followOta?'warn':checked?'good':'warn');
@@ -476,7 +525,7 @@
     if(state.busy)return;state.busy=true;availability();
     const query=$('master-query').value;commandEvent('MESTRE',query,'Enviando');
     try{const result=await masterQuery(query,false);if(!result)throw new Error('Sem resposta do mestre');
-      const payload=Object.fromEntries(Object.entries(result).filter(([key])=>!['ok','consulta','comando','solicitacao','resultado','tentativas','duracao_ms'].includes(key)));
+      const payload=Object.fromEntries(Object.entries(result).filter(([key])=>!['ok','consulta','comando','solicitacao','resultado','tentativas','duracao_ms','capacidades'].includes(key)));
       const view=$('master-query-result');view.textContent=query+' · solicitação #'+result.solicitacao+' · '+result.duracao_ms+' ms\n'+JSON.stringify(payload,null,2);view.className='command-result success';
     }catch(error){const view=$('master-query-result');view.textContent=query+' · '+error.message;view.className='command-result error';}
     finally{state.busy=false;availability();}
@@ -491,6 +540,11 @@
     try{if(!await masterQuery('sincronizacao'))set('sync-checked','Não foi possível consultar agora. Os dados acima são os últimos recebidos.');}
     finally{state.busy=false;availability();}
   });
+  $('refresh-simulator-state').addEventListener('click',async()=>{
+    if(state.busy)return;state.busy=true;availability();
+    try{if(!await masterQuery('simulador'))set('simulator-checked','Não foi possível consultar agora. O estado exibido é o último recebido.');}
+    finally{state.busy=false;availability();}
+  });
   $('export-csv').addEventListener('click',()=>{const rows=['horario_local;origem;velocidade_kmh;aceleracao_ms2;potencia_w;corrente_a;tensao_v'];state.samples.filter(s=>!s.gap).forEach(s=>rows.push([new Date(s.time).toISOString(),s.simulated?'simulado':'mestre',s.speed,s.accel,s.power,s.current,s.voltage].map(v=>v===null?'':String(v)).join(';')));const url=URL.createObjectURL(new Blob([rows.join('\n')],{type:'text/csv;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='nexus-telemetria-'+new Date().toISOString().slice(0,19).replace(/:/g,'-')+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});
 
   function setupCanvas(canvas) {
@@ -498,9 +552,9 @@
     if(canvas.width!==width||canvas.height!==height){canvas.width=width;canvas.height=height;}
     const ctx=canvas.getContext('2d');ctx.setTransform(ratio,0,0,ratio,0,0);ctx.clearRect(0,0,rect.width,rect.height);return {ctx,w:rect.width,h:rect.height};
   }
-  const chartInfo={speed:{label:'Velocidade',unit:'km/h',color:'#8BC4DF'},accel:{label:'Aceleração',unit:'m/s²',color:'#EBC17F'},power:{label:'Potência',unit:'W',color:'#8BC4DF'},current:{label:'Corrente',unit:'A',color:'#8BC4DF'},voltage:{label:'Tensão',unit:'V',color:'#8BC4DF'}};
+  const chartInfo={speed:{label:'Velocidade',unit:'km/h',color:'#8BC4DF'},accel:{label:'Aceleração',unit:'m/s²',color:'#EBC17F'},power:{label:'Potência',unit:'W',color:'#8BC4DF'},current:{label:'Corrente',unit:'A',color:'#EBC17F'},voltage:{label:'Tensão',unit:'V',color:'#8BD0AF'}};
   function chartRange(key,values){
-    if(key==='speed')return [0,30];
+    if(key==='speed')return [0,Math.max(30,Math.ceil(Math.max(0,...values)*1.08/5)*5)];
     if(key==='accel'){const limit=Math.max(2,Math.ceil(Math.max(0,...values.map(Math.abs))*1.15*2)/2);return [-limit,limit];}
     if(!values.length)return [0,1];
     let min=Math.min(...values),max=Math.max(...values);
@@ -509,67 +563,87 @@
     const step=Math.pow(10,Math.floor(Math.log10((max-min)/4)));
     return [key==='rtt'?0:Math.floor(min/step)*step,Math.ceil(max/step)*step];
   }
+  const chartFrame=(w,h)=>({left:58,right:Math.max(59,w-58),top:26,bottom:Math.max(27,h-29)});
   function plot(canvasId,keys){
     const canvas=$(canvasId);if(!canvas||!canvas.getBoundingClientRect().width)return;
-    const {ctx,w,h}=setupCanvas(canvas),left=49,right=w-14,bottom=h-26,start=Date.now()-state.range*1000,end=start+state.range*1000;
-    const samples=state.samples.filter(s=>s.time>=start&&s.time<=end);
+    const {ctx,w,h}=setupCanvas(canvas),frame=chartFrame(w,h),{left,right,top,bottom}=frame;
+    const end=Date.now(),start=end-state.range*1000,samples=state.samples.filter(s=>s.time>=start&&s.time<=end);
     const x=time=>left+(time-start)/(end-start)*(right-left);
-    const panels=keys.length===2?[{key:'speed',top:12,bottom:Math.round(h*.55)},{key:'accel',top:Math.round(h*.64),bottom:bottom}]:[{key:keys[0],top:12,bottom}];
-    ctx.font='10px Inter, Segoe UI, sans-serif';ctx.lineWidth=1;
+    const series=keys.map(key=>{const info=chartInfo[key],values=samples.filter(s=>!s.gap&&Number.isFinite(s[key])).map(s=>s[key]);return {...info,key,available:values.length>0,range:chartRange(key,values)};});
+    ctx.font='10px Segoe UI, sans-serif';ctx.lineWidth=1;
+    for(let i=0;i<=3;i++){
+      const gy=top+(bottom-top)*i/3;ctx.strokeStyle=i===3?'#557083':'#344B5C';ctx.beginPath();ctx.moveTo(left,gy);ctx.lineTo(right,gy);ctx.stroke();
+    }
     for(let i=0;i<=2;i++){
-      const gx=left+(right-left)*i/2;
-      ctx.strokeStyle='#344B5C';ctx.beginPath();ctx.moveTo(gx,12);ctx.lineTo(gx,bottom);ctx.stroke();
+      const gx=left+(right-left)*i/2;ctx.strokeStyle='#344B5C';ctx.beginPath();ctx.moveTo(gx,top);ctx.lineTo(gx,bottom);ctx.stroke();
       ctx.fillStyle='#BACBD5';ctx.textAlign=i===0?'left':i===2?'right':'center';
       ctx.fillText(new Date(start+(end-start)*i/2).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit'}),gx,h-7);
     }
-    panels.forEach(panel=>{
-      const info=chartInfo[panel.key],values=samples.filter(s=>!s.gap&&Number.isFinite(s[panel.key])).map(s=>s[panel.key]);
-      const [min,max]=chartRange(panel.key,values),y=v=>Math.max(panel.top,Math.min(panel.bottom,panel.bottom-(v-min)/(max-min)*(panel.bottom-panel.top)));
-      for(let i=0;i<=2;i++){const gy=panel.top+(panel.bottom-panel.top)*i/2;ctx.strokeStyle='#344B5C';ctx.beginPath();ctx.moveTo(left,gy);ctx.lineTo(right,gy);ctx.stroke();ctx.fillStyle='#BACBD5';ctx.textAlign='right';ctx.fillText(number(max-(max-min)*i/2,Math.abs(max-min)<10?1:0),left-7,gy+3);}
-      if(min<0&&max>0){ctx.strokeStyle='#52637A';ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(left,y(0));ctx.lineTo(right,y(0));ctx.stroke();ctx.setLineDash([]);}
-      ctx.fillStyle=info.color;ctx.textAlign='left';ctx.font='600 10px Inter, Segoe UI, sans-serif';ctx.fillText(info.label+' · '+info.unit,left+7,panel.top+12);ctx.font='10px Inter, Segoe UI, sans-serif';
-      ctx.strokeStyle=info.color;ctx.lineWidth=2.2;ctx.lineJoin='round';ctx.beginPath();let open=false,last=null;
-      samples.forEach(s=>{const v=s[panel.key];if(s.gap||!Number.isFinite(v)){open=false;return;}const px=x(s.time),py=y(v);if(open)ctx.lineTo(px,py);else ctx.moveTo(px,py);open=true;last={x:px,y:py};});ctx.stroke();
-      if(last){ctx.fillStyle=info.color;ctx.beginPath();ctx.arc(last.x,last.y,3.5,0,Math.PI*2);ctx.fill();}
+    series.forEach((axis,index)=>{
+      const [min,max]=axis.range;
+      ctx.fillStyle=axis.color;ctx.font='600 10px Segoe UI, sans-serif';ctx.textAlign=index?'right':'left';ctx.fillText(axis.unit,index?right:left,15);
+      ctx.font='10px Segoe UI, sans-serif';ctx.textAlign=index?'left':'right';
+      for(let i=0;i<=3;i++){const gy=top+(bottom-top)*i/3,reading=max-(max-min)*i/3;ctx.fillText(axis.available?number(reading,Math.abs(max-min)<10?1:0):'—',index?right+7:left-7,gy+3);}
     });
-    ctx.setLineDash([3,4]);ctx.strokeStyle='#A98264';ctx.lineWidth=1;state.events.filter(e=>e.time>=start&&e.time<=end).forEach(e=>{const px=x(e.time);ctx.beginPath();ctx.moveTo(px,12);ctx.lineTo(px,bottom);ctx.stroke();});ctx.setLineDash([]);
-    const hover=state.hover?.[canvasId];if(hover&&hover.time>=start){const px=x(hover.time);ctx.strokeStyle='#9BBCE8';ctx.setLineDash([3,3]);ctx.beginPath();ctx.moveTo(px,12);ctx.lineTo(px,bottom);ctx.stroke();ctx.setLineDash([]);}
-    if(!samples.some(s=>keys.some(key=>Number.isFinite(s[key])))){ctx.fillStyle='#BACBD5';ctx.textAlign='center';ctx.font='12px Inter, Segoe UI, sans-serif';ctx.fillText(canvasId==='electric-chart'&&!state.telemetry?.simulado?'Sem leitura elétrica no firmware real':'Aguardando amostras disponíveis',w/2,h/2);}
+    ctx.save();ctx.beginPath();ctx.rect(left,top,right-left,bottom-top);ctx.clip();
+    ctx.setLineDash([3,5]);ctx.strokeStyle='#8F725C';ctx.lineWidth=1;
+    state.events.filter(e=>e.time>=start&&e.time<=end).forEach(e=>{const px=x(e.time);ctx.beginPath();ctx.moveTo(px,top);ctx.lineTo(px,bottom);ctx.stroke();});ctx.setLineDash([]);
+    series.forEach(axis=>{
+      const [min,max]=axis.range,y=v=>bottom-(v-min)/(max-min)*(bottom-top);
+      ctx.strokeStyle=axis.color;ctx.lineWidth=2.2;ctx.lineJoin='round';ctx.lineCap='round';ctx.beginPath();let open=false,last=null;
+      samples.forEach(s=>{const reading=s[axis.key];if(s.gap||!Number.isFinite(reading)){open=false;return;}const px=x(s.time),py=y(reading);if(open)ctx.lineTo(px,py);else ctx.moveTo(px,py);open=true;last={x:px,y:py};});ctx.stroke();
+      if(last){ctx.fillStyle=axis.color;ctx.beginPath();ctx.arc(last.x,last.y,3.3,0,Math.PI*2);ctx.fill();}
+    });
+    const hover=state.hover?.[canvasId];if(hover&&hover.time>=start&&hover.time<=end){
+      const px=x(hover.time);ctx.strokeStyle='#CEDDE6';ctx.lineWidth=1;ctx.setLineDash([3,3]);ctx.beginPath();ctx.moveTo(px,top);ctx.lineTo(px,bottom);ctx.stroke();ctx.setLineDash([]);
+      series.forEach(axis=>{if(!Number.isFinite(hover[axis.key]))return;const [min,max]=axis.range,py=bottom-(hover[axis.key]-min)/(max-min)*(bottom-top);ctx.fillStyle=axis.color;ctx.strokeStyle='#172735';ctx.lineWidth=2;ctx.beginPath();ctx.arc(px,py,5,0,Math.PI*2);ctx.fill();ctx.stroke();});
+    }
+    ctx.restore();
+    if(!samples.some(s=>keys.some(key=>Number.isFinite(s[key])))){ctx.fillStyle='#BACBD5';ctx.textAlign='center';ctx.font='12px Segoe UI, sans-serif';ctx.fillText(canvasId==='electric-chart'&&!state.telemetry?.simulado?'Sem leitura elétrica no firmware real':'Aguardando amostras disponíveis',w/2,h/2);}
   }
-  function drawCharts(){plot('motion-chart',['speed','accel']);plot('electric-chart',[state.signal]);set('electric-caption',chartInfo[state.signal].label+' em '+chartInfo[state.signal].unit);}
+  function drawCharts(){
+    plot('motion-chart',['speed','accel']);plot('electric-chart',[state.signal,state.signalSecondary]);
+    const primary=chartInfo[state.signal],secondary=chartInfo[state.signalSecondary];
+    set('electric-caption','Esquerda: '+primary.unit+' · direita: '+secondary.unit);
+    [["electric-legend-primary",primary],["electric-legend-secondary",secondary]].forEach(([id,info])=>{
+      const legend=$(id),mark=legend.querySelector('.legend-key');mark.style.backgroundColor=info.color;
+      if(legend.lastChild?.textContent!==info.label)legend.replaceChildren(mark,document.createTextNode(info.label));
+    });
+  }
   function drawDeviceChart(group,id){
     const canvas=$('device-chart-'+group);if(!canvas||state.tab!==group||state.selected[group]!==id||!canvas.getBoundingClientRect().width)return;
-    const option=deviceChartOptions[id].find(item=>item.key===state.deviceSignal[id]);
-    const key=option.key,history=state.deviceSamples[id].filter(sample=>Object.prototype.hasOwnProperty.call(sample,key));
-    const values=history.map(sample=>sample[key]).filter(Number.isFinite);
-    const {ctx,w,h}=setupCanvas(canvas),left=44,right=w-12,top=12,bottom=h-24;
-    const [min,max]=['cpu','core0','core1','availability'].includes(key)?[0,100]:chartRange(key,values);
-    ctx.font='10px Inter, Segoe UI, sans-serif';ctx.textAlign='right';
-    for(let i=0;i<=2;i++){const y=top+(bottom-top)*i/2;ctx.strokeStyle='#344B5C';ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(right,y);ctx.stroke();ctx.fillStyle='#BACBD5';ctx.fillText(number(max-(max-min)*i/2,0),left-7,y+3);}
-    if(!values.length){ctx.fillStyle='#BACBD5';ctx.textAlign='center';ctx.fillText('Aguardando '+option.label.toLowerCase(),w/2,h/2);return;}
-    const start=history[0].time,end=Math.max(start+1,history[history.length-1].time),x=t=>left+(t-start)/(end-start)*(right-left),y=v=>bottom-(v-min)/(max-min)*(bottom-top);
+    const keys=[state.deviceSignal[id],state.deviceSignalSecondary[id]],history=state.deviceSamples[id].filter(sample=>keys.some(key=>Object.prototype.hasOwnProperty.call(sample,key)));
+    const {ctx,w,h}=setupCanvas(canvas),{left,right,top,bottom}=chartFrame(w,h),end=Date.now(),start=history.length>1?Math.min(history[0].time,end-1000):end-60000;
+    const x=t=>left+(t-start)/(end-start)*(right-left);
+    const series=selectedDeviceCharts(id).map(option=>{const key=option.key,values=history.filter(sample=>Object.prototype.hasOwnProperty.call(sample,key)).map(sample=>sample[key]).filter(Number.isFinite);return {...option,values,range:['cpu','core0','core1','availability'].includes(key)?[0,100]:chartRange(key,values)};});
+    ctx.font='10px Segoe UI, sans-serif';ctx.lineWidth=1;
+    for(let i=0;i<=3;i++){const gy=top+(bottom-top)*i/3;ctx.strokeStyle=i===3?'#557083':'#344B5C';ctx.beginPath();ctx.moveTo(left,gy);ctx.lineTo(right,gy);ctx.stroke();}
+    for(let i=0;i<=2;i++){const gx=left+(right-left)*i/2;ctx.strokeStyle='#344B5C';ctx.beginPath();ctx.moveTo(gx,top);ctx.lineTo(gx,bottom);ctx.stroke();ctx.fillStyle='#BACBD5';ctx.textAlign=i===0?'left':i===2?'right':'center';ctx.fillText(new Date(start+(end-start)*i/2).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit'}),gx,h-7);}
+    series.forEach((axis,index)=>{const [min,max]=axis.range;ctx.fillStyle=axis.color;ctx.font='600 10px Segoe UI, sans-serif';ctx.textAlign=index?'right':'left';ctx.fillText(axis.unit,index?right:left,15);ctx.font='10px Segoe UI, sans-serif';ctx.textAlign=index?'left':'right';for(let i=0;i<=3;i++){const gy=top+(bottom-top)*i/3;ctx.fillText(axis.values.length?number(max-(max-min)*i/3,Math.abs(max-min)<10?1:0):'—',index?right+7:left-7,gy+3);}});
     ctx.save();ctx.beginPath();ctx.rect(left,top,right-left,bottom-top);ctx.clip();
-    ctx.strokeStyle=option.color;ctx.lineWidth=2.2;ctx.lineJoin='round';ctx.beginPath();let open=false,last=null;
-    history.forEach(s=>{const reading=s[key];if(!Number.isFinite(reading)){open=false;return;}const px=x(s.time),py=y(reading);if(open)ctx.lineTo(px,py);else ctx.moveTo(px,py);open=true;last={x:px,y:py};});ctx.stroke();
-    if(last){ctx.fillStyle=option.color;ctx.beginPath();ctx.arc(last.x,last.y,3.5,0,Math.PI*2);ctx.fill();}
+    series.forEach(axis=>{const [min,max]=axis.range,y=v=>bottom-(v-min)/(max-min)*(bottom-top);ctx.strokeStyle=axis.color;ctx.lineWidth=2.2;ctx.lineJoin='round';ctx.lineCap='round';ctx.beginPath();let open=false,last=null;history.filter(sample=>Object.prototype.hasOwnProperty.call(sample,axis.key)).forEach(sample=>{const reading=sample[axis.key];if(!Number.isFinite(reading)){open=false;return;}const px=x(sample.time),py=y(reading);if(open)ctx.lineTo(px,py);else ctx.moveTo(px,py);open=true;last={x:px,y:py};});ctx.stroke();if(last){ctx.fillStyle=axis.color;ctx.beginPath();ctx.arc(last.x,last.y,3.3,0,Math.PI*2);ctx.fill();}});
     ctx.restore();
-    ctx.fillStyle='#BACBD5';ctx.textAlign='left';ctx.fillText(new Date(start).toLocaleTimeString('pt-BR'),left,h-6);ctx.textAlign='right';ctx.fillText('agora',right,h-6);
+    if(!series.some(axis=>axis.values.length)){ctx.fillStyle='#BACBD5';ctx.textAlign='center';ctx.font='12px Segoe UI, sans-serif';ctx.fillText('Aguardando leituras do dispositivo',w/2,h/2);}
   }
   function chartTooltip(canvasId,tipId,keys){
     const canvas=$(canvasId),tip=$(tipId);
-    canvas.addEventListener('mousemove',e=>{
-      const rect=canvas.getBoundingClientRect(),px=e.clientX-rect.left,start=Date.now()-state.range*1000,ts=start+(px-49)/Math.max(1,rect.width-63)*state.range*1000;
+    const move=e=>{
+      const rect=canvas.getBoundingClientRect(),px=e.clientX-rect.left,start=Date.now()-state.range*1000,frame=chartFrame(rect.width,rect.height),ts=start+(px-frame.left)/Math.max(1,frame.right-frame.left)*state.range*1000;
       const list=state.samples.filter(s=>!s.gap&&Math.abs(s.time-ts)<state.range*1000/12);
       if(!list.length){tip.hidden=true;state.hover={};drawCharts();return;}
-      const sample=list.reduce((a,b)=>Math.abs(a.time-ts)<Math.abs(b.time-ts)?a:b),chosen=canvasId==='electric-chart'?[state.signal]:keys;
+      const sample=list.reduce((a,b)=>Math.abs(a.time-ts)<Math.abs(b.time-ts)?a:b),chosen=canvasId==='electric-chart'?[state.signal,state.signalSecondary]:keys;
       tip.textContent=new Date(sample.time).toLocaleTimeString('pt-BR')+' · '+chosen.map(k=>chartInfo[k].label+': '+(Number.isFinite(sample[k])?number(sample[k],k==='speed'?1:2)+' '+chartInfo[k].unit:'Não disponível')).join(' · ');
       tip.hidden=false;tip.style.left=Math.min(Math.max(8,px+12),Math.max(8,rect.width-tip.offsetWidth-8))+'px';tip.style.top='18px';
       state.hover={[canvasId]:sample};drawCharts();
-    });
-    canvas.addEventListener('mouseleave',()=>{tip.hidden=true;state.hover={};drawCharts();});
+    };
+    canvas.addEventListener('pointermove',move);
+    canvas.addEventListener('pointerdown',move);
+    const leave=()=>{tip.hidden=true;state.hover={};drawCharts();};
+    canvas.addEventListener('pointerleave',leave);
+    canvas.addEventListener('pointercancel',leave);
   }
   chartTooltip('motion-chart','motion-tip',['speed','accel']);chartTooltip('electric-chart','electric-tip',['power','current','voltage']);
-  addEventListener('resize',()=>{drawCharts();if(state.tab!=='telemetria')drawDeviceChart(state.tab,state.selected[state.tab]);});
+  addEventListener('resize',()=>{drawCharts();if(state.tab==='mestre'||state.tab==='equipe'||state.tab==='visitantes')drawDeviceChart(state.tab,state.selected[state.tab]);});
   async function pollCommandStates(force=false){
     if(document.hidden||state.busy||state.polls.commandCycle||state.masterChecked&&!state.masterOnline)return;
     state.polls.commandCycle=true;
@@ -584,6 +658,12 @@
         }else if(Number.isFinite(capabilities)){
           badge('sync-badge','Não suportado','muted');
           set('sync-summary','O firmware atual do mestre não informa o andamento da sincronização. Atualize o mestre para habilitar esse acompanhamento.');
+        }
+        if(Number.isFinite(capabilities)&&(capabilities&CAP_SIMULATOR)!==0){
+          if(!await masterQuery('simulador'))set('simulator-checked','Consulta automática sem resposta. O estado acima pode estar desatualizado.');
+        }else if(Number.isFinite(capabilities)){
+          badge('simulator-badge','Não suportado','muted');
+          set('simulator-state','O firmware atual do mestre não informa o estado do simulador.');
         }
         state.lastCommandPoll=Date.now();
       }
@@ -615,6 +695,7 @@
       await masterQuery('diagnostico_mestre');
       if(state.busy)return;
       await visitorsQuery('ping');
+      if(state.visitorsOnline)await visitorsQuery('diagnostico');
       const now=Date.now();
       if(!state.lastVersionPoll || now-state.lastVersionPoll>(state.master.versao?60000:15000)){
         await masterQuery('versao');
@@ -623,9 +704,58 @@
       }
     }finally{state.polls.remoteCycle=false;}
   }
+  const wifiPanels={equipe:{},visitantes:{}};
+  function setupWifiPanel(group){
+    const panel=$('wifi-clients-'+group),label=group==='equipe'?'Equipe':'Visitantes';
+    panel.innerHTML='<div class="wifi-clients-head"><div><h2>Conexões Wi-Fi · '+label+'</h2><p>Dispositivos conectados ao ponto de acesso deste ESP.</p></div><span class="wifi-clients-summary">Aguardando consulta</span></div><form class="wifi-client-settings"><label>Limite por conexão (min)<input type="number" min="0" max="1440" step="1" value="15" aria-label="Limite de tempo por conexão na rede '+label+'"></label><button type="submit" class="button">Salvar limite</button><p>0 desativa o limite. Um dispositivo desconectado pode se conectar novamente.</p></form><div class="wifi-client-list"><p class="wifi-client-empty">Aguardando lista de clientes.</p></div><p class="command-live-meta wifi-client-checked">Nenhuma consulta concluída.</p>';
+    const form=panel.querySelector('form');
+    form.addEventListener('submit',async event=>{
+      event.preventDefault();const minutes=Number(form.querySelector('input').value);
+      if(!Number.isInteger(minutes)||minutes<0||minutes>1440)return;
+      const button=form.querySelector('button');button.disabled=true;
+      try{await wifiCommand(group,'limite',minutes);panel.querySelector('.wifi-client-checked').textContent='Limite salvo. Consultando estado atualizado...';await pollWifiClients(group,true);}
+      catch(error){panel.querySelector('.wifi-client-checked').textContent='Não foi possível salvar o limite: '+error.message;}
+      finally{button.disabled=false;}
+    });
+  }
+  async function wifiCommand(group,action,value){
+    const local=group==='equipe',url=local?'/api/wifi/'+(action==='limite'?'limite':'desconectar'):'/api/mestre?consulta=satelite_visitantes_'+(action==='limite'?'limite':'kick');
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),18000);
+    const body=local?JSON.stringify(action==='limite'?{minutos:value}:{mac:value}):String(value);
+    const run=async()=>{const response=await fetch(url,{method:'POST',headers:{'Content-Type':local?'application/json':'text/plain; charset=utf-8'},body,cache:'no-store',signal:controller.signal});const data=await response.json();if(!response.ok||data.ok===false)throw new Error(data.erro||'Solicitação recusada');return data;};
+    try{return await (local?run():remote(run));}finally{clearTimeout(timer);}
+  }
+  async function pollWifiClients(group,force=false){
+    const view=wifiPanels[group];if(view.busy||document.hidden&&!force)return;view.busy=true;
+    const panel=$('wifi-clients-'+group),list=panel.querySelector('.wifi-client-list');
+    try{
+      let data;
+      if(group==='equipe')data=await getJSON('/api/wifi/clientes',7000);
+      else {data=await remote(()=>getJSON('/api/mestre?consulta=satelite_visitantes_clientes&inicio=0',18000));if(Number(data.quantidade_total)>data.clientes.length){const rest=await remote(()=>getJSON('/api/mestre?consulta=satelite_visitantes_clientes&inicio=5',18000));data.clientes.push(...rest.clientes);}}
+      view.data=data;view.checked=Date.now();
+      const count=Number(data.quantidade_total??data.quantidade??data.clientes.length);
+      set(group+'-client-count',String(count));
+      panel.querySelector('.wifi-clients-summary').textContent=count+' conectado(s)';
+      const field=panel.querySelector('.wifi-client-settings input');if(document.activeElement!==field)field.value=String(data.limite_sessao_minutos??15);
+      list.replaceChildren();
+      if(!data.clientes.length){const empty=document.createElement('p');empty.className='wifi-client-empty';empty.textContent='Nenhum dispositivo conectado agora.';list.append(empty);}
+      data.clientes.forEach(client=>{
+        const row=document.createElement('div'),mac=document.createElement('strong'),duration=document.createElement('span'),button=document.createElement('button');
+        row.className='wifi-client-row';mac.textContent=client.mac;duration.dataset.connectedMs=String(Number(client.conectado_ms)||0);duration.dataset.checkedAt=String(view.checked);duration.textContent='Conectado há '+age(Number(client.conectado_ms)||0);
+        button.type='button';button.className='button danger';button.textContent='Desconectar';button.setAttribute('aria-label','Desconectar '+client.mac);
+        button.addEventListener('click',async()=>{if(!confirm('Desconectar '+client.mac+' da rede '+(group==='equipe'?'Equipe':'Visitantes')+'?'))return;button.disabled=true;try{await wifiCommand(group,'kick',client.mac);await pollWifiClients(group,true);}catch(error){panel.querySelector('.wifi-client-checked').textContent='Resposta não confirmada ('+error.message+'). A conexão pode ter caído; consulte a lista novamente.';}finally{button.disabled=false;}});
+        row.append(mac,duration,button);list.append(row);
+      });
+      panel.querySelector('.wifi-client-checked').textContent='Consultado às '+new Date(view.checked).toLocaleTimeString('pt-BR')+'. O limite é por conexão, não é o prazo do endereço IP.';
+    }catch(error){panel.querySelector('.wifi-client-checked').textContent='Não foi possível consultar a rede: '+error.message+'. Os dados anteriores podem estar desatualizados.';}
+    finally{view.busy=false;}
+  }
+  setupWifiPanel('equipe');setupWifiPanel('visitantes');
+  setInterval(()=>{pollWifiClients('equipe');if(state.tab==='visitantes')pollWifiClients('visitantes');},10000);
+  setInterval(()=>{document.querySelectorAll('.wifi-client-row span[data-connected-ms]').forEach(el=>{el.textContent='Conectado há '+age(Number(el.dataset.connectedMs)+Date.now()-Number(el.dataset.checkedAt));});},1000);
   makeGroup('equipe');makeGroup('visitantes');showTab(location.hash.slice(1));renderEvents();renderMasterCommandHistory();availability();updateStatus();
-  pollTelemetry();pollLocal();pollRemote();pollCommandStates();
-  setInterval(pollTelemetry,1000);setInterval(pollLocal,3000);setInterval(pollRemote,10000);
+  pollTelemetry();pollLocal();pollRemote();pollCommandStates();pollWifiClients('equipe');
+  setInterval(pollLocal,3000);setInterval(pollRemote,10000);
   setInterval(pollCommandStates,1000);
   setInterval(()=>{updateStatus();if(state.tab==='telemetria')drawCharts();},1000);
   document.addEventListener('visibilitychange',()=>{if(!document.hidden){state.lastCommandPoll=0;state.lastAuxPoll=0;pollTelemetry();pollLocal();pollRemote();pollCommandStates();}});

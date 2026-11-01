@@ -67,6 +67,24 @@ mestre fecha o lote atual, abre uma sessão Wi-Fi temporária e processa os arqu
 pendentes. Se a rede ou o Google falhar, o CSV permanece no cartão para uma nova
 tentativa.
 
+O painel da equipe consulta automaticamente o estado da sincronização a cada
+2 s e mostra arquivo atual, bytes, porcentagem, velocidade, tempo restante,
+quantidade concluída e resultado final. O envio HTTPS aceita escritas parciais:
+um retorno que transmitiu apenas parte do bloco continua do ponto correto.
+O firmware registra no console falhas de conexão Wi-Fi, transporte, código HTTP,
+resposta do Web App e movimentação do CSV; o diagnóstico do SD guarda o estado
+agregado e o último erro. Esses dados
+ajudam a localizar a etapa que falhou, mas a causa de uma falha observada no
+veículo só pode ser confirmada com os logs correspondentes.
+
+Se a página não mostrar progresso, consulte o estado do mestre e confira se o
+cartão está montado, se há arquivos pendentes e se o mestre conseguiu conectar
+à rede principal ou secundária permitida. Para falhas HTTP, confira a URL
+`/exec`, o token nas propriedades do Apps Script e no firmware, o acesso
+**Qualquer pessoa** e a publicação de uma nova versão do script. Respostas
+`ERRO:*` do Web App aparecem no log serial junto ao código HTTP; arquivos sem
+confirmação nominal permanecem pendentes para nova tentativa.
+
 ## Cartão SD
 
 O leitor usa SPI2 e deve trabalhar em 3,3 V:

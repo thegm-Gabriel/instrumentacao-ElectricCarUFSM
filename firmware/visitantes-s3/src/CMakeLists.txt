@@ -20,4 +20,5 @@ idf_component_register(
         "../../compartilhado/comandos"
     PRIV_REQUIRES
         app_update
+        esp_driver_tsens
         spi_flash)

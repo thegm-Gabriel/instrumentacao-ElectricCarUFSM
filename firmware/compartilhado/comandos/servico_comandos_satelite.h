@@ -20,6 +20,10 @@ typedef struct {
     no_protocolo_comando_t no_satelite;
     uint32_t capacidades_adicionais;
     funcao_envio_comando_satelite_t enviar;
+    esp_err_t (*obter_diagnostico)(resposta_diagnostico_satelite_t *saida);
+    esp_err_t (*obter_clientes_wifi)(uint8_t inicio, resposta_clientes_wifi_satelite_t *saida);
+    esp_err_t (*gerir_wifi)(const solicitacao_gestao_wifi_satelite_t *solicitacao,
+                           resposta_gestao_wifi_satelite_t *resposta);
 } configuracao_servico_comandos_satelite_t;
 
 typedef struct {

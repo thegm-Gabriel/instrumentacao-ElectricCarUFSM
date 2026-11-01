@@ -305,6 +305,34 @@ EstadoOdometro servico_odometro_obter_estado() {
     return copia;
 }
 
+esp_err_t servico_odometro_restaurar_se_ausente(uint64_t total_mm) {
+    if (mutex_atualizacao == nullptr ||
+        xSemaphoreTake(mutex_atualizacao, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    esp_err_t resultado = ESP_ERR_INVALID_STATE;
+    if (estado.iniciado && armazenamento != 0) {
+        uint64_t atual_mm = 0;
+        resultado = nvs_get_u64(armazenamento, CHAVE_ODOMETRO_MM, &atual_mm);
+        if (resultado == ESP_ERR_NVS_NOT_FOUND) {
+            const double metros = static_cast<double>(total_mm) / 1000.0;
+            resultado = persistir_odometro(metros);
+            if (resultado == ESP_OK) {
+                portENTER_CRITICAL(&trava_estado);
+                estado.odometro_m = metros;
+                estado.persistencia_pendente = false;
+                estado.ultimo_erro_persistencia = ESP_OK;
+                odometro_persistido_m = metros;
+                portEXIT_CRITICAL(&trava_estado);
+                ESP_LOGW(ETIQUETA, "Odômetro restaurado do backup SD: %.3f km",
+                         metros / 1000.0);
+            }
+        }
+    }
+    xSemaphoreGive(mutex_atualizacao);
+    return resultado;
+}
+
 esp_err_t servico_odometro_zerar_percurso() {
     if (mutex_atualizacao == nullptr ||
         xSemaphoreTake(mutex_atualizacao, portMAX_DELAY) != pdTRUE) {

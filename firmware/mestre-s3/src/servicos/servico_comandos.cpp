@@ -21,6 +21,7 @@
 #include "servicos/servico_ota.h"
 #include "servicos/servico_registro_telemetria.h"
 #include "servicos/servico_relatorios.h"
+#include "servicos/servico_simulador_telemetria.h"
 #include "servicos/servico_telemetria.h"
 #include "servicos/servico_wifi.h"
 
@@ -39,7 +40,8 @@ constexpr uint32_t CAPACIDADES_MESTRE =
     CAPACIDADE_COMANDO_TERMINAL |
     CAPACIDADE_COMANDO_CONTROLE_OPERACIONAL |
     CAPACIDADE_COMANDO_DIAGNOSTICO |
-    CAPACIDADE_COMANDO_SINCRONIZACAO;
+    CAPACIDADE_COMANDO_SINCRONIZACAO |
+    CAPACIDADE_COMANDO_SIMULADOR;
 
 struct RespostaPendente {
     DestinoUart origem;
@@ -339,7 +341,7 @@ codigo_resposta_comando_t executar_acao_mestre(
     solicitacao_acao_mestre_t solicitacao{};
     std::memcpy(&solicitacao, carga, sizeof(solicitacao));
     if (solicitacao.acao < ACAO_MESTRE_ALTERNAR_RELATORIOS ||
-        solicitacao.acao > ACAO_MESTRE_DEFINIR_POLITICA_WIFI) {
+        solicitacao.acao > ACAO_MESTRE_DEFINIR_SIMULADOR) {
         return RESPOSTA_COMANDO_CARGA_INVALIDA;
     }
     if (solicitacao.reservado != 0 &&
@@ -442,6 +444,14 @@ codigo_resposta_comando_t executar_acao_mestre(
                                                   solicitacao.texto);
             break;
         }
+        case ACAO_MESTRE_DEFINIR_SIMULADOR:
+            erro = solicitacao.valor <= 1 && solicitacao.valor_2 == 0 &&
+                           solicitacao.valor_3 == 0 && solicitacao.valor_4 == 0 &&
+                           solicitacao.texto[0] == '\0'
+                       ? servico_simulador_telemetria_definir_ativo(
+                             solicitacao.valor == 1)
+                       : ESP_ERR_INVALID_ARG;
+            break;
     }
     const codigo_resposta_comando_t resultado =
         confirmar_acao_mestre(acao, erro, resposta, tamanho_resposta);
@@ -492,6 +502,23 @@ codigo_resposta_comando_t responder_configuracao_mestre(
     dados.intervalo_tentativas_wifi_ms =
         wifi.politica.intervalo_entre_tentativas_ms;
     dados.tempo_limite_wifi_ms = wifi.politica.tempo_limite_sessao_ms;
+    std::memcpy(resposta, &dados, sizeof(dados));
+    *tamanho_resposta = sizeof(dados);
+    return RESPOSTA_COMANDO_OK;
+}
+
+codigo_resposta_comando_t responder_simulador_mestre(
+    DestinoUart, const uint8_t*, uint16_t tamanho_carga, uint8_t* resposta,
+    uint16_t* tamanho_resposta) {
+    const codigo_resposta_comando_t valido = validar_sem_carga(tamanho_carga);
+    if (valido != RESPOSTA_COMANDO_OK) return valido;
+    resposta_simulador_mestre_t dados{};
+    dados.ativo = servico_simulador_telemetria_esta_ativo();
+    dados.padrao_firmware = configuracao::USAR_TELEMETRIA_SIMULADA;
+    dados.dinamica_percentual =
+        servico_simulador_telemetria_dinamica_percentual();
+    dados.amostras_geradas =
+        servico_simulador_telemetria_amostras_geradas();
     std::memcpy(resposta, &dados, sizeof(dados));
     *tamanho_resposta = sizeof(dados);
     return RESPOSTA_COMANDO_OK;
@@ -651,26 +678,36 @@ codigo_resposta_comando_t consultar_satelite_remoto(
         return RESPOSTA_COMANDO_CARGA_INVALIDA;
     solicitacao_consulta_satelite_t solicitacao{};
     std::memcpy(&solicitacao, carga, sizeof(solicitacao));
-    if (solicitacao.reservado != 0 ||
+    if (((solicitacao.tipo != CONSULTA_SATELITE_CLIENTES_WIFI &&
+          solicitacao.reservado != 0) ||
+         (solicitacao.tipo == CONSULTA_SATELITE_CLIENTES_WIFI &&
+          solicitacao.reservado > 5)) ||
         (solicitacao.alvo != NO_COMANDO_EQUIPE &&
          solicitacao.alvo != NO_COMANDO_VISITANTES) ||
         (solicitacao.tipo != CONSULTA_SATELITE_PING &&
-         solicitacao.tipo != CONSULTA_SATELITE_VERSAO)) {
+         solicitacao.tipo != CONSULTA_SATELITE_VERSAO &&
+         solicitacao.tipo != CONSULTA_SATELITE_DIAGNOSTICO &&
+         solicitacao.tipo != CONSULTA_SATELITE_CLIENTES_WIFI)) {
         return RESPOSTA_COMANDO_CARGA_INVALIDA;
     }
     const DestinoUart destino = solicitacao.alvo == NO_COMANDO_EQUIPE
                                     ? DestinoUart::Equipe
                                     : DestinoUart::Visitantes;
     const codigo_comando_t comando =
-        solicitacao.tipo == CONSULTA_SATELITE_PING
-            ? COMANDO_PING
-            : COMANDO_OBTER_VERSAO;
+        solicitacao.tipo == CONSULTA_SATELITE_PING ? COMANDO_PING :
+        solicitacao.tipo == CONSULTA_SATELITE_VERSAO ? COMANDO_OBTER_VERSAO :
+        solicitacao.tipo == CONSULTA_SATELITE_DIAGNOSTICO ?
+            COMANDO_OBTER_DIAGNOSTICO_SATELITE : COMANDO_OBTER_CLIENTES_WIFI_SATELITE;
     uint8_t carga_satelite[COMANDO_TAMANHO_MAXIMO_CARGA]{};
     uint16_t tamanho_satelite = 0;
     codigo_resposta_comando_t resultado_satelite = RESPOSTA_COMANDO_TIMEOUT;
     const int64_t inicio_us = esp_timer_get_time();
+    const uint8_t inicio = (uint8_t)solicitacao.reservado;
     const esp_err_t erro = servico_comandos_solicitar(
-        destino, comando, nullptr, 0, carga_satelite,
+        destino, comando,
+        comando == COMANDO_OBTER_CLIENTES_WIFI_SATELITE ? &inicio : nullptr,
+        comando == COMANDO_OBTER_CLIENTES_WIFI_SATELITE ? 1 : 0,
+        carga_satelite,
         sizeof(carga_satelite), &tamanho_satelite, &resultado_satelite,
         pdMS_TO_TICKS(700));
     if (erro != ESP_OK) {
@@ -679,6 +716,28 @@ codigo_resposta_comando_t consultar_satelite_remoto(
     }
     if (resultado_satelite != RESPOSTA_COMANDO_OK)
         return resultado_satelite;
+    if (comando == COMANDO_OBTER_DIAGNOSTICO_SATELITE &&
+        tamanho_satelite == sizeof(resposta_diagnostico_satelite_t)) {
+        resposta_consulta_diagnostico_satelite_t dados{};
+        dados.alvo = solicitacao.alvo;
+        dados.tipo = solicitacao.tipo;
+        dados.rtt_ms = static_cast<uint32_t>((esp_timer_get_time() - inicio_us) / 1000);
+        std::memcpy(&dados.diagnostico, carga_satelite, sizeof(dados.diagnostico));
+        std::memcpy(resposta, &dados, sizeof(dados));
+        *tamanho_resposta = sizeof(dados);
+        return RESPOSTA_COMANDO_OK;
+    }
+    if (comando == COMANDO_OBTER_CLIENTES_WIFI_SATELITE &&
+        tamanho_satelite == sizeof(resposta_clientes_wifi_satelite_t)) {
+        resposta_consulta_clientes_wifi_satelite_t dados{};
+        dados.alvo = solicitacao.alvo;
+        dados.tipo = solicitacao.tipo;
+        dados.rtt_ms = static_cast<uint32_t>((esp_timer_get_time() - inicio_us) / 1000);
+        std::memcpy(&dados.situacao, carga_satelite, sizeof(dados.situacao));
+        std::memcpy(resposta, &dados, sizeof(dados));
+        *tamanho_resposta = sizeof(dados);
+        return RESPOSTA_COMANDO_OK;
+    }
     resposta_consulta_satelite_t dados{};
     dados.alvo = solicitacao.alvo;
     dados.tipo = solicitacao.tipo;
@@ -700,6 +759,36 @@ codigo_resposta_comando_t consultar_satelite_remoto(
     }
     std::memcpy(resposta, &dados, sizeof(dados));
     *tamanho_resposta = sizeof(dados);
+    return RESPOSTA_COMANDO_OK;
+}
+
+codigo_resposta_comando_t gerir_wifi_satelite_remoto(
+    DestinoUart origem, const uint8_t* carga, uint16_t tamanho_carga,
+    uint8_t* resposta, uint16_t* tamanho_resposta) {
+    *tamanho_resposta = 0;
+    if (origem != DestinoUart::Equipe) return RESPOSTA_COMANDO_NEGADO;
+    if (tamanho_carga != sizeof(solicitacao_gestao_wifi_satelite_t))
+        return RESPOSTA_COMANDO_CARGA_INVALIDA;
+    solicitacao_gestao_wifi_satelite_t pedido{};
+    std::memcpy(&pedido, carga, sizeof(pedido));
+    if (pedido.alvo != NO_COMANDO_VISITANTES ||
+        (pedido.acao != GESTAO_WIFI_SATELITE_LIMITE &&
+         pedido.acao != GESTAO_WIFI_SATELITE_DESCONECTAR) ||
+        (pedido.acao == GESTAO_WIFI_SATELITE_LIMITE &&
+         pedido.limite_sessao_minutos > 1440))
+        return RESPOSTA_COMANDO_CARGA_INVALIDA;
+    codigo_resposta_comando_t resultado = RESPOSTA_COMANDO_TIMEOUT;
+    uint16_t tamanho = 0;
+    const esp_err_t erro = servico_comandos_solicitar(
+        DestinoUart::Visitantes, COMANDO_GERIR_WIFI_SATELITE,
+        &pedido, sizeof(pedido), resposta, COMANDO_TAMANHO_MAXIMO_CARGA,
+        &tamanho, &resultado, pdMS_TO_TICKS(1000));
+    if (erro != ESP_OK) return erro == ESP_ERR_TIMEOUT ? RESPOSTA_COMANDO_TIMEOUT
+                                                        : RESPOSTA_COMANDO_ERRO_INTERNO;
+    if (resultado != RESPOSTA_COMANDO_OK) return resultado;
+    if (tamanho != sizeof(resposta_gestao_wifi_satelite_t))
+        return RESPOSTA_COMANDO_ERRO_INTERNO;
+    *tamanho_resposta = tamanho;
     return RESPOSTA_COMANDO_OK;
 }
 
@@ -815,8 +904,10 @@ constexpr RegistroComando COMANDOS[] = {
     {COMANDO_OBTER_CONFIGURACAO_MESTRE, responder_configuracao_mestre},
     {COMANDO_OBTER_REDE_WIFI_SALVA, responder_rede_wifi_salva},
     {COMANDO_CONSULTAR_SATELITE, consultar_satelite_remoto},
+    {COMANDO_GERIR_WIFI_SATELITE, gerir_wifi_satelite_remoto},
     {COMANDO_OBTER_DIAGNOSTICO_MESTRE, responder_diagnostico_mestre},
     {COMANDO_OBTER_ESTADO_SINCRONIZACAO, responder_sincronizacao_mestre},
+    {COMANDO_OBTER_ESTADO_SIMULADOR, responder_simulador_mestre},
 };
 
 const RegistroComando* localizar_comando(uint16_t codigo) {

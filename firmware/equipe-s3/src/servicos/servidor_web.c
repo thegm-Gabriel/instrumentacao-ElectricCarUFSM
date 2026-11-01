@@ -18,6 +18,7 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "gerenciadores/gerenciador_wifi.h"
 #include "gerenciadores/gerenciador_uart.h"
 #include "servicos/painel_web.h"
 #include "protocolo_comandos.h"
@@ -26,6 +27,98 @@
 #include "servico_ota_satelite.h"
 
 static const char *TAG = "servidor_web";
+
+static esp_err_t responder_clientes_wifi(httpd_req_t *requisicao)
+{
+    situacao_clientes_wifi_t situacao;
+    const esp_err_t erro = gerenciador_wifi_obter_clientes(&situacao);
+    if (erro != ESP_OK) return httpd_resp_send_err(requisicao,
+        HTTPD_500_INTERNAL_SERVER_ERROR, "lista Wi-Fi indisponivel");
+    char json[1536];
+    int usados = snprintf(json, sizeof(json),
+        "{\"ok\":true,\"limite_sessao_minutos\":%u,\"quantidade\":%u,\"clientes\":[",
+        (unsigned)situacao.limite_sessao_minutos, (unsigned)situacao.quantidade);
+    for (unsigned i = 0; i < situacao.quantidade && usados > 0 && usados < (int)sizeof(json); ++i) {
+        const cliente_wifi_ap_t *cliente = &situacao.clientes[i];
+        usados += snprintf(json + usados, sizeof(json) - (size_t)usados,
+            "%s{\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"aid\":%u,\"conectado_ms\":%lu}",
+            i ? "," : "", cliente->mac[0], cliente->mac[1], cliente->mac[2],
+            cliente->mac[3], cliente->mac[4], cliente->mac[5],
+            (unsigned)cliente->aid, (unsigned long)cliente->conectado_ms);
+    }
+    if (usados < 0 || usados >= (int)sizeof(json) - 3)
+        return httpd_resp_send_err(requisicao, HTTPD_500_INTERNAL_SERVER_ERROR,
+                                   "lista Wi-Fi excedeu buffer");
+    usados += snprintf(json + usados, sizeof(json) - (size_t)usados, "]}");
+    httpd_resp_set_hdr(requisicao, "Cache-Control", "no-store, max-age=0");
+    httpd_resp_set_type(requisicao, "application/json");
+    return httpd_resp_send(requisicao, json, usados);
+}
+
+static esp_err_t ler_corpo_wifi(httpd_req_t *requisicao, char corpo[128])
+{
+    if (requisicao->content_len <= 0 || requisicao->content_len >= 128)
+        return ESP_ERR_INVALID_SIZE;
+    int recebidos = 0;
+    while (recebidos < requisicao->content_len) {
+        const int n = httpd_req_recv(requisicao, corpo + recebidos,
+                                    requisicao->content_len - recebidos);
+        if (n <= 0) return ESP_FAIL;
+        recebidos += n;
+    }
+    corpo[recebidos] = '\0';
+    return ESP_OK;
+}
+
+static esp_err_t responder_limite_wifi(httpd_req_t *requisicao)
+{
+    char corpo[128];
+    if (ler_corpo_wifi(requisicao, corpo) != ESP_OK)
+        return httpd_resp_send_err(requisicao, HTTPD_400_BAD_REQUEST, "corpo invalido");
+    const char *campo = strstr(corpo, "\"minutos\"");
+    if (!campo || !(campo = strchr(campo, ':')))
+        return httpd_resp_send_err(requisicao, HTTPD_400_BAD_REQUEST, "minutos ausentes");
+    ++campo;
+    while (*campo == ' ' || *campo == '\t') ++campo;
+    char *fim = NULL;
+    const unsigned long minutos = strtoul(campo, &fim, 10);
+    if (fim == campo || minutos > 1440 || (*fim != '}' && *fim != ',' && *fim != ' '))
+        return httpd_resp_send_err(requisicao, HTTPD_400_BAD_REQUEST, "minutos invalidos");
+    const esp_err_t erro = gerenciador_wifi_definir_limite_sessao((uint16_t)minutos);
+    if (erro != ESP_OK) return httpd_resp_send_err(requisicao,
+        HTTPD_500_INTERNAL_SERVER_ERROR, "nao foi possivel salvar limite");
+    char json[72];
+    const int tamanho = snprintf(json, sizeof(json),
+        "{\"ok\":true,\"limite_sessao_minutos\":%lu}", minutos);
+    httpd_resp_set_type(requisicao, "application/json");
+    return httpd_resp_send(requisicao, json, tamanho);
+}
+
+static esp_err_t responder_desconexao_wifi(httpd_req_t *requisicao)
+{
+    char corpo[128];
+    if (ler_corpo_wifi(requisicao, corpo) != ESP_OK)
+        return httpd_resp_send_err(requisicao, HTTPD_400_BAD_REQUEST, "corpo invalido");
+    const char *campo = strstr(corpo, "\"mac\"");
+    if (!campo || !(campo = strchr(campo, ':')) || !(campo = strchr(campo, '"')))
+        return httpd_resp_send_err(requisicao, HTTPD_400_BAD_REQUEST, "MAC ausente");
+    unsigned partes[6];
+    ++campo;
+    if (strlen(campo) < 18 || campo[2] != ':' || campo[5] != ':' ||
+        campo[8] != ':' || campo[11] != ':' || campo[14] != ':' ||
+        campo[17] != '"' ||
+        sscanf(campo, "%2x:%2x:%2x:%2x:%2x:%2x",
+               &partes[0], &partes[1], &partes[2],
+               &partes[3], &partes[4], &partes[5]) != 6)
+        return httpd_resp_send_err(requisicao, HTTPD_400_BAD_REQUEST, "MAC invalido");
+    uint8_t mac[6];
+    for (unsigned i = 0; i < 6; ++i) mac[i] = (uint8_t)partes[i];
+    const esp_err_t erro = gerenciador_wifi_desconectar_cliente(mac);
+    if (erro != ESP_OK) return httpd_resp_send_err(requisicao,
+        HTTPD_404_NOT_FOUND, "cliente nao esta conectado");
+    httpd_resp_set_type(requisicao, "application/json");
+    return httpd_resp_send(requisicao, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
+}
 
 
 static esp_err_t responder_painel(httpd_req_t *requisicao)
@@ -79,7 +172,6 @@ static codigo_comando_t localizar_consulta_mestre(const char *consulta)
 {
     if (strcmp(consulta, "ping") == 0) return COMANDO_PING;
     if (strcmp(consulta, "versao") == 0) return COMANDO_OBTER_VERSAO;
-    if (strcmp(consulta, "capacidades") == 0) return COMANDO_OBTER_CAPACIDADES;
     if (strcmp(consulta, "saude") == 0) return COMANDO_OBTER_SAUDE;
     if (strcmp(consulta, "telemetria") == 0) return COMANDO_OBTER_TELEMETRIA;
     if (strcmp(consulta, "uart") == 0) return COMANDO_OBTER_ESTADO_UART;
@@ -91,13 +183,20 @@ static codigo_comando_t localizar_consulta_mestre(const char *consulta)
         return COMANDO_OBTER_CONFIGURACAO_MESTRE;
     if (strcmp(consulta, "sincronizacao") == 0)
         return COMANDO_OBTER_ESTADO_SINCRONIZACAO;
+    if (strcmp(consulta, "simulador") == 0)
+        return COMANDO_OBTER_ESTADO_SIMULADOR;
     if (strcmp(consulta, "rede_wifi_salva") == 0)
         return COMANDO_OBTER_REDE_WIFI_SALVA;
     if (strcmp(consulta, "satelite_equipe_ping") == 0 ||
         strcmp(consulta, "satelite_equipe_versao") == 0 ||
         strcmp(consulta, "satelite_visitantes_ping") == 0 ||
-        strcmp(consulta, "satelite_visitantes_versao") == 0)
+        strcmp(consulta, "satelite_visitantes_versao") == 0 ||
+        strcmp(consulta, "satelite_visitantes_diagnostico") == 0 ||
+        strcmp(consulta, "satelite_visitantes_clientes") == 0)
         return COMANDO_CONSULTAR_SATELITE;
+    if (strcmp(consulta, "satelite_visitantes_limite") == 0 ||
+        strcmp(consulta, "satelite_visitantes_kick") == 0)
+        return COMANDO_GERIR_WIFI_SATELITE;
     if (strcmp(consulta, "verificar_ota") == 0)
         return COMANDO_SOLICITAR_VERIFICACAO_OTA;
     if (strcmp(consulta, "autorizar_mestre") == 0)
@@ -125,7 +224,8 @@ static codigo_comando_t localizar_consulta_mestre(const char *consulta)
         strcmp(consulta, "wifi_automatico") == 0 ||
         strcmp(consulta, "wifi_alterar_principal") == 0 ||
         strcmp(consulta, "wifi_restaurar_principal") == 0 ||
-        strcmp(consulta, "wifi_politica") == 0) {
+        strcmp(consulta, "wifi_politica") == 0 ||
+        strcmp(consulta, "simulador_telemetria") == 0) {
         return COMANDO_EXECUTAR_ACAO_MESTRE;
     }
     return 0;
@@ -142,6 +242,7 @@ static bool comando_exige_confirmacao(codigo_comando_t comando)
         case COMANDO_CANCELAR_OTA:
         case COMANDO_SOLICITAR_RESUMO_TERMINAL:
         case COMANDO_EXECUTAR_ACAO_MESTRE:
+        case COMANDO_GERIR_WIFI_SATELITE:
             return true;
         default:
             return false;
@@ -180,6 +281,8 @@ static acao_mestre_t localizar_acao_mestre(const char *consulta)
         return ACAO_MESTRE_RESTAURAR_REDE_WIFI_PRINCIPAL;
     if (strcmp(consulta, "wifi_politica") == 0)
         return ACAO_MESTRE_DEFINIR_POLITICA_WIFI;
+    if (strcmp(consulta, "simulador_telemetria") == 0)
+        return ACAO_MESTRE_DEFINIR_SIMULADOR;
     return 0;
 }
 
@@ -248,6 +351,11 @@ static bool preparar_acao_mestre(const char *consulta, char *corpo,
         case ACAO_MESTRE_DEFINIR_INTERVALO_TELEMETRIA_OTA:
             if (!converter_uint32(proximo_campo(&cursor), &valor))
                 return false;
+            solicitacao->valor = valor;
+            return true;
+        case ACAO_MESTRE_DEFINIR_SIMULADOR:
+            if (!converter_uint32(proximo_campo(&cursor), &valor) || valor > 1 ||
+                cursor != NULL) return false;
             solicitacao->valor = valor;
             return true;
         case ACAO_MESTRE_PREPARAR_REDE_WIFI: {
@@ -374,9 +482,38 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
     solicitacao_acao_mestre_t solicitacao_acao = {0};
     solicitacao_rede_wifi_salva_t solicitacao_rede = {0};
     solicitacao_consulta_satelite_t solicitacao_satelite = {0};
+    solicitacao_gestao_wifi_satelite_t solicitacao_wifi_satelite = {0};
     char corpo[256] = {0};
     TickType_t tempo_limite = pdMS_TO_TICKS(1500);
-    if (comando == COMANDO_EXECUTAR_ACAO_MESTRE) {
+    if (comando == COMANDO_GERIR_WIFI_SATELITE) {
+        if (receber_corpo_texto(requisicao, corpo, sizeof(corpo)) != ESP_OK)
+            return enviar_json_comando(requisicao, "400 Bad Request",
+                "{\"ok\":false,\"erro\":\"corpo inválido\"}");
+        solicitacao_wifi_satelite.alvo = NO_COMANDO_VISITANTES;
+        if (strcmp(consulta, "satelite_visitantes_limite") == 0) {
+            uint32_t minutos = 0;
+            if (!converter_uint32(corpo, &minutos) || minutos > 1440)
+                return enviar_json_comando(requisicao, "400 Bad Request",
+                    "{\"ok\":false,\"erro\":\"limite inválido\"}");
+            solicitacao_wifi_satelite.acao = GESTAO_WIFI_SATELITE_LIMITE;
+            solicitacao_wifi_satelite.limite_sessao_minutos = (uint16_t)minutos;
+        } else {
+            unsigned partes[6] = {0};
+            int consumidos = 0;
+            if (sscanf(corpo, "%2x:%2x:%2x:%2x:%2x:%2x%n",
+                       &partes[0], &partes[1], &partes[2], &partes[3],
+                       &partes[4], &partes[5], &consumidos) != 6 ||
+                consumidos != (int)strlen(corpo))
+                return enviar_json_comando(requisicao, "400 Bad Request",
+                    "{\"ok\":false,\"erro\":\"MAC inválido\"}");
+            solicitacao_wifi_satelite.acao = GESTAO_WIFI_SATELITE_DESCONECTAR;
+            for (size_t i = 0; i < 6; ++i)
+                solicitacao_wifi_satelite.mac[i] = (uint8_t)partes[i];
+        }
+        carga_solicitacao = &solicitacao_wifi_satelite;
+        tamanho_carga_solicitacao = sizeof(solicitacao_wifi_satelite);
+        tempo_limite = pdMS_TO_TICKS(3500);
+    } else if (comando == COMANDO_EXECUTAR_ACAO_MESTRE) {
         if (receber_corpo_texto(requisicao, corpo, sizeof(corpo)) != ESP_OK ||
             !preparar_acao_mestre(consulta, corpo, &solicitacao_acao)) {
             return enviar_json_comando(
@@ -416,7 +553,22 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
                                          : NO_COMANDO_EQUIPE;
         solicitacao_satelite.tipo = strstr(consulta, "versao") != NULL
                                         ? CONSULTA_SATELITE_VERSAO
+                                        : strstr(consulta, "diagnostico") != NULL
+                                        ? CONSULTA_SATELITE_DIAGNOSTICO
+                                        : strstr(consulta, "clientes") != NULL
+                                        ? CONSULTA_SATELITE_CLIENTES_WIFI
                                         : CONSULTA_SATELITE_PING;
+        if (solicitacao_satelite.tipo == CONSULTA_SATELITE_CLIENTES_WIFI) {
+            char inicio_texto[8] = {0};
+            uint32_t inicio = 0;
+            if (httpd_query_key_value(consulta_url, "inicio", inicio_texto,
+                                      sizeof(inicio_texto)) != ESP_OK ||
+                !converter_uint32(inicio_texto, &inicio) ||
+                (inicio != 0 && inicio != 5))
+                return enviar_json_comando(requisicao, "400 Bad Request",
+                    "{\"ok\":false,\"erro\":\"página inválida\"}");
+            solicitacao_satelite.reservado = (uint16_t)inicio;
+        }
         carga_solicitacao = &solicitacao_satelite;
         tamanho_carga_solicitacao = sizeof(solicitacao_satelite);
         tempo_limite = pdMS_TO_TICKS(3500);
@@ -508,17 +660,6 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
             (unsigned)informacoes.tentativas,
             (unsigned long)informacoes.duracao_ms, versao,
             (unsigned long)dados.capacidades, (unsigned)dados.no);
-    } else if (comando == COMANDO_OBTER_CAPACIDADES &&
-               tamanho_resposta == sizeof(resposta_comando_capacidades_t)) {
-        resposta_comando_capacidades_t dados;
-        memcpy(&dados, resposta, sizeof(dados));
-        tamanho = snprintf(json, sizeof(json),
-            "{\"ok\":true,\"consulta\":\"capacidades\",\"comando\":%u,\"solicitacao\":%lu,"
-            "\"resultado\":0,\"tentativas\":%u,\"duracao_ms\":%lu,\"capacidades\":%lu}",
-            (unsigned)comando, (unsigned long)informacoes.identificador,
-            (unsigned)informacoes.tentativas,
-            (unsigned long)informacoes.duracao_ms,
-            (unsigned long)dados.capacidades);
     } else if (comando == COMANDO_OBTER_SAUDE &&
                tamanho_resposta == sizeof(resposta_comando_saude_t)) {
         resposta_comando_saude_t dados;
@@ -748,6 +889,22 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
             (unsigned long)dados.tempo_tentativa_wifi_ms,
             (unsigned long)dados.intervalo_tentativas_wifi_ms,
             (unsigned long)dados.tempo_limite_wifi_ms);
+    } else if (comando == COMANDO_OBTER_ESTADO_SIMULADOR &&
+               tamanho_resposta == sizeof(resposta_simulador_mestre_t)) {
+        resposta_simulador_mestre_t dados;
+        memcpy(&dados, resposta, sizeof(dados));
+        tamanho = snprintf(json, sizeof(json),
+            "{\"ok\":true,\"consulta\":\"simulador\",\"comando\":%u,"
+            "\"solicitacao\":%lu,\"resultado\":0,\"tentativas\":%u,"
+            "\"duracao_ms\":%lu,\"ativo\":%s,\"padrao_firmware\":%s,"
+            "\"dinamica_percentual\":%u,\"amostras_geradas\":%lu}",
+            (unsigned)comando, (unsigned long)informacoes.identificador,
+            (unsigned)informacoes.tentativas,
+            (unsigned long)informacoes.duracao_ms,
+            dados.ativo ? "true" : "false",
+            dados.padrao_firmware ? "true" : "false",
+            (unsigned)dados.dinamica_percentual,
+            (unsigned long)dados.amostras_geradas);
     } else if (comando == COMANDO_OBTER_ESTADO_SINCRONIZACAO &&
                tamanho_resposta == sizeof(resposta_sincronizacao_mestre_t)) {
         resposta_sincronizacao_mestre_t dados;
@@ -818,6 +975,78 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
             (unsigned long)informacoes.duracao_ms,
             (unsigned)dados.indice + 1, ssid);
     } else if (comando == COMANDO_CONSULTAR_SATELITE &&
+               tamanho_resposta == sizeof(resposta_consulta_diagnostico_satelite_t)) {
+        resposta_consulta_diagnostico_satelite_t dados;
+        memcpy(&dados, resposta, sizeof(dados));
+        const resposta_diagnostico_satelite_t *d = &dados.diagnostico;
+        if (dados.alvo != NO_COMANDO_VISITANTES ||
+            dados.tipo != CONSULTA_SATELITE_DIAGNOSTICO ||
+            d->versao_formato != COMANDO_FORMATO_DIAGNOSTICO_SATELITE)
+            return enviar_json_comando(requisicao, "502 Bad Gateway",
+                "{\"ok\":false,\"erro\":\"diagnóstico incompatível\"}");
+        tamanho = snprintf(json, sizeof(json),
+            "{\"ok\":true,\"consulta\":\"%s\",\"rtt_ms\":%lu,"
+            "\"cpu_valida\":%s,\"cpu_total_decimos_percentual\":%u,"
+            "\"cpu_nucleo_0_decimos_percentual\":%u,\"cpu_nucleo_1_decimos_percentual\":%u,"
+            "\"temperatura_valida\":%s,\"temperatura_centesimos_c\":%d,"
+            "\"temperatura_ultimo_erro\":%ld,\"tempo_ativo_ms\":%lu,"
+            "\"heap_interno_livre\":%lu,\"heap_interno_minimo\":%lu,"
+            "\"psram_total\":%lu,\"psram_livre\":%lu,\"clientes_wifi\":%u,"
+            "\"tarefas_ativas\":%u,\"menor_pilha_livre_bytes\":%lu,"
+            "\"motivo_reinicio\":%u}", consulta, (unsigned long)dados.rtt_ms,
+            (d->indicadores & 1U) ? "true" : "false",
+            (unsigned)d->cpu_total_decimos_percentual,
+            (unsigned)d->cpu_nucleo_0_decimos_percentual,
+            (unsigned)d->cpu_nucleo_1_decimos_percentual,
+            (d->indicadores & 2U) ? "true" : "false",
+            (int)d->temperatura_centesimos_c, (long)d->temperatura_ultimo_erro,
+            (unsigned long)d->tempo_ativo_ms,
+            (unsigned long)d->heap_interno_livre,
+            (unsigned long)d->heap_interno_minimo,
+            (unsigned long)d->psram_total, (unsigned long)d->psram_livre,
+            (unsigned)d->clientes_wifi, (unsigned)d->tarefas_ativas,
+            (unsigned long)d->menor_pilha_livre_bytes,
+            (unsigned)d->motivo_reinicio);
+    } else if (comando == COMANDO_CONSULTAR_SATELITE &&
+               tamanho_resposta == sizeof(resposta_consulta_clientes_wifi_satelite_t)) {
+        resposta_consulta_clientes_wifi_satelite_t dados;
+        memcpy(&dados, resposta, sizeof(dados));
+        const resposta_clientes_wifi_satelite_t *s = &dados.situacao;
+        if (dados.alvo != NO_COMANDO_VISITANTES ||
+            dados.tipo != CONSULTA_SATELITE_CLIENTES_WIFI ||
+            s->quantidade_pagina > 5 || s->quantidade_total > 10 ||
+            (s->inicio != 0 && s->inicio != 5))
+            return enviar_json_comando(requisicao, "502 Bad Gateway",
+                "{\"ok\":false,\"erro\":\"lista incompatível\"}");
+        tamanho = snprintf(json, sizeof(json),
+            "{\"ok\":true,\"consulta\":\"%s\",\"rtt_ms\":%lu,"
+            "\"limite_sessao_minutos\":%u,\"quantidade_total\":%u,"
+            "\"inicio\":%u,\"clientes\":[", consulta,
+            (unsigned long)dados.rtt_ms, (unsigned)s->limite_sessao_minutos,
+            (unsigned)s->quantidade_total, (unsigned)s->inicio);
+        for (uint8_t i = 0; i < s->quantidade_pagina && tamanho > 0 &&
+                            tamanho < (int)sizeof(json); ++i) {
+            const registro_cliente_wifi_satelite_t *c = &s->clientes[i];
+            tamanho += snprintf(json + tamanho, sizeof(json) - (size_t)tamanho,
+                "%s{\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\","
+                "\"aid\":%u,\"conectado_ms\":%lu}", i ? "," : "",
+                c->mac[0], c->mac[1], c->mac[2], c->mac[3], c->mac[4], c->mac[5],
+                (unsigned)c->aid, (unsigned long)c->conectado_ms);
+        }
+        if (tamanho > 0 && tamanho < (int)sizeof(json))
+            tamanho += snprintf(json + tamanho, sizeof(json) - (size_t)tamanho, "]}");
+    } else if (comando == COMANDO_GERIR_WIFI_SATELITE &&
+               tamanho_resposta == sizeof(resposta_gestao_wifi_satelite_t)) {
+        resposta_gestao_wifi_satelite_t dados;
+        memcpy(&dados, resposta, sizeof(dados));
+        if (dados.alvo != NO_COMANDO_VISITANTES || !dados.aceito)
+            return enviar_json_comando(requisicao, "502 Bad Gateway",
+                "{\"ok\":false,\"erro\":\"ação não confirmada\"}");
+        tamanho = snprintf(json, sizeof(json),
+            "{\"ok\":true,\"consulta\":\"%s\",\"aceito\":true,"
+            "\"limite_sessao_minutos\":%u}", consulta,
+            (unsigned)dados.limite_sessao_minutos);
+    } else if (comando == COMANDO_CONSULTAR_SATELITE &&
                tamanho_resposta == sizeof(resposta_consulta_satelite_t)) {
         resposta_consulta_satelite_t dados;
         char versao[65];
@@ -829,14 +1058,13 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
             "\"solicitacao\":%lu,\"resultado\":0,\"tentativas\":%u,"
             "\"duracao_ms\":%lu,\"alvo\":%u,\"tipo\":%u,"
             "\"rtt_ms\":%lu,\"tempo_ativo_ms\":%lu,"
-            "\"capacidades\":%lu,\"firmware\":\"%s\"}",
+            "\"firmware\":\"%s\"}",
             consulta, (unsigned)comando,
             (unsigned long)informacoes.identificador,
             (unsigned)informacoes.tentativas,
             (unsigned long)informacoes.duracao_ms, (unsigned)dados.alvo,
             (unsigned)dados.tipo, (unsigned long)dados.rtt_ms,
-            (unsigned long)dados.tempo_ativo_ms,
-            (unsigned long)dados.capacidades, versao);
+            (unsigned long)dados.tempo_ativo_ms, versao);
     } else if (acao && strcmp(consulta, "sincronizar_google") == 0 &&
                tamanho_resposta == sizeof(resposta_comando_acao_sincronizacao_t)) {
         resposta_comando_acao_sincronizacao_t dados;
@@ -1157,7 +1385,7 @@ esp_err_t servidor_web_iniciar(void)
     httpd_handle_t servidor = NULL;
     httpd_config_t configuracao = HTTPD_DEFAULT_CONFIG();
     configuracao.server_port = PORTA_HTTP;
-    configuracao.max_uri_handlers = 8;
+    configuracao.max_uri_handlers = 11;
     // Reserva descritores para as demais tarefas de rede do ESP.
     configuracao.max_open_sockets = 10;
     configuracao.lru_purge_enable = true;
@@ -1179,6 +1407,9 @@ esp_err_t servidor_web_iniciar(void)
     const httpd_uri_t rota_mestre = { .uri = "/mestre", .method = HTTP_GET, .handler = responder_mestre_pagina };
     const httpd_uri_t rota_api_mestre = { .uri = "/api/mestre", .method = HTTP_GET, .handler = responder_mestre_api };
     const httpd_uri_t rota_api_mestre_acao = { .uri = "/api/mestre", .method = HTTP_POST, .handler = responder_mestre_api };
+    const httpd_uri_t rota_clientes_wifi = { .uri = "/api/wifi/clientes", .method = HTTP_GET, .handler = responder_clientes_wifi };
+    const httpd_uri_t rota_limite_wifi = { .uri = "/api/wifi/limite", .method = HTTP_POST, .handler = responder_limite_wifi };
+    const httpd_uri_t rota_desconexao_wifi = { .uri = "/api/wifi/desconectar", .method = HTTP_POST, .handler = responder_desconexao_wifi };
     erro = httpd_register_err_handler(servidor, HTTPD_404_NOT_FOUND,
                                       responder_redirecionamento_cativo);
     if (erro == ESP_OK) erro = httpd_register_uri_handler(servidor, &rota_painel);
@@ -1189,6 +1420,9 @@ esp_err_t servidor_web_iniciar(void)
     if (erro == ESP_OK) erro = httpd_register_uri_handler(servidor, &rota_mestre);
     if (erro == ESP_OK) erro = httpd_register_uri_handler(servidor, &rota_api_mestre);
     if (erro == ESP_OK) erro = httpd_register_uri_handler(servidor, &rota_api_mestre_acao);
+    if (erro == ESP_OK) erro = httpd_register_uri_handler(servidor, &rota_clientes_wifi);
+    if (erro == ESP_OK) erro = httpd_register_uri_handler(servidor, &rota_limite_wifi);
+    if (erro == ESP_OK) erro = httpd_register_uri_handler(servidor, &rota_desconexao_wifi);
     if (erro != ESP_OK) {
         httpd_stop(servidor);
         ESP_LOGE(TAG, "Inicialização web incompleta; servidor encerrado: %s",

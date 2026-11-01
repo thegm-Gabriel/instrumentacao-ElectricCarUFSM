@@ -23,6 +23,7 @@
 #include "servicos/servico_ota.h"
 #include "servicos/servico_registro_telemetria.h"
 #include "servicos/servico_relatorios.h"
+#include "servicos/servico_simulador_telemetria.h"
 #include "servicos/servico_telemetria.h"
 #include "servicos/servico_wifi.h"
 
@@ -213,6 +214,10 @@ void mostrar_menu_sensores() {
     imprimir_titulo("SENSORES E DIAGNÓSTICO");
     std::printf("Fonte configurada : %s\r\n",
                 configuracao::USAR_TELEMETRIA_SIMULADA
+                    ? "simulador"
+                    : "sensores reais");
+    std::printf("Fonte atual       : %s\r\n",
+                servico_simulador_telemetria_esta_ativo()
                     ? "simulador"
                     : "sensores reais");
     std::printf("Saúde do mestre   : %s | causas=0x%03lX\r\n",
@@ -1094,9 +1099,8 @@ void consultar_satelite(DestinoUart destino, codigo_comando_t comando) {
         resposta_comando_versao_t versao{};
         std::memcpy(&versao, resposta, sizeof(versao));
         versao.versao[sizeof(versao.versao) - 1] = '\0';
-        std::printf("\r\n[OK] %s: firmware=%s capacidades=0x%08lX.\r\n",
-                    nome, versao.versao,
-                    static_cast<unsigned long>(versao.capacidades));
+        std::printf("\r\n[OK] %s: firmware=%s.\r\n",
+                    nome, versao.versao);
     } else {
         std::printf("\r\n[ERRO] Resposta de %s possui tamanho incompatível.\r\n",
                     nome);

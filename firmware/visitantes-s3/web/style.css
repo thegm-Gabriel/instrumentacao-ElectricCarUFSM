@@ -115,3 +115,13 @@ footer{padding:31px 0 37px;color:#879BB6;font-size:11px}
 @media(max-width:760px){.hero-grid{grid-template-columns:1fr}.speed-card{min-height:370px}.primary-stack{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:auto}.battery-card{grid-column:1/-1}.metric-card{min-height:130px}.live-status{align-self:center}}
 @media(max-width:560px){.site-header{align-items:flex-start}.live-status{margin-left:49px}.primary-stack{grid-template-columns:1fr}.battery-card{grid-column:auto}.metric-card{min-height:112px}.chart-heading{align-items:flex-start;flex-wrap:wrap}.chart-select-label{width:100%}.chart-select-label select{width:100%;max-width:none}.detail-grid{grid-template-columns:1fr}.detail-card:last-child{grid-column:auto}.scale-caption{white-space:normal}}
 @media(max-width:370px){.live-status{margin-left:0}}
+
+/* Profundidade discreta sem imagens, animacoes ou camadas sobre o conteudo. */
+body{
+  min-height:100vh;
+  background-color:#0d1825;
+  background-image:
+    radial-gradient(ellipse 62% 34% at 8% 0%,#355d7a38 0%,transparent 78%),
+    radial-gradient(ellipse 58% 39% at 96% 58%,#2d66553b 0%,transparent 82%),
+    linear-gradient(155deg,#101e2d 0%,#0e1927 48%,#101b26 100%);
+}

@@ -6,6 +6,9 @@
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "guarda_rollback_ota.h"
 #include "servicos/receptor_uart.h"
 #include "gerenciadores/gerenciador_wifi.h"
 #include "servicos/servidor_web.h"
@@ -13,29 +16,18 @@
 
 static const char *TAG = "main_equipe";
 
-static bool firmware_pendente_de_verificacao(void)
-{
-    const esp_partition_t *particao = esp_ota_get_running_partition();
-    esp_ota_img_states_t estado = ESP_OTA_IMG_UNDEFINED;
-    return particao != NULL &&
-           esp_ota_get_state_partition(particao, &estado) == ESP_OK &&
-           estado == ESP_OTA_IMG_PENDING_VERIFY;
-}
-
 static void tratar_falha_de_inicializacao(const char *servico, esp_err_t erro)
 {
     ESP_LOGE(TAG, "%s indisponível: %s", servico, esp_err_to_name(erro));
-    if (firmware_pendente_de_verificacao()) {
+    if (guarda_ota_monitorando()) {
         ESP_LOGE(TAG, "Autoteste da nova imagem falhou; solicitando rollback");
-        const esp_err_t erro_rollback =
-            esp_ota_mark_app_invalid_rollback_and_reboot();
-        ESP_LOGE(TAG, "Não foi possível executar rollback: %s",
-                 esp_err_to_name(erro_rollback));
+        (void)guarda_ota_solicitar_rollback(TAG, "Serviço essencial indisponível");
     }
 }
 
 void app_main(void)
 {
+    guarda_ota_registrar_partida(TAG);
     ESP_LOGI(TAG, "Inicializando ESP da equipe; motivo do reset=%d",
              (int)esp_reset_reason());
     // Diagnóstico é complementar: temperatura indisponível não impede o painel.
@@ -56,6 +48,16 @@ void app_main(void)
         tratar_falha_de_inicializacao("UART", erro);
         return;
     }
-    erro = servico_ota_satelite_confirmar_firmware_em_execucao();
-    if (erro != ESP_OK) tratar_falha_de_inicializacao("confirmação OTA", erro);
+    if (guarda_ota_monitorando()) {
+        ESP_LOGI(TAG, "Observando firmware OTA antes da confirmação");
+        vTaskDelay(pdMS_TO_TICKS(GUARDA_OTA_TEMPO_CONFIRMACAO_MS));
+        erro = servico_ota_satelite_confirmar_firmware_em_execucao();
+        if (erro != ESP_OK) {
+            tratar_falha_de_inicializacao("confirmação OTA", erro);
+            return;
+        }
+        vTaskDelay(pdMS_TO_TICKS(GUARDA_OTA_TEMPO_ESTABILIZACAO_MS -
+                                GUARDA_OTA_TEMPO_CONFIRMACAO_MS));
+        guarda_ota_encerrar_observacao(TAG);
+    }
 }

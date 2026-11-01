@@ -25,8 +25,10 @@
 #define CAPACIDADE_COMANDO_CONTROLE_OPERACIONAL (1u << 9)
 #define CAPACIDADE_COMANDO_DIAGNOSTICO (1u << 10)
 #define CAPACIDADE_COMANDO_SINCRONIZACAO (1u << 11)
+#define CAPACIDADE_COMANDO_SIMULADOR (1u << 12)
 
 #define COMANDO_FORMATO_DIAGNOSTICO_MESTRE 1u
+#define COMANDO_FORMATO_DIAGNOSTICO_SATELITE 1u
 #define COMANDO_FORMATO_SINCRONIZACAO 1u
 #define COMANDO_FORMATO_CONFIRMACAO_SINCRONIZACAO 1u
 #define SOLICITACAO_ACAO_CONFIRMACAO_SINCRONIZACAO_DETALHADA 1u
@@ -73,6 +75,10 @@ typedef enum {
     COMANDO_CONSULTAR_SATELITE = 34,
     COMANDO_OBTER_DIAGNOSTICO_MESTRE = 35,
     COMANDO_OBTER_ESTADO_SINCRONIZACAO = 36,
+    COMANDO_OBTER_ESTADO_SIMULADOR = 37,
+    COMANDO_OBTER_DIAGNOSTICO_SATELITE = 38,
+    COMANDO_OBTER_CLIENTES_WIFI_SATELITE = 39,
+    COMANDO_GERIR_WIFI_SATELITE = 40,
 } codigo_comando_t;
 
 // Uma única ação estruturada transporta as operações do menu serial sem
@@ -93,6 +99,7 @@ typedef enum {
     ACAO_MESTRE_ALTERAR_REDE_WIFI_PRINCIPAL = 13,
     ACAO_MESTRE_RESTAURAR_REDE_WIFI_PRINCIPAL = 14,
     ACAO_MESTRE_DEFINIR_POLITICA_WIFI = 15,
+    ACAO_MESTRE_DEFINIR_SIMULADOR = 16,
 } acao_mestre_t;
 
 typedef enum {
@@ -230,6 +237,14 @@ typedef struct __attribute__((packed)) {
     uint32_t tempo_limite_wifi_ms;
 } resposta_configuracao_mestre_t;
 
+// Estado volátil: ao reiniciar, volta ao padrão definido no firmware.
+typedef struct __attribute__((packed)) {
+    uint8_t ativo;
+    uint8_t padrao_firmware;
+    uint16_t dinamica_percentual;
+    uint32_t amostras_geradas;
+} resposta_simulador_mestre_t;
+
 // Retrato somente de leitura do upload. O contador de início identifica a
 // execução mais recente sem alterar a confirmação das ações existentes.
 typedef struct __attribute__((packed)) {
@@ -301,6 +316,8 @@ typedef struct __attribute__((packed)) {
 typedef enum {
     CONSULTA_SATELITE_PING = 1,
     CONSULTA_SATELITE_VERSAO = 2,
+    CONSULTA_SATELITE_DIAGNOSTICO = 3,
+    CONSULTA_SATELITE_CLIENTES_WIFI = 4,
 } tipo_consulta_satelite_t;
 
 typedef struct __attribute__((packed)) {
@@ -318,6 +335,74 @@ typedef struct __attribute__((packed)) {
     uint32_t capacidades;
     char versao[32];
 } resposta_consulta_satelite_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t versao_formato;
+    uint8_t indicadores; // bit 0: CPU válida; bit 1: temperatura válida
+    uint8_t clientes_wifi;
+    uint8_t tarefas_ativas;
+    uint16_t cpu_total_decimos_percentual;
+    uint16_t cpu_nucleo_0_decimos_percentual;
+    uint16_t cpu_nucleo_1_decimos_percentual;
+    int16_t temperatura_centesimos_c;
+    int32_t temperatura_ultimo_erro;
+    uint32_t tempo_ativo_ms;
+    uint32_t heap_interno_livre;
+    uint32_t heap_interno_minimo;
+    uint32_t psram_total;
+    uint32_t psram_livre;
+    uint32_t menor_pilha_livre_bytes;
+    uint8_t motivo_reinicio;
+} resposta_diagnostico_satelite_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t alvo;
+    uint8_t tipo;
+    uint16_t reservado;
+    uint32_t rtt_ms;
+    resposta_diagnostico_satelite_t diagnostico;
+} resposta_consulta_diagnostico_satelite_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t mac[6];
+    uint16_t aid;
+    uint32_t conectado_ms;
+} registro_cliente_wifi_satelite_t;
+
+typedef struct __attribute__((packed)) {
+    uint16_t limite_sessao_minutos;
+    uint8_t quantidade_total;
+    uint8_t inicio;
+    uint8_t quantidade_pagina;
+    registro_cliente_wifi_satelite_t clientes[5];
+} resposta_clientes_wifi_satelite_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t alvo;
+    uint8_t tipo;
+    uint16_t reservado;
+    uint32_t rtt_ms;
+    resposta_clientes_wifi_satelite_t situacao;
+} resposta_consulta_clientes_wifi_satelite_t;
+
+typedef enum {
+    GESTAO_WIFI_SATELITE_LIMITE = 1,
+    GESTAO_WIFI_SATELITE_DESCONECTAR = 2,
+} gestao_wifi_satelite_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t alvo;
+    uint8_t acao;
+    uint16_t limite_sessao_minutos;
+    uint8_t mac[6];
+} solicitacao_gestao_wifi_satelite_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t alvo;
+    uint8_t acao;
+    uint16_t limite_sessao_minutos;
+    uint8_t aceito;
+} resposta_gestao_wifi_satelite_t;
 
 // Confirma que uma ação com efeito colateral foi aceita pelo mestre. O efeito
 // continua de forma assíncrona e deve ser acompanhado pela consulta de estado.
@@ -360,12 +445,16 @@ static_assert(sizeof(solicitacao_acao_mestre_t) ==
 static_assert(sizeof(resposta_configuracao_mestre_t) <=
                   COMANDO_TAMANHO_MAXIMO_CARGA,
               "A configuração deve caber na carga de comando");
+static_assert(sizeof(resposta_simulador_mestre_t) == 8,
+              "O estado do simulador deve ter 8 bytes");
 static_assert(sizeof(resposta_sincronizacao_mestre_t) <=
                   COMANDO_TAMANHO_MAXIMO_CARGA,
               "A sincronização deve caber na carga de comando");
 static_assert(sizeof(resposta_diagnostico_mestre_t) ==
                   COMANDO_TAMANHO_MAXIMO_CARGA,
               "O diagnóstico do mestre deve ocupar 128 bytes");
+static_assert(sizeof(resposta_consulta_clientes_wifi_satelite_t) <= COMANDO_TAMANHO_MAXIMO_CARGA,
+              "A lista de clientes deve caber na carga de comando");
 #else
 _Static_assert(sizeof(cabecalho_quadro_comando_t) == 16,
                "O cabeçalho de comando deve ter 16 bytes");
@@ -384,12 +473,16 @@ _Static_assert(sizeof(solicitacao_acao_mestre_t) ==
 _Static_assert(sizeof(resposta_configuracao_mestre_t) <=
                    COMANDO_TAMANHO_MAXIMO_CARGA,
                "A configuração deve caber na carga de comando");
+_Static_assert(sizeof(resposta_simulador_mestre_t) == 8,
+               "O estado do simulador deve ter 8 bytes");
 _Static_assert(sizeof(resposta_sincronizacao_mestre_t) <=
                    COMANDO_TAMANHO_MAXIMO_CARGA,
                "A sincronização deve caber na carga de comando");
 _Static_assert(sizeof(resposta_diagnostico_mestre_t) ==
                    COMANDO_TAMANHO_MAXIMO_CARGA,
                "O diagnóstico do mestre deve ocupar 128 bytes");
+_Static_assert(sizeof(resposta_consulta_clientes_wifi_satelite_t) <= COMANDO_TAMANHO_MAXIMO_CARGA,
+               "A lista de clientes deve caber na carga de comando");
 #endif
 
 static inline int protocolo_comandos_no_valido(uint8_t no)

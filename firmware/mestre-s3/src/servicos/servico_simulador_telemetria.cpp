@@ -1,5 +1,6 @@
 // Gera dados veiculares simulados para validação sem sensores.
 #include "servicos/servico_simulador_telemetria.h"
+#include "nucleo/configuracao_placa.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -17,6 +18,7 @@ constexpr uint16_t DINAMICA_MAXIMA = 200;
 
 struct EstadoSimuladorTelemetria {
     bool iniciado = false;
+    bool ativo = false;
     uint32_t amostras_geradas = 0;
     uint16_t dinamica_percentual = 100;
     float tempo_simulado_s = 0.0f;
@@ -103,19 +105,58 @@ esp_err_t servico_simulador_telemetria_iniciar(uint16_t dinamica_percentual) {
     portENTER_CRITICAL(&trava_estado);
     estado = {};
     estado.iniciado = true;
+    estado.ativo = configuracao::USAR_TELEMETRIA_SIMULADA;
     estado.dinamica_percentual = dinamica_percentual;
     instante_anterior_us = esp_timer_get_time();
     portEXIT_CRITICAL(&trava_estado);
-    ESP_LOGW(ETIQUETA,
-             "Gerador de telemetria simulada ativo; os dados enviados não são medições reais");
+    ESP_LOGW(ETIQUETA, "Gerador de telemetria simulada pronto; estado inicial: %s",
+             configuracao::USAR_TELEMETRIA_SIMULADA ? "ativo" : "inativo");
     return ESP_OK;
+}
+
+esp_err_t servico_simulador_telemetria_definir_ativo(bool ativo) {
+    portENTER_CRITICAL(&trava_estado);
+    if (!estado.iniciado) {
+        portEXIT_CRITICAL(&trava_estado);
+        return ESP_ERR_INVALID_STATE;
+    }
+    const bool mudou = estado.ativo != ativo;
+    if (mudou) {
+        estado.ativo = ativo;
+        if (ativo) instante_anterior_us = esp_timer_get_time();
+    }
+    portEXIT_CRITICAL(&trava_estado);
+    if (mudou) ESP_LOGW(ETIQUETA, "Telemetria simulada %s por comando; voltará ao padrão após reiniciar",
+                        ativo ? "ativada" : "desativada");
+    return ESP_OK;
+}
+
+bool servico_simulador_telemetria_esta_ativo() {
+    portENTER_CRITICAL(&trava_estado);
+    const bool ativo = estado.ativo;
+    portEXIT_CRITICAL(&trava_estado);
+    return ativo;
+}
+
+uint32_t servico_simulador_telemetria_amostras_geradas() {
+    portENTER_CRITICAL(&trava_estado);
+    const uint32_t amostras = estado.amostras_geradas;
+    portEXIT_CRITICAL(&trava_estado);
+    return amostras;
+}
+
+uint16_t servico_simulador_telemetria_dinamica_percentual() {
+    portENTER_CRITICAL(&trava_estado);
+    const uint16_t dinamica = estado.dinamica_percentual;
+    portEXIT_CRITICAL(&trava_estado);
+    return dinamica;
 }
 
 esp_err_t servico_simulador_telemetria_gerar(DadosTelemetriaVeiculo* dados) {
     if (dados == nullptr) return ESP_ERR_INVALID_ARG;
 
     portENTER_CRITICAL(&trava_estado);
-    if (!estado.iniciado) {
+    if (!estado.iniciado || !estado.ativo) {
         portEXIT_CRITICAL(&trava_estado);
         return ESP_ERR_INVALID_STATE;
     }

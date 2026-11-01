@@ -31,6 +31,7 @@ inline constexpr PoliticaTarefa TAREFAS[] = {
     {"ota_uart_pipeline", 6144, 5, 1},
     {"servico_ota", 14336, 4, 0},
     {"registro_csv", 10240, 3, 0},
+    {"historico_sd", 6144, 2, 0},
     {"upload_csv", 10240, 3, 0},
     {"terminal", 6144, 3, tskNO_AFFINITY},
     {"sinalizacao", 8192, 3, tskNO_AFFINITY},

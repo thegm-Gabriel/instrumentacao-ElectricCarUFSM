@@ -37,3 +37,5 @@ esp_err_t servico_registro_telemetria_registrar(
     const DadosTelemetriaVeiculo& dados);
 esp_err_t servico_registro_telemetria_solicitar_sincronizacao();
 EstadoRegistroTelemetria servico_registro_telemetria_obter_estado();
+// Ajusta o relógio somente quando ainda não há UTC válida; Date vem de HTTPS autenticado.
+void servico_registro_telemetria_acertar_relogio_http(const char* date_header);

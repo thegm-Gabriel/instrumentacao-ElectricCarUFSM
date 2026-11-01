@@ -55,4 +55,6 @@ struct EstadoOdometro {
 esp_err_t servico_odometro_iniciar(const ConfiguracaoOdometro& configuracao);
 esp_err_t servico_odometro_atualizar();
 EstadoOdometro servico_odometro_obter_estado();
+// Recupera o total do backup no SD somente quando a chave NVS não existe.
+esp_err_t servico_odometro_restaurar_se_ausente(uint64_t total_mm);
 esp_err_t servico_odometro_zerar_percurso();

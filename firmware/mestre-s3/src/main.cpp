@@ -9,6 +9,7 @@
 #include "esp_psram.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "guarda_rollback_ota.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nucleo/configuracao_placa.h"
@@ -153,7 +154,9 @@ void tarefa_telemetria(void*) {
     int64_t proxima_tentativa_registro_sd_ms = 0;
     while (true) {
         servico_supervisao_alimentar(ModuloSupervisionado::TarefaTelemetria);
-        if (configuracao::USAR_TELEMETRIA_SIMULADA) {
+        const bool usar_simulador = servico_simulador_telemetria_esta_ativo();
+        if (ultimos_dados.simulado != usar_simulador) ultimos_dados = {};
+        if (usar_simulador) {
             const esp_err_t erro_simulador =
                 servico_simulador_telemetria_gerar(&ultimos_dados);
             if (erro_simulador != ESP_OK) {
@@ -301,10 +304,9 @@ esp_err_t inicializar_aplicacao() {
     servico_comandos_definir_acao_resumo(servico_relatorios_solicitar_resumo);
     erro = servico_enlace_satelites_iniciar();
     if (erro != ESP_OK) return erro;
-    if (configuracao::USAR_TELEMETRIA_SIMULADA) {
-        return servico_simulador_telemetria_iniciar(
-            configuracao::DINAMICA_SIMULACAO_PERCENTUAL);
-    }
+    erro = servico_simulador_telemetria_iniciar(
+        configuracao::DINAMICA_SIMULACAO_PERCENTUAL);
+    if (erro != ESP_OK) return erro;
     const esp_err_t erro_adc = leitor_tensao_iniciar();
     aquisicao.adc = erro_adc == ESP_OK;
     (void)servico_diagnostico_registrar_resultado(
@@ -426,6 +428,9 @@ esp_err_t inicializar_aplicacao() {
                  esp_err_to_name(erro_sinalizacao));
     }
     const esp_err_t erro_rejeicao = servico_ota_rejeitar_firmware_em_execucao();
+    if (guarda_ota_monitorando()) {
+        (void)guarda_ota_solicitar_rollback(ETIQUETA, mensagem);
+    }
     if (erro_rejeicao != ESP_OK && erro_rejeicao != ESP_ERR_NOT_FOUND) {
         ESP_LOGE(ETIQUETA, "Falha ao rejeitar firmware pendente: %s",
                  esp_err_to_name(erro_rejeicao));
@@ -438,6 +443,7 @@ esp_err_t inicializar_aplicacao() {
 }  // namespace
 
 extern "C" void app_main(void) {
+    guarda_ota_registrar_partida(ETIQUETA);
     ESP_LOGI(ETIQUETA, "=== Mestre de telemetria UFSM-CS ===");
     ESP_LOGI(ETIQUETA, "Alvo: ESP32-S3-WROOM-1-N16R8");
     ESP_LOGI(ETIQUETA, "ADC GPIO %d | I2C SDA=%d SCL=%d | intervalo=%d ms",
@@ -573,6 +579,10 @@ extern "C" void app_main(void) {
     // Wi-Fi e OTA fazem parte do caminho de recuperação remota. Uma imagem
     // ainda pendente não pode ser confirmada se algum deles regrediu.
     if (erro_wifi != ESP_OK || erro_ota != ESP_OK) {
+        if (guarda_ota_monitorando()) {
+            (void)guarda_ota_solicitar_rollback(
+                ETIQUETA, "Autoteste OTA falhou nos serviços de recuperação remota");
+        }
         erro = servico_ota_rejeitar_firmware_em_execucao();
         if (erro != ESP_OK) {
             rejeitar_firmware_e_encerrar(
@@ -580,15 +590,24 @@ extern "C" void app_main(void) {
             return;
         }
     }
-    erro = servico_ota_confirmar_firmware_em_execucao();
-    if (erro != ESP_OK) {
-        rejeitar_firmware_e_encerrar(
-            erro, "Não foi possível confirmar o firmware em execução");
-        return;
-    }
     atualizar_partida("SISTEMA PRONTO", 100);
     (void)servico_painel_local_notificar(
         TipoMensagemPainelLocal::Sucesso, "INICIALIZACAO", "SISTEMA PRONTO",
         4000);
     (void)servico_sinalizacao_notificar(EventoSinalizacao::SistemaPronto);
+    if (guarda_ota_monitorando()) {
+        ESP_LOGI(ETIQUETA,
+                 "Observando firmware OTA por %u ms antes da confirmação",
+                 GUARDA_OTA_TEMPO_CONFIRMACAO_MS);
+        vTaskDelay(pdMS_TO_TICKS(GUARDA_OTA_TEMPO_CONFIRMACAO_MS));
+        erro = servico_ota_confirmar_firmware_em_execucao();
+        if (erro != ESP_OK) {
+            rejeitar_firmware_e_encerrar(
+                erro, "Não foi possível confirmar o firmware em execução");
+            return;
+        }
+        vTaskDelay(pdMS_TO_TICKS(GUARDA_OTA_TEMPO_ESTABILIZACAO_MS -
+                                GUARDA_OTA_TEMPO_CONFIRMACAO_MS));
+        guarda_ota_encerrar_observacao(ETIQUETA);
+    }
 }

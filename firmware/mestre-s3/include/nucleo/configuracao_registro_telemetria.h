@@ -28,7 +28,8 @@ constexpr uint32_t INTERVALO_NOVA_TENTATIVA_SD_MS = 30000;
 // Uma hora reduz a fragmentação sem criar um CSV ilimitado e difícil de recuperar.
 constexpr uint32_t DURACAO_ARQUIVO_TELEMETRIA_MS = 60U * 60U * 1000U;
 constexpr std::size_t CAPACIDADE_FILA_REGISTRO = 24;
-constexpr std::size_t TAMANHO_MAXIMO_CSV_BYTES = 2U * 1024U * 1024U;
+// Uma hora de linhas com todos os sensores pode ultrapassar 2 MiB.
+constexpr std::size_t TAMANHO_MAXIMO_CSV_BYTES = 8U * 1024U * 1024U;
 
 // SPI2 sugerido para o ESP32-S3-WROOM-1-N16R8. Confirme estes GPIOs na montagem.
 constexpr gpio_num_t PINO_SD_CLK = GPIO_NUM_38;
@@ -41,8 +42,14 @@ constexpr char DIRETORIO_TELEMETRIA[] = "/sdcard/telemetria";
 constexpr char DIRETORIO_TELEMETRIA_ENVIADA[] = "/sdcard/telemetria/enviados";
 constexpr char DIRETORIO_LOG_ESP[] = "/sdcard/logs";
 constexpr uint32_t INTERVALO_LOG_ESP_MS = 30000;
-constexpr std::size_t TAMANHO_SEGMENTO_LOG_ESP = 1024U * 1024U;
-constexpr std::size_t LIMITE_LOG_ESP_POR_SESSAO = 8U * 1024U * 1024U;
+constexpr uint32_t INTERVALO_LOG_FALHA_MS = 2000;
+constexpr uint32_t INTERVALO_LOG_FALHA_GRAVE_MS = 1000;
+constexpr uint32_t JANELA_LOG_FALHA_MS = 2U * 60U * 1000U;
+constexpr uint32_t JANELA_LOG_FALHA_GRAVE_MS = 5U * 60U * 1000U;
+constexpr std::size_t TAMANHO_SEGMENTO_LOG_ESP = 8U * 1024U * 1024U;
+constexpr std::size_t LIMITE_LOG_ESP_POR_SESSAO = 16U * 1024U * 1024U;
+constexpr uint32_t INTERVALO_BACKUP_CONFIGURACAO_MS = 60000;
+constexpr char ARQUIVO_BACKUP_CONFIGURACAO[] = "/sdcard/configuracao_atual.txt";
 
 constexpr char ENDERECO_GOOGLE_TELEMETRIA[] = TELEMETRIA_GOOGLE_URL;
 constexpr char TOKEN_GOOGLE_TELEMETRIA[] = TELEMETRIA_GOOGLE_TOKEN;

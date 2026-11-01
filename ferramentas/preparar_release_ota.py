@@ -44,14 +44,35 @@ PROJETOS = {
 
 def validar_versao(texto: str) -> str:
     versao = texto.removeprefix("v")
-    if not re.fullmatch(r"\d+\.\d+\.\d+", versao):
+    if not re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", versao):
         raise ValueError(f"versão inválida: {texto}")
     return versao
 
 
-def incrementar_correcao(versao: str) -> str:
+def incrementar_versao(versao: str, incremento: str) -> str:
     maior, menor, correcao = map(int, validar_versao(versao).split("."))
-    return f"{maior}.{menor}.{correcao + 1}"
+    if incremento == "major":
+        return f"{maior + 1}.0.0"
+    if incremento == "minor":
+        return f"{maior}.{menor + 1}.0"
+    if incremento == "patch":
+        return f"{maior}.{menor}.{correcao + 1}"
+    raise ValueError(f"incremento inválido: {incremento}")
+
+
+def calcular_novas_versoes(estado: dict, alterados: set[str],
+                          incremento: str) -> tuple[str, dict[str, str]]:
+    # Valida o tipo mesmo quando não houve alteração, antes de preparar arquivos.
+    if incremento not in ("major", "minor", "patch"):
+        raise ValueError(f"incremento inválido: {incremento}")
+    release = (incrementar_versao(estado["versao_release"], incremento)
+               if alterados else estado["versao_release"])
+    firmwares = {
+        alvo: (incrementar_versao(estado["firmwares"][alvo]["versao"], incremento)
+               if alvo in alterados else estado["firmwares"][alvo]["versao"])
+        for alvo in PROJETOS
+    }
+    return release, firmwares
 
 
 def localizar_platformio() -> Path:
@@ -190,7 +211,10 @@ def arquivar_saida_anterior(diretorio_saida: Path, diretorio_historico: Path,
     print(f"Release anterior arquivado em {destino}")
 
 
-def preparar_release(repositorio: str, forcar: set[str]) -> tuple[Path, str]:
+def preparar_release(repositorio: str, forcar: set[str],
+                    incremento: str = "patch") -> tuple[Path, str]:
+    if incremento not in ("major", "minor", "patch"):
+        raise ValueError(f"incremento inválido: {incremento}")
     raiz = Path(__file__).resolve().parents[1]
     estado = carregar_estado(raiz)
     diretorio_versoes = raiz / "versoes"
@@ -228,15 +252,9 @@ def preparar_release(repositorio: str, forcar: set[str]) -> tuple[Path, str]:
         return diretorio_saida, estado["versao_release"]
 
     versao_release_anterior = estado["versao_release"]
-    nova_versao_release = (
-        incrementar_correcao(versao_release_anterior)
-        if alterados else versao_release_anterior
+    nova_versao_release, novas_versoes = calcular_novas_versoes(
+        estado, alterados, incremento
     )
-    novas_versoes = {
-        alvo: incrementar_correcao(estado["firmwares"][alvo]["versao"])
-        if alvo in alterados else estado["firmwares"][alvo]["versao"]
-        for alvo in PROJETOS
-    }
 
     alvos_para_compilar = {
         alvo for alvo, dados in PROJETOS.items()
@@ -368,12 +386,19 @@ def main() -> int:
         default=[],
         help="Força incremento mesmo sem alteração detectada",
     )
+    parser.add_argument(
+        "--bump", "--incremento",
+        choices=("major", "minor", "patch"),
+        default="patch",
+        help="Parte SemVer a incrementar nos firmwares alterados e no release "
+             "(padrão: patch)",
+    )
     argumentos = parser.parse_args()
     try:
         if not re.fullmatch(r"[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+", argumentos.repositorio):
             raise ValueError("repositório inválido; use proprietário/repositório")
         forcar = set(PROJETOS) if "todos" in argumentos.forcar else set(argumentos.forcar)
-        preparar_release(argumentos.repositorio, forcar)
+        preparar_release(argumentos.repositorio, forcar, argumentos.bump)
         return 0
     except (FileNotFoundError, OSError, ValueError, subprocess.CalledProcessError) as erro:
         print(f"\nERRO: {erro}", file=sys.stderr)

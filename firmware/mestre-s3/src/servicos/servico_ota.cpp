@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <strings.h>
 
 #include "cJSON.h"
 #include "esp_app_desc.h"
@@ -26,6 +27,7 @@
 #include "nucleo/configuracao_ota.h"
 #include "nucleo/configuracao_wifi.h"
 #include "servicos/servico_wifi.h"
+#include "servicos/servico_registro_telemetria.h"
 #include "servicos/servico_telemetria.h"
 #include "protocolo_telemetria.h"
 #include "protocolo_ota_satelites.h"
@@ -67,6 +69,11 @@ AlvoOta alvo_autorizado = AlvoOta::Nenhum;
 RespostaHttp* resposta_http = nullptr;
 bool iniciado = false;
 bool cancelamento_em_andamento = false;
+int64_t prazo_autorizacao_ms = 0;
+
+bool autorizacao_no_prazo() {
+    return prazo_autorizacao_ms > esp_timer_get_time() / 1000;
+}
 
 void definir_estado(EstadoServicoOta estado, esp_err_t erro = ESP_OK);
 bool interpretar_versao(const char* texto, int partes[3]);
@@ -164,6 +171,12 @@ void concluir_cancelamento(AlvoOta alvo) {
 }
 
 esp_err_t tratar_evento_http(esp_http_client_event_t* evento) {
+    if (evento->event_id == HTTP_EVENT_ON_HEADER &&
+        evento->header_key != nullptr && evento->header_value != nullptr &&
+        strcasecmp(evento->header_key, "Date") == 0) {
+        servico_registro_telemetria_acertar_relogio_http(evento->header_value);
+        return ESP_OK;
+    }
     if (evento->event_id != HTTP_EVENT_ON_DATA || evento->data == nullptr ||
         evento->data_len <= 0) {
         return ESP_OK;
@@ -383,8 +396,10 @@ void reconciliar_satelites_com_enlace_atual() {
         manifesto.visitantes);
 
     xSemaphoreTake(mutex_estado, portMAX_DELAY);
-    if (situacao.estado == EstadoServicoOta::Baixando ||
-        situacao.estado == EstadoServicoOta::Verificando ||
+    if ((situacao.estado != EstadoServicoOta::Atualizado &&
+         situacao.estado != EstadoServicoOta::AguardandoAutorizacao) ||
+        manifesto_disponivel.equipe.versao[0] == '\0' ||
+        manifesto_disponivel.visitantes.versao[0] == '\0' ||
         alvo_autorizado != AlvoOta::Nenhum) {
         xSemaphoreGive(mutex_estado);
         return;
@@ -402,6 +417,11 @@ void reconciliar_satelites_com_enlace_atual() {
         situacao.visitantes.estado == EstadoOtaSatelite::AguardandoAutorizacao;
     situacao.estado = possui_pendente ? EstadoServicoOta::AguardandoAutorizacao
                                       : EstadoServicoOta::Atualizado;
+    if (!possui_pendente) prazo_autorizacao_ms = 0;
+    else if (prazo_autorizacao_ms == 0) {
+        prazo_autorizacao_ms = esp_timer_get_time() / 1000 +
+            configuracao::TEMPO_LIMITE_AUTORIZACAO_OTA_MS;
+    }
     situacao.ultimo_erro = ESP_OK;
     const EstadoOtaSatelite equipe_atual = situacao.equipe.estado;
     const EstadoOtaSatelite visitantes_atual = situacao.visitantes.estado;
@@ -472,6 +492,11 @@ esp_err_t verificar_atualizacao() {
     situacao.estado = possui_pendente ? EstadoServicoOta::AguardandoAutorizacao
                                       : EstadoServicoOta::Atualizado;
     situacao.alvo_ativo = AlvoOta::Nenhum;
+    if (!possui_pendente) prazo_autorizacao_ms = 0;
+    else if (prazo_autorizacao_ms == 0) {
+        prazo_autorizacao_ms = esp_timer_get_time() / 1000 +
+            configuracao::TEMPO_LIMITE_AUTORIZACAO_OTA_MS;
+    }
     situacao.ultimo_erro = ESP_OK;
     xSemaphoreGive(mutex_estado);
     ESP_LOGI(ETIQUETA, "Resultado OTA: mestre=%s | equipe=%s | visitantes=%s",
@@ -480,7 +505,9 @@ esp_err_t verificar_atualizacao() {
              servico_ota_nome_estado_satelite(visitantes.estado));
     if (possui_pendente) {
         ESP_LOGW(ETIQUETA,
-                 "Há firmware novo aguardando autorização no menu de atualização OTA");
+                 "Há firmware novo aguardando autorização OTA por até %lu segundo(s)",
+                 static_cast<unsigned long>(
+                     configuracao::TEMPO_LIMITE_AUTORIZACAO_OTA_MS / 1000));
     } else {
         ESP_LOGI(ETIQUETA, "Todos os alvos acessíveis já usam as versões mais recentes");
     }
@@ -789,7 +816,7 @@ void executar_atualizacao_autorizada() {
     xSemaphoreTake(mutex_estado, portMAX_DELAY);
     alvo = alvo_autorizado;
     if (situacao.estado != EstadoServicoOta::AguardandoAutorizacao ||
-        alvo == AlvoOta::Nenhum) {
+        alvo == AlvoOta::Nenhum || !autorizacao_no_prazo()) {
         xSemaphoreGive(mutex_estado);
         ESP_LOGW(ETIQUETA,
                  "A instalação não foi iniciada porque não existe atualização pendente");
@@ -802,6 +829,7 @@ void executar_atualizacao_autorizada() {
     atualizar_visitantes =
         situacao.visitantes.estado == EstadoOtaSatelite::AguardandoAutorizacao;
     alvo_autorizado = AlvoOta::Nenhum;
+    prazo_autorizacao_ms = 0;
     cancelamento_em_andamento = false;
     xSemaphoreGive(mutex_estado);
 
@@ -833,11 +861,12 @@ void executar_atualizacao_autorizada() {
     }
 }
 
-void cancelar_atualizacao() {
+void cancelar_atualizacao(bool prazo_esgotado = false) {
     xSemaphoreTake(mutex_estado, portMAX_DELAY);
     if (situacao.estado == EstadoServicoOta::AguardandoAutorizacao) {
         manifesto_disponivel = {};
         alvo_autorizado = AlvoOta::Nenhum;
+        prazo_autorizacao_ms = 0;
         situacao.versao_disponivel[0] = '\0';
         if (situacao.equipe.estado == EstadoOtaSatelite::AguardandoAutorizacao)
             situacao.equipe.estado = EstadoOtaSatelite::Cancelado;
@@ -845,8 +874,9 @@ void cancelar_atualizacao() {
             situacao.visitantes.estado = EstadoOtaSatelite::Cancelado;
         situacao.estado = EstadoServicoOta::Cancelado;
         situacao.ultimo_erro = ESP_OK;
-        ESP_LOGW(ETIQUETA,
-                 "Atualização cancelada. Nenhuma alteração foi feita no firmware em execução");
+        ESP_LOGW(ETIQUETA, "%s. Firmware em execução preservado",
+                 prazo_esgotado ? "Prazo de autorização OTA esgotado; atualização descartada"
+                                : "Atualização OTA cancelada");
     }
     cancelamento_em_andamento = false;
     xSemaphoreGive(mutex_estado);
@@ -862,8 +892,15 @@ void tarefa_ota(void*) {
         }
         xSemaphoreTake(mutex_estado, portMAX_DELAY);
         const uint32_t intervalo_minutos = situacao.intervalo_verificacao_minutos;
+        const int64_t prazo = prazo_autorizacao_ms;
         xSemaphoreGive(mutex_estado);
-        const TickType_t espera = pdMS_TO_TICKS(intervalo_minutos * 60UL * 1000UL);
+        uint32_t espera_ms = intervalo_minutos * 60UL * 1000UL;
+        if (prazo != 0) {
+            const int64_t restante_ms = prazo - esp_timer_get_time() / 1000;
+            if (restante_ms <= 0) espera_ms = 0;
+            else if (restante_ms < espera_ms) espera_ms = static_cast<uint32_t>(restante_ms);
+        }
+        const TickType_t espera = pdMS_TO_TICKS(espera_ms);
         servico_supervisao_informar_atividade(ModuloSupervisionado::Ota,
             "servico_ota", "aguardando solicitacao", 0);
         EventBits_t eventos = xEventGroupWaitBits(
@@ -873,8 +910,14 @@ void tarefa_ota(void*) {
         servico_supervisao_informar_atividade(ModuloSupervisionado::Ota,
             "servico_ota", "processando solicitacao", 180000);
         if ((eventos & BIT_CANCELAR) != 0) cancelar_atualizacao();
+        xSemaphoreTake(mutex_estado, portMAX_DELAY);
+        const bool expirou = situacao.estado == EstadoServicoOta::AguardandoAutorizacao &&
+                             prazo_autorizacao_ms != 0 && !autorizacao_no_prazo();
+        xSemaphoreGive(mutex_estado);
+        if (expirou) cancelar_atualizacao(true);
         if ((eventos & BIT_AUTORIZAR) != 0) executar_atualizacao_autorizada();
-        verificar = eventos == 0 || (eventos & BIT_VERIFICAR) != 0;
+        verificar = (eventos & BIT_VERIFICAR) != 0 ||
+                   (eventos == 0 && !expirou);
     }
 }
 
@@ -924,6 +967,7 @@ esp_err_t servico_ota_iniciar() {
     situacao = {};
     manifesto_disponivel = {};
     alvo_autorizado = AlvoOta::Nenhum;
+    prazo_autorizacao_ms = 0;
     situacao.estado = EstadoServicoOta::AguardandoRede;
     std::strncpy(situacao.versao_atual, esp_app_get_description()->version,
                  sizeof(situacao.versao_atual) - 1);
@@ -978,7 +1022,7 @@ esp_err_t servico_ota_autorizar_atualizacao() {
     xSemaphoreTake(mutex_estado, portMAX_DELAY);
     const bool aguardando = situacao.estado == EstadoServicoOta::AguardandoAutorizacao &&
                             situacao.versao_disponivel[0] != '\0' &&
-                            alvo_autorizado == AlvoOta::Nenhum;
+                            alvo_autorizado == AlvoOta::Nenhum && autorizacao_no_prazo();
     if (aguardando) alvo_autorizado = AlvoOta::Mestre;
     xSemaphoreGive(mutex_estado);
     if (!aguardando) {
@@ -1009,7 +1053,7 @@ esp_err_t servico_ota_autorizar_atualizacao_todos() {
         situacao.estado == EstadoServicoOta::AguardandoAutorizacao &&
         algum_pendente && alvo_disponivel(situacao.equipe.estado) &&
         alvo_disponivel(situacao.visitantes.estado) &&
-        alvo_autorizado == AlvoOta::Nenhum;
+        alvo_autorizado == AlvoOta::Nenhum && autorizacao_no_prazo();
     if (aguardando) alvo_autorizado = AlvoOta::Todos;
     const EstadoOtaSatelite estado_equipe = situacao.equipe.estado;
     const EstadoOtaSatelite estado_visitantes = situacao.visitantes.estado;
@@ -1040,7 +1084,7 @@ esp_err_t servico_ota_autorizar_atualizacao_satelite(AlvoOta alvo) {
                                               ? situacao.equipe : situacao.visitantes;
     const bool aguardando = situacao.estado == EstadoServicoOta::AguardandoAutorizacao &&
                             satelite.estado == EstadoOtaSatelite::AguardandoAutorizacao &&
-                            alvo_autorizado == AlvoOta::Nenhum;
+                            alvo_autorizado == AlvoOta::Nenhum && autorizacao_no_prazo();
     if (aguardando) alvo_autorizado = alvo;
     xSemaphoreGive(mutex_estado);
     if (!aguardando) {

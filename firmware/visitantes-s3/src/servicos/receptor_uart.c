@@ -15,6 +15,51 @@
 #include "freertos/task.h"
 #include "protocolo_enlace_uart.h"
 #include "servico_comandos_satelite.h"
+#include "servicos/diagnostico_visitantes.h"
+#include "gerenciadores/gerenciador_wifi.h"
+
+static esp_err_t obter_clientes_para_comando(uint8_t inicio,
+                                             resposta_clientes_wifi_satelite_t *saida)
+{
+    if (saida == NULL || (inicio != 0 && inicio != 5)) return ESP_ERR_INVALID_ARG;
+    situacao_clientes_wifi_t situacao = {0};
+    esp_err_t erro = gerenciador_wifi_obter_clientes(&situacao);
+    if (erro != ESP_OK) return erro;
+    memset(saida, 0, sizeof(*saida));
+    saida->limite_sessao_minutos = situacao.limite_sessao_minutos;
+    saida->quantidade_total = situacao.quantidade;
+    saida->inicio = inicio;
+    for (uint8_t i = inicio; i < situacao.quantidade && i < inicio + 5; ++i) {
+        registro_cliente_wifi_satelite_t *destino =
+            &saida->clientes[saida->quantidade_pagina++];
+        memcpy(destino->mac, situacao.clientes[i].mac, sizeof(destino->mac));
+        destino->aid = situacao.clientes[i].aid;
+        destino->conectado_ms = situacao.clientes[i].conectado_ms;
+    }
+    return ESP_OK;
+}
+
+static esp_err_t gerir_wifi_para_comando(
+    const solicitacao_gestao_wifi_satelite_t *pedido,
+    resposta_gestao_wifi_satelite_t *saida)
+{
+    if (pedido == NULL || saida == NULL || pedido->alvo != NO_COMANDO_VISITANTES)
+        return ESP_ERR_INVALID_ARG;
+    esp_err_t erro = ESP_ERR_INVALID_ARG;
+    if (pedido->acao == GESTAO_WIFI_SATELITE_LIMITE &&
+        pedido->limite_sessao_minutos <= 1440)
+        erro = gerenciador_wifi_definir_limite_sessao(pedido->limite_sessao_minutos);
+    else if (pedido->acao == GESTAO_WIFI_SATELITE_DESCONECTAR)
+        erro = gerenciador_wifi_desconectar_cliente(pedido->mac);
+    if (erro != ESP_OK) return erro;
+    *saida = (resposta_gestao_wifi_satelite_t){
+        .alvo = NO_COMANDO_VISITANTES,
+        .acao = pedido->acao,
+        .limite_sessao_minutos = pedido->limite_sessao_minutos,
+        .aceito = 1,
+    };
+    return ESP_OK;
+}
 #include "servico_ota_satelite.h"
 
 static const char *TAG = "uart_visitantes";
@@ -329,6 +374,9 @@ esp_err_t receptor_uart_iniciar(void)
         .no_satelite = NO_COMANDO_VISITANTES,
         .capacidades_adicionais = 0,
         .enviar = enviar_quadro_enlace,
+        .obter_diagnostico = diagnostico_visitantes_obter,
+        .obter_clientes_wifi = obter_clientes_para_comando,
+        .gerir_wifi = gerir_wifi_para_comando,
     };
     ESP_RETURN_ON_ERROR(
         servico_comandos_satelite_iniciar(&configuracao_comandos), TAG,

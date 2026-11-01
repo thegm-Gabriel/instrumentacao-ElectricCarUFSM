@@ -5,11 +5,14 @@
 #include <algorithm>
 #include <cerrno>
 #include <cinttypes>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <dirent.h>
 #include <strings.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #include "esp_crt_bundle.h"
@@ -31,6 +34,10 @@
 #include "servicos/servico_wifi.h"
 #include "servicos/servico_diagnostico.h"
 #include "servicos/servico_supervisao.h"
+#include "servicos/servico_odometro.h"
+#include "servicos/servico_ota.h"
+#include "servicos/servico_relatorios.h"
+#include "servicos/servico_telemetria.h"
 
 namespace {
 constexpr char ETIQUETA[] = "registro_telemetria";
@@ -72,6 +79,7 @@ QueueHandle_t fila = nullptr;
 SemaphoreHandle_t arquivo_pronto_para_upload = nullptr;
 TaskHandle_t tarefa_registro_handle = nullptr;
 TaskHandle_t tarefa_upload_handle = nullptr;
+TaskHandle_t tarefa_historico_handle = nullptr;
 FILE* arquivo_atual = nullptr;
 char caminho_temporario[192]{};
 char nome_final_atual[96]{};
@@ -87,69 +95,556 @@ esp_err_t erro_preparacao_upload = ESP_OK;
 // Somente tarefa_registro acessa o arquivo de diagnóstico. Sem hooks de printf,
 // alocações por mensagem ou gravações SD em callbacks de rede/interrupção.
 char caminho_log[192]{};
-uint32_t segmento_log = 0;
+uint32_t numero_log = 0;
 uint32_t ultimo_log_ms = 0;
 uint32_t ultimo_log_tarefas_ms = 0;
+uint32_t janela_log_falha_ate_ms = 0;
+uint32_t janela_log_grave_ate_ms = 0;
 uint32_t repetir_log_ms = 0;
 size_t bytes_log_sessao = 0;
 bool log_limite_avisado = false;
 ResumoSaudeSistema ultimo_log_saude{};
+EstatisticasSensoresDiagnostico ultimos_log_sensores{};
+EstatisticasTelemetria ultimo_log_telemetria{};
+EstatisticasLinkTelemetria ultimo_log_equipe{};
+EstatisticasLinkTelemetria ultimo_log_visitantes{};
+ResumoWifi ultimo_log_wifi{};
+SituacaoOta ultimo_log_ota{};
+EstadoModuloSupervisionado ultimos_log_modulos[
+    static_cast<unsigned>(ModuloSupervisionado::Quantidade)]{};
 uint32_t ultimo_log_sincronizacoes = 0;
 uint32_t ultimo_log_descartes = 0;
 esp_err_t ultimo_log_erro_csv = ESP_OK;
 DiagnosticoTarefas* tarefas_log = nullptr;
+// Histórico curto em RAM; o escritor SD nunca roda na tarefa de telemetria.
+struct AmostraHistorico {
+    uint64_t ordem = 0;
+    int64_t utc = 0;
+    uint32_t ms = 0;
+    uint32_t causas = 0;
+    uint32_t heap_interno = 0;
+    uint32_t bloco_interno = 0;
+    uint32_t psram = 0;
+    uint32_t pilha_minima = 0;
+    uint32_t erros_sensores = 0;
+    uint32_t erros_i2c = 0;
+    uint32_t erros_uart = 0;
+    uint32_t falhas_ota = 0;
+    uint32_t falhas_supervisao = 0;
+    uint32_t falhas_telemetria = 0;
+    uint32_t descartes_csv = 0;
+    uint32_t wifi_desconexoes = 0;
+    uint32_t link_equipe_invalidas = 0;
+    uint32_t link_visitantes_invalidas = 0;
+    int32_t wifi_erro = 0;
+    uint32_t sat_equipe_idade_ms = 0;
+    uint32_t sat_visitantes_idade_ms = 0;
+    uint16_t sat_equipe_rtt_ms = 0;
+    uint16_t sat_visitantes_rtt_ms = 0;
+    uint8_t saude = 0;
+    uint8_t sat_equipe_responde = 0;
+    uint8_t sat_visitantes_responde = 0;
+    uint8_t tarefas_atrasadas = 0;
+    char tarefa_menor_pilha[24]{};
+};
+constexpr size_t AMOSTRAS_HISTORICO_PSRAM = 120;
+constexpr size_t AMOSTRAS_HISTORICO_INTERNO = 30;
+AmostraHistorico* amostras_historico = nullptr;
+AmostraHistorico* historico_pendente = nullptr;
+size_t capacidade_historico = 0;
+size_t inicio_historico = 0;
+size_t quantidade_historico = 0;
+size_t quantidade_pendente = 0;
+uint64_t ordem_amostra = 0;
+uint64_t ordem_incidente_pendente = 0;
+uint32_t incidentes_nao_retidos = 0;
+uint32_t amostras_ram_descartadas = 0;
+uint64_t ordem_historico_tentativa = 0;
+bool historico_parcial_possivel = false;
+SemaphoreHandle_t mutex_historico = nullptr;
+uint32_t ultimo_backup_ms = 0;
+uint32_t sequencia_backup = 0;
+uint64_t ultimo_odometro_backup_mm = UINT64_MAX;
 esp_err_t criar_diretorio(const char* caminho);
+
+void iniciar_sequencia_logs() {
+    DIR* diretorio = opendir(configuracao::DIRETORIO_LOG_ESP);
+    if (diretorio == nullptr) return;
+    uint32_t maior = 0;
+    while (dirent* entrada = readdir(diretorio)) {
+        const char* nome = entrada->d_name;
+        if (std::strlen(nome) != 16 || std::strncmp(nome, "esp_", 4) != 0 ||
+            std::strcmp(nome + 12, ".log") != 0) continue;
+        uint32_t numero = 0;
+        bool valido = true;
+        for (size_t i = 4; i < 12; ++i) {
+            if (nome[i] < '0' || nome[i] > '9') {
+                valido = false;
+                break;
+            }
+            numero = numero * 10U + static_cast<uint32_t>(nome[i] - '0');
+        }
+        if (valido && numero > maior) maior = numero;
+    }
+    closedir(diretorio);
+    numero_log = maior + 1U;
+    if (numero_log == 0) numero_log = 1;
+}
+
+void acertar_relogio_http_interno(const char* valor) {
+    if (valor == nullptr || std::time(nullptr) >= 1704067200) return;
+    char dia_semana[4]{};
+    char mes[4]{};
+    char zona[4]{};
+    int dia = 0, ano = 0, hora = 0, minuto = 0, segundo = 0;
+    if (std::sscanf(valor, "%3s, %d %3s %d %d:%d:%d %3s", dia_semana,
+                    &dia, mes, &ano, &hora, &minuto, &segundo, zona) != 8 ||
+        std::strcmp(zona, "GMT") != 0 || ano < 2024 || ano > 2100 ||
+        dia < 1 || dia > 31 || hora > 23 || minuto > 59 || segundo > 60) return;
+    const char* meses[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+    int indice_mes = -1;
+    for (int i = 0; i < 12; ++i) {
+        if (std::strcmp(mes, meses[i]) == 0) { indice_mes = i; break; }
+    }
+    if (indice_mes < 0) return;
+    // Converte a data UTC sem depender de timegm(), ausente em algumas
+    // versões da libc fornecida com o ESP-IDF.
+    int ano_civil = ano;
+    const unsigned mes_civil = static_cast<unsigned>(indice_mes + 1);
+    ano_civil -= mes_civil <= 2;
+    const int era = ano_civil / 400;
+    const unsigned ano_da_era = static_cast<unsigned>(ano_civil - era * 400);
+    const unsigned mes_ajustado = mes_civil > 2 ? mes_civil - 3U : mes_civil + 9U;
+    const unsigned dia_do_ano =
+        (153U * mes_ajustado + 2U) / 5U +
+        static_cast<unsigned>(dia) - 1U;
+    const unsigned ano_da_era_dias = ano_da_era * 365U + ano_da_era / 4U -
+        ano_da_era / 100U + dia_do_ano;
+    const int64_t dias_desde_epoch =
+        static_cast<int64_t>(era) * 146097 + ano_da_era_dias - 719468;
+    const time_t epoch = static_cast<time_t>(
+        dias_desde_epoch * 86400 + hora * 3600 + minuto * 60 + segundo);
+    if (epoch < 1704067200) return;
+    timeval instante{};
+    instante.tv_sec = epoch;
+    if (settimeofday(&instante, nullptr) == 0) {
+        ESP_LOGI(ETIQUETA, "Relógio UTC sincronizado com cabeçalho HTTPS Date");
+    }
+}
+
+uint32_t checksum_backup(const char* dados, size_t tamanho) {
+    uint32_t hash = 2166136261U;
+    for (size_t i = 0; i < tamanho; ++i) {
+        hash = (hash ^ static_cast<unsigned char>(dados[i])) * 16777619U;
+    }
+    return hash;
+}
+
+bool ler_backup(const char* caminho, uint32_t* sequencia, uint64_t* odometro_mm) {
+    FILE* arquivo = std::fopen(caminho, "rb");
+    if (arquivo == nullptr) return false;
+    char conteudo[1024]{};
+    const size_t lidos = std::fread(conteudo, 1, sizeof(conteudo) - 1, arquivo);
+    const bool completo = std::feof(arquivo) != 0;
+    std::fclose(arquivo);
+    if (!completo || lidos == 0) return false;
+    conteudo[lidos] = '\0';
+    char* checksum = std::strstr(conteudo, "checksum=");
+    unsigned esperado = 0;
+    unsigned numero = 0;
+    unsigned long long total = 0;
+    if (checksum == nullptr ||
+        std::sscanf(checksum, "checksum=%8x", &esperado) != 1 ||
+        std::sscanf(conteudo, "formato=1\nsequencia=%u\nodometro_mm=%llu\n",
+                    &numero, &total) != 2 ||
+        total > 1000000000000ULL ||
+        checksum_backup(conteudo, static_cast<size_t>(checksum - conteudo)) != esperado) {
+        return false;
+    }
+    *sequencia = numero;
+    *odometro_mm = static_cast<uint64_t>(total);
+    return true;
+}
+
+void recuperar_backup_configuracao() {
+    uint32_t numero_principal = 0;
+    uint32_t numero_temporario = 0;
+    uint64_t odometro_principal = 0;
+    uint64_t odometro_temporario = 0;
+    const bool principal = ler_backup(configuracao::ARQUIVO_BACKUP_CONFIGURACAO,
+                                      &numero_principal, &odometro_principal);
+    char temporario[96]{};
+    std::snprintf(temporario, sizeof(temporario), "%s.tmp",
+                  configuracao::ARQUIVO_BACKUP_CONFIGURACAO);
+    const bool pendente = ler_backup(temporario, &numero_temporario,
+                                     &odometro_temporario);
+    if (!principal && !pendente) return;
+    const bool usar_temporario = pendente &&
+        (!principal || static_cast<int32_t>(numero_temporario - numero_principal) > 0);
+    sequencia_backup = usar_temporario ? numero_temporario : numero_principal;
+    const uint64_t total_mm = usar_temporario ? odometro_temporario : odometro_principal;
+    ultimo_odometro_backup_mm = total_mm;
+    const esp_err_t erro = servico_odometro_restaurar_se_ausente(total_mm);
+    if (erro != ESP_OK && erro != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(ETIQUETA, "Backup SD encontrado, mas restauração do odômetro falhou: %s",
+                 esp_err_to_name(erro));
+    }
+    if (usar_temporario) {
+        (void)std::remove(configuracao::ARQUIVO_BACKUP_CONFIGURACAO);
+        if (std::rename(temporario, configuracao::ARQUIVO_BACKUP_CONFIGURACAO) != 0) {
+            ESP_LOGW(ETIQUETA, "Backup temporário válido preservado: errno=%d", errno);
+        }
+    }
+}
+
+void atualizar_backup_configuracao(uint32_t instante) {
+    if (ultimo_backup_ms != 0 && instante - ultimo_backup_ms <
+            configuracao::INTERVALO_BACKUP_CONFIGURACAO_MS) return;
+    const EstadoOdometro odometro = servico_odometro_obter_estado();
+    if (!odometro.iniciado || !std::isfinite(odometro.odometro_m) ||
+        odometro.odometro_m < 0) return;
+    const uint64_t total_mm = static_cast<uint64_t>(
+        std::llround(odometro.odometro_m * 1000.0));
+    const ResumoWifi wifi = servico_wifi_obter_resumo();
+    const SituacaoOta ota = servico_ota_obter_situacao();
+    if (ota.intervalo_verificacao_minutos == 0) return;
+    ultimo_backup_ms = instante;
+    // Um minuto limita desgaste do SD; o retrato guarda configuração sem senhas.
+    char conteudo[1024]{};
+    const int tamanho = std::snprintf(conteudo, sizeof(conteudo),
+        "formato=1\nsequencia=%" PRIu32 "\nodometro_mm=%" PRIu64 "\n"
+        "wifi_secundarias=%u\nwifi_automatico=%u\n"
+        "wifi_tentativas=%u\nwifi_tempo_tentativa_ms=%" PRIu32 "\n"
+        "wifi_intervalo_ms=%" PRIu32 "\nwifi_limite_sessao_ms=%" PRIu32 "\n"
+        "ota_intervalo_min=%" PRIu32 "\n"
+        "relatorio_telemetria_ms=%" PRIu32 "\nrelatorio_uart_ms=%" PRIu32 "\n"
+        "relatorio_sistema_ms=%" PRIu32 "\nrelatorio_ota_ms=%" PRIu32 "\n"
+        "relatorios_pausados=%u\n"
+        "registro_intervalo_ms=%" PRIu32 "\nregistro_duracao_arquivo_ms=%" PRIu32 "\n",
+        ++sequencia_backup, total_mm, static_cast<unsigned>(wifi.quantidade_redes_usuario),
+        static_cast<unsigned>(wifi.conectar_secundarias_automaticamente),
+        static_cast<unsigned>(wifi.politica.tentativas_por_rede),
+        wifi.politica.tempo_por_tentativa_ms,
+        wifi.politica.intervalo_entre_tentativas_ms,
+        wifi.politica.tempo_limite_sessao_ms,
+        ota.intervalo_verificacao_minutos,
+        servico_relatorios_obter_intervalo(GrupoRelatorio::Telemetria),
+        servico_relatorios_obter_intervalo(GrupoRelatorio::Uart),
+        servico_relatorios_obter_intervalo(GrupoRelatorio::Sistema),
+        servico_relatorios_obter_intervalo(GrupoRelatorio::Ota),
+        static_cast<unsigned>(servico_relatorios_estao_pausados()),
+        configuracao::INTERVALO_REGISTRO_TELEMETRIA_MS,
+        configuracao::DURACAO_ARQUIVO_TELEMETRIA_MS);
+    if (tamanho <= 0 || tamanho + 19 >= static_cast<int>(sizeof(conteudo))) return;
+    size_t usados = static_cast<size_t>(tamanho);
+    auto adicionar_rede = [&](const char* chave, const char* ssid) {
+        if (usados + std::strlen(chave) + 34 >= sizeof(conteudo)) return;
+        usados += static_cast<size_t>(std::snprintf(conteudo + usados,
+                sizeof(conteudo) - usados, "%s=", chave));
+        for (size_t i = 0; i < 32 && ssid[i] != '\0'; ++i) {
+            const unsigned char c = static_cast<unsigned char>(ssid[i]);
+            conteudo[usados++] = c >= 32 && c < 127 && c != '=' ? c : '_';
+        }
+        conteudo[usados++] = '\n';
+        conteudo[usados] = '\0';
+    };
+    adicionar_rede("wifi_principal", wifi.rede_principal);
+    for (unsigned i = 0; i < wifi.quantidade_redes_usuario; ++i) {
+        char chave[32]{};
+        std::snprintf(chave, sizeof(chave), "wifi_secundaria_%u", i + 1);
+        adicionar_rede(chave, wifi.redes_usuario[i]);
+    }
+    if (usados + 19 >= sizeof(conteudo)) return;
+    const uint32_t hash = checksum_backup(conteudo, usados);
+    const int final = std::snprintf(conteudo + usados, sizeof(conteudo) - usados,
+                                    "checksum=%08" PRIx32 "\n", hash);
+    if (final <= 0 || final >= static_cast<int>(sizeof(conteudo) - usados)) return;
+    char temporario[96]{};
+    std::snprintf(temporario, sizeof(temporario), "%s.tmp",
+                  configuracao::ARQUIVO_BACKUP_CONFIGURACAO);
+    FILE* arquivo = std::fopen(temporario, "wb");
+    if (arquivo == nullptr) {
+        ESP_LOGW(ETIQUETA, "Falha ao abrir backup SD: errno=%d", errno);
+        return;
+    }
+    const size_t comprimento = usados + static_cast<size_t>(final);
+    const bool falhou = std::fwrite(conteudo, 1, comprimento, arquivo) != comprimento ||
+        std::fflush(arquivo) != 0 || fsync(fileno(arquivo)) != 0;
+    const bool fechamento_falhou = std::fclose(arquivo) != 0;
+    if (falhou || fechamento_falhou) {
+        ESP_LOGW(ETIQUETA, "Falha ao gravar backup SD: errno=%d", errno);
+        return;
+    }
+    (void)std::remove(configuracao::ARQUIVO_BACKUP_CONFIGURACAO);
+    if (std::rename(temporario, configuracao::ARQUIVO_BACKUP_CONFIGURACAO) != 0) {
+        ESP_LOGW(ETIQUETA, "Backup temporário preservado: errno=%d", errno);
+        return;
+    }
+    if (total_mm != ultimo_odometro_backup_mm) {
+        ESP_LOGI(ETIQUETA, "Backup de configuração atualizado: sequência %" PRIu32
+                 ", odômetro %.3f km", sequencia_backup, odometro.odometro_m / 1000.0);
+        ultimo_odometro_backup_mm = total_mm;
+    }
+}
+
+esp_err_t preparar_historico_no_arquivo(FILE* arquivo, uint32_t sessao_atual,
+                                         uint64_t ordem_incidente,
+                                         size_t amostras_esperadas,
+                                         bool* ja_gravado) {
+    if (arquivo == nullptr || ja_gravado == nullptr) return ESP_ERR_INVALID_ARG;
+    *ja_gravado = false;
+    if (std::fseek(arquivo, 0, SEEK_END) != 0) return ESP_FAIL;
+    const long tamanho_arquivo = std::ftell(arquivo);
+    if (tamanho_arquivo < 0) return ESP_FAIL;
+    // Um lote tem no máximo 121 linhas curtas. Só a cauda pode conter a
+    // tentativa anterior; não varre um log de 8 MiB no caminho de registro.
+    constexpr long CAUDA_BUSCA_BYTES = 128L * 1024L;
+    const long inicio_busca = tamanho_arquivo > CAUDA_BUSCA_BYTES
+        ? tamanho_arquivo - CAUDA_BUSCA_BYTES : 0;
+    char linha[512]{};
+    if (inicio_busca != 0) {
+        if (std::fseek(arquivo, inicio_busca - 1, SEEK_SET) != 0) return ESP_FAIL;
+        const int anterior = std::fgetc(arquivo);
+        if (anterior == EOF) return ESP_FAIL;
+        if (anterior != '\n' &&
+            std::fgets(linha, sizeof(linha), arquivo) == nullptr) return ESP_FAIL;
+    } else if (std::fseek(arquivo, 0, SEEK_SET) != 0) {
+        return ESP_FAIL;
+    }
+    long inicio_incompleto = -1;
+    size_t amostras_validas = 0;
+    while (true) {
+        const long posicao = std::ftell(arquivo);
+        if (posicao < 0) return ESP_FAIL;
+        if (std::fgets(linha, sizeof(linha), arquivo) == nullptr) break;
+        unsigned sessao_lida = 0;
+        unsigned long long ordem_lida = 0;
+        if (std::sscanf(linha,
+                "HIST_INICIO sessao=%8x incidente_ordem=%llu",
+                &sessao_lida, &ordem_lida) == 2 &&
+            sessao_lida == sessao_atual && ordem_lida == ordem_incidente) {
+            inicio_incompleto = posicao;
+            amostras_validas = 0;
+        } else if (inicio_incompleto >= 0 &&
+                   std::strncmp(linha, "HIST ordem=", 11) == 0 &&
+                   std::strchr(linha, '\n') != nullptr) {
+            amostras_validas++;
+        } else if (inicio_incompleto >= 0 &&
+                   std::sscanf(linha, "HIST_FIM incidente_ordem=%llu",
+                               &ordem_lida) == 1 &&
+                   ordem_lida == ordem_incidente) {
+            if (amostras_validas == amostras_esperadas) {
+                *ja_gravado = true;
+                inicio_incompleto = -1;
+            }
+        }
+    }
+    if (std::ferror(arquivo)) return ESP_FAIL;
+    if (inicio_incompleto >= 0 &&
+        ftruncate(fileno(arquivo), static_cast<off_t>(inicio_incompleto)) != 0) {
+        return ESP_FAIL;
+    }
+    return std::fseek(arquivo, 0, SEEK_END) == 0 ? ESP_OK : ESP_FAIL;
+}
 
 void registrar_diagnostico_esp() {
     const uint32_t instante = static_cast<uint32_t>(esp_timer_get_time() / 1000);
     if (repetir_log_ms != 0 && static_cast<int32_t>(instante - repetir_log_ms) < 0) return;
-    if (bytes_log_sessao >= configuracao::LIMITE_LOG_ESP_POR_SESSAO) {
+    bool ha_historico_pendente = historico_parcial_possivel;
+    bool historico_grave_pendente = false;
+    if (mutex_historico != nullptr &&
+        xSemaphoreTake(mutex_historico, pdMS_TO_TICKS(10)) == pdTRUE) {
+        ha_historico_pendente = quantidade_pendente != 0 ||
+            incidentes_nao_retidos != 0;
+        if (quantidade_pendente != 0) {
+            const auto& incidente = historico_pendente[quantidade_pendente - 1];
+            historico_grave_pendente =
+                incidente.saude == static_cast<uint8_t>(EstadoSaudeSistema::Falha) ||
+                (incidente.causas & (CausaSaudeHeapCritico |
+                                     CausaSaudePilhaCritica |
+                                     CausaSaudeSupervisao)) != 0 ||
+                incidente.tarefas_atrasadas != 0;
+        }
+        xSemaphoreGive(mutex_historico);
+    }
+    if (bytes_log_sessao >= configuracao::LIMITE_LOG_ESP_POR_SESSAO &&
+        !ha_historico_pendente) {
         if (!log_limite_avisado) ESP_LOGW(ETIQUETA, "Limite do log ESP nesta sessão atingido; CSV continua ativo");
         log_limite_avisado = true;
         return;
     }
     const auto saude = servico_diagnostico_obter_resumo();
     if (!saude.valido) return;
-    // Agrega rajadas de erros para não disputar o SD a cada amostra.
-    if (ultimo_log_ms != 0 && instante - ultimo_log_ms < 1000) return;
     const auto registro = servico_registro_telemetria_obter_estado();
-    const bool mudou = saude.causas_ativas != ultimo_log_saude.causas_ativas ||
+    const auto sensores = servico_diagnostico_obter_sensores();
+    const auto telemetria = servico_telemetria_obter_estatisticas();
+    const auto equipe = servico_telemetria_obter_estatisticas_link(
+        SateliteTelemetria::Equipe);
+    const auto visitantes = servico_telemetria_obter_estatisticas_link(
+        SateliteTelemetria::Visitantes);
+    const auto wifi = servico_wifi_obter_resumo();
+    const auto ota = servico_ota_obter_situacao();
+    EstadoModuloSupervisionado modulos[
+        static_cast<unsigned>(ModuloSupervisionado::Quantidade)]{};
+    bool falha_supervisao_nova = false;
+    bool modulo_mudou = false;
+    bool modulo_grave = false;
+    for (unsigned i = 0; i < static_cast<unsigned>(ModuloSupervisionado::Quantidade); ++i) {
+        modulos[i] = servico_supervisao_obter_estado(static_cast<ModuloSupervisionado>(i));
+        const auto& anterior = ultimos_log_modulos[i];
+        falha_supervisao_nova |= modulos[i].falhas_detectadas > anterior.falhas_detectadas ||
+            modulos[i].recuperacoes_com_falha > anterior.recuperacoes_com_falha ||
+            (modulos[i].ultimo_resultado != ESP_OK &&
+             modulos[i].ultimo_resultado != anterior.ultimo_resultado) ||
+            (modulos[i].atrasado && !anterior.atrasado);
+        modulo_mudou |= modulos[i].atrasado != anterior.atrasado ||
+            modulos[i].em_recuperacao != anterior.em_recuperacao ||
+            modulos[i].ultimo_resultado != anterior.ultimo_resultado;
+        modulo_grave |= modulos[i].atrasado || modulos[i].em_recuperacao;
+    }
+    const bool falha_sensor_nova =
+        sensores.adc.total > ultimos_log_sensores.adc.total ||
+        sensores.mpu6050.total > ultimos_log_sensores.mpu6050.total ||
+        sensores.encoder.total > ultimos_log_sensores.encoder.total ||
+        sensores.persistencia_odometro.total >
+            ultimos_log_sensores.persistencia_odometro.total;
+    const bool falha_link_nova =
+        telemetria.pacotes_com_falha > ultimo_log_telemetria.pacotes_com_falha ||
+        equipe.confirmacoes_invalidas > ultimo_log_equipe.confirmacoes_invalidas ||
+        visitantes.confirmacoes_invalidas > ultimo_log_visitantes.confirmacoes_invalidas ||
+        (ultimo_log_equipe.respondeu && !equipe.respondeu) ||
+        (ultimo_log_visitantes.respondeu && !visitantes.respondeu);
+    const bool falha_wifi_nova =
+        wifi.desconexoes_inesperadas > ultimo_log_wifi.desconexoes_inesperadas ||
+        (wifi.ultimo_erro != ESP_OK && wifi.ultimo_erro != ultimo_log_wifi.ultimo_erro) ||
+        (ultimo_log_wifi.conectado && !wifi.conectado && wifi.sessao_em_andamento);
+    const bool falha_ota_nova =
+        ota.falhas > ultimo_log_ota.falhas ||
+        (ota.ultimo_erro != ESP_OK && ota.ultimo_erro != ultimo_log_ota.ultimo_erro) ||
+        (ota.estado == EstadoServicoOta::Falha &&
+         ultimo_log_ota.estado != EstadoServicoOta::Falha) ||
+        (ota.equipe.estado == EstadoOtaSatelite::Falha &&
+         ultimo_log_ota.equipe.estado != EstadoOtaSatelite::Falha) ||
+        (ota.equipe.ultimo_erro != ESP_OK &&
+         ota.equipe.ultimo_erro != ultimo_log_ota.equipe.ultimo_erro) ||
+        (ota.visitantes.estado == EstadoOtaSatelite::Falha &&
+         ultimo_log_ota.visitantes.estado != EstadoOtaSatelite::Falha) ||
+        (ota.visitantes.ultimo_erro != ESP_OK &&
+         ota.visitantes.ultimo_erro != ultimo_log_ota.visitantes.ultimo_erro);
+    const bool falha_registro_nova =
+        registro.amostras_descartadas > ultimo_log_descartes ||
+        (registro.ultimo_erro != ESP_OK && registro.ultimo_erro != ultimo_log_erro_csv) ||
+        (registro.sincronizacoes_finalizadas > ultimo_log_sincronizacoes &&
+         registro.ultimo_resultado_sincronizacao != ESP_OK);
+    const bool falha_saude_nova =
+        (saude.causas_ativas & ~ultimo_log_saude.causas_ativas) != 0 ||
+        saude.erros_sensores > ultimo_log_saude.erros_sensores ||
+        saude.erros_i2c > ultimo_log_saude.erros_i2c ||
+        saude.erros_uart > ultimo_log_saude.erros_uart ||
+        saude.descartes_uart > ultimo_log_saude.descartes_uart ||
+        saude.falhas_ota > ultimo_log_saude.falhas_ota ||
+        saude.falhas_supervisao > ultimo_log_saude.falhas_supervisao;
+    const bool falha_nova = falha_saude_nova || falha_sensor_nova ||
+        falha_link_nova || falha_wifi_nova || falha_ota_nova ||
+        falha_supervisao_nova || falha_registro_nova;
+    const uint32_t causas_graves = CausaSaudeHeapCritico |
+        CausaSaudePilhaCritica | CausaSaudeSupervisao;
+    const bool grave = saude.estado == EstadoSaudeSistema::Falha ||
+        (saude.causas_ativas & causas_graves) != 0 || modulo_grave;
+    if (falha_nova) {
+        const uint32_t duracao = grave
+            ? configuracao::JANELA_LOG_FALHA_GRAVE_MS
+            : configuracao::JANELA_LOG_FALHA_MS;
+        if (grave) janela_log_grave_ate_ms = instante + duracao;
+        else janela_log_falha_ate_ms = instante + duracao;
+    }
+    if (ha_historico_pendente) {
+        if (historico_grave_pendente) {
+            janela_log_grave_ate_ms = instante +
+                configuracao::JANELA_LOG_FALHA_GRAVE_MS;
+        } else {
+            janela_log_falha_ate_ms = instante +
+                configuracao::JANELA_LOG_FALHA_MS;
+        }
+    }
+    const bool janela_grave = janela_log_grave_ate_ms != 0 &&
+        static_cast<int32_t>(instante - janela_log_grave_ate_ms) < 0;
+    const bool janela_falha = janela_log_falha_ate_ms != 0 &&
+        static_cast<int32_t>(instante - janela_log_falha_ate_ms) < 0;
+    const uint32_t intervalo = janela_grave
+        ? configuracao::INTERVALO_LOG_FALHA_GRAVE_MS
+        : janela_falha ? configuracao::INTERVALO_LOG_FALHA_MS
+                        : configuracao::INTERVALO_LOG_ESP_MS;
+    // Limita rajadas contínuas a uma gravação por segundo, mesmo com novos erros a 4 Hz.
+    if (ultimo_log_ms != 0 && instante - ultimo_log_ms < 1000) return;
+    const bool mudou = saude.estado != ultimo_log_saude.estado ||
+        saude.causas_ativas != ultimo_log_saude.causas_ativas ||
         saude.erros_sensores != ultimo_log_saude.erros_sensores ||
         saude.erros_i2c != ultimo_log_saude.erros_i2c ||
         saude.erros_uart != ultimo_log_saude.erros_uart ||
         saude.falhas_ota != ultimo_log_saude.falhas_ota ||
         saude.falhas_supervisao != ultimo_log_saude.falhas_supervisao ||
+        modulo_mudou ||
         saude.wifi_conectado != ultimo_log_saude.wifi_conectado ||
+        saude.equipe_respondendo != ultimo_log_saude.equipe_respondendo ||
+        saude.visitantes_respondendo != ultimo_log_saude.visitantes_respondendo ||
+        ota.estado != ultimo_log_ota.estado ||
+        ota.equipe.estado != ultimo_log_ota.equipe.estado ||
+        ota.visitantes.estado != ultimo_log_ota.visitantes.estado ||
+        wifi.ultimo_erro != ultimo_log_wifi.ultimo_erro ||
+        equipe.confirmacoes_invalidas != ultimo_log_equipe.confirmacoes_invalidas ||
+        visitantes.confirmacoes_invalidas != ultimo_log_visitantes.confirmacoes_invalidas ||
         registro.sincronizacoes_finalizadas != ultimo_log_sincronizacoes ||
         registro.amostras_descartadas != ultimo_log_descartes ||
         registro.ultimo_erro != ultimo_log_erro_csv;
-    if (ultimo_log_ms != 0 && !mudou &&
-        instante - ultimo_log_ms < configuracao::INTERVALO_LOG_ESP_MS) return;
+    if (ultimo_log_ms != 0 && !mudou && !falha_nova &&
+        !ha_historico_pendente &&
+        instante - ultimo_log_ms < intervalo) return;
 
     FILE* arquivo = nullptr;
     bool novo = caminho_log[0] == '\0';
     if (!novo) {
         struct stat info{};
         if (stat(caminho_log, &info) != 0) goto falhou;
-        novo = static_cast<size_t>(info.st_size) >= configuracao::TAMANHO_SEGMENTO_LOG_ESP;
+        novo = !ha_historico_pendente &&
+            static_cast<size_t>(info.st_size) >= configuracao::TAMANHO_SEGMENTO_LOG_ESP;
     }
     if (novo) {
         if (criar_diretorio(configuracao::DIRETORIO_LOG_ESP) != ESP_OK) goto falhou;
         // Exclusivo: um identificador de sessão repetido nunca sobrescreve logs.
         for (unsigned tentativa = 0; tentativa < 32 && arquivo == nullptr; ++tentativa) {
-            std::snprintf(caminho_log, sizeof(caminho_log), "%s/esp_%08" PRIx32 "_%04" PRIu32 ".log",
-                          configuracao::DIRETORIO_LOG_ESP, sessao, segmento_log++);
+            std::snprintf(caminho_log, sizeof(caminho_log), "%s/esp_%08" PRIu32 ".log",
+                          configuracao::DIRETORIO_LOG_ESP, numero_log++);
             arquivo = std::fopen(caminho_log, "wx");
             if (arquivo == nullptr && errno != EEXIST) break;
         }
     } else {
-        arquivo = std::fopen(caminho_log, "a");
+        arquivo = std::fopen(caminho_log, "a+");
     }
     if (arquivo == nullptr) goto falhou;
     // Em modo append, a posição inicial do stream pode ser zero. Posiciona
     // explicitamente no fim para contabilizar só os bytes deste registro.
     if (std::fseek(arquivo, 0, SEEK_END) != 0) goto falhou;
     {
+        size_t lote_historico = 0;
+        uint64_t ordem_incidente = 0;
+        uint32_t incidentes_perdidos = 0;
+        if (mutex_historico != nullptr &&
+            xSemaphoreTake(mutex_historico, pdMS_TO_TICKS(10)) == pdTRUE) {
+            lote_historico = quantidade_pendente;
+            ordem_incidente = ordem_incidente_pendente;
+            incidentes_perdidos = incidentes_nao_retidos;
+            xSemaphoreGive(mutex_historico);
+        }
+        bool historico_ja_gravado = false;
+        if (lote_historico > 0 && !novo && historico_parcial_possivel &&
+            ordem_historico_tentativa == ordem_incidente &&
+            preparar_historico_no_arquivo(arquivo, sessao,
+                                          ordem_incidente, lote_historico,
+                                          &historico_ja_gravado) != ESP_OK) {
+            goto falhou;
+        }
         const long inicio = std::ftell(arquivo);
         if (novo) {
             esp_chip_info_t chip{};
@@ -160,7 +655,74 @@ void registrar_diagnostico_esp() {
             std::fprintf(arquivo, "BOOT sessao=%08" PRIx32 " reset=%d firmware=%s idf=%s cores=%u revisao=%u flash_bytes=%" PRIu32 "\n",
                          sessao, static_cast<int>(esp_reset_reason()), app->version,
                          esp_get_idf_version(), chip.cores, chip.revision, flash);
-            std::fprintf(arquivo, "Tempos em ms desde boot; cpu_decimos: 1000=um nucleo; nucleo=afinidade (-1=livre); estado=FreeRTOS eTaskState. Log estruturado, sem credenciais.\n");
+            std::fprintf(arquivo, "Tempos em ms desde boot; utc=indisponivel ate resposta HTTPS Date; cpu_decimos: 1000=um nucleo; nucleo=afinidade (-1=livre); estado=FreeRTOS eTaskState. Log estruturado, sem credenciais.\n");
+        }
+        if (lote_historico > 0 && !historico_ja_gravado) {
+            ordem_historico_tentativa = ordem_incidente;
+            historico_parcial_possivel = true;
+            const uint32_t ms_incidente =
+                historico_pendente[lote_historico - 1].ms;
+            std::fprintf(arquivo, "HIST_INICIO sessao=%08" PRIx32
+                         " incidente_ordem=%llu amostras=%u\n", sessao,
+                         static_cast<unsigned long long>(ordem_incidente),
+                         static_cast<unsigned>(lote_historico));
+            for (size_t i = 0; i < lote_historico; ++i) {
+                const auto& h = historico_pendente[i];
+                std::fprintf(arquivo,
+                    "HIST ordem=%llu antes_ms=%" PRIu32 " ms=%" PRIu32
+                    " utc_epoch=%lld saude=%u causas=0x%" PRIx32
+                    " heap=%" PRIu32 " bloco=%" PRIu32 " psram=%" PRIu32
+                    " pilha=%" PRIu32 " tarefa_pilha=%s sensores=%" PRIu32
+                    " i2c=%" PRIu32 " uart=%" PRIu32 " ota=%" PRIu32
+                    " supervisao=%" PRIu32 " telemetria=%" PRIu32
+                    " csv_descartes=%" PRIu32 " wifi_desconexoes=%" PRIu32
+                    " wifi_erro=%" PRId32 " equipe=%u/%" PRIu32 "/%u/%" PRIu32
+                    " visitantes=%u/%" PRIu32 "/%u/%" PRIu32
+                    " tarefas_atrasadas=%u\n",
+                    static_cast<unsigned long long>(h.ordem),
+                    ms_incidente - h.ms, h.ms,
+                    static_cast<long long>(h.utc), static_cast<unsigned>(h.saude),
+                    h.causas, h.heap_interno, h.bloco_interno, h.psram,
+                    h.pilha_minima, h.tarefa_menor_pilha, h.erros_sensores,
+                    h.erros_i2c, h.erros_uart, h.falhas_ota,
+                    h.falhas_supervisao, h.falhas_telemetria,
+                    h.descartes_csv, h.wifi_desconexoes, h.wifi_erro,
+                    static_cast<unsigned>(h.sat_equipe_responde),
+                    h.sat_equipe_idade_ms,
+                    static_cast<unsigned>(h.sat_equipe_rtt_ms),
+                    h.link_equipe_invalidas,
+                    static_cast<unsigned>(h.sat_visitantes_responde),
+                    h.sat_visitantes_idade_ms,
+                    static_cast<unsigned>(h.sat_visitantes_rtt_ms),
+                    h.link_visitantes_invalidas,
+                    static_cast<unsigned>(h.tarefas_atrasadas));
+            }
+            std::fprintf(arquivo, "HIST_FIM incidente_ordem=%llu\n",
+                         static_cast<unsigned long long>(ordem_incidente));
+        }
+        const uint32_t descartadas_ram = __atomic_load_n(
+            &amostras_ram_descartadas, __ATOMIC_RELAXED);
+        if (incidentes_perdidos != 0 || descartadas_ram != 0) {
+            std::fprintf(arquivo, "HIST_LIMITES incidentes_sem_lote=%" PRIu32
+                         " amostras_ram_descartadas=%" PRIu32 "\n",
+                         incidentes_perdidos, descartadas_ram);
+        }
+        const time_t tempo_utc = std::time(nullptr);
+        std::tm data_utc{};
+        char texto_utc[32] = "indisponivel";
+        if (tempo_utc >= 1704067200 && gmtime_r(&tempo_utc, &data_utc) != nullptr) {
+            std::strftime(texto_utc, sizeof(texto_utc), "%Y-%m-%dT%H:%M:%SZ", &data_utc);
+        }
+        std::fprintf(arquivo, "TEMPO utc=%s ms=%" PRIu32 " arquivo_ordem=%" PRIu32 "\n",
+                     texto_utc, instante, numero_log - 1U);
+        if (falha_nova) {
+            std::fprintf(arquivo,
+                "EVENTO falha=1 grave=%d saude=%d sensor=%d link=%d wifi=%d ota=%d supervisao=%d registro=%d janela_ms=%" PRIu32 "\n",
+                grave, falha_saude_nova, falha_sensor_nova, falha_link_nova,
+                falha_wifi_nova, falha_ota_nova, falha_supervisao_nova,
+                falha_registro_nova, grave
+                    ? configuracao::JANELA_LOG_FALHA_GRAVE_MS
+                    : configuracao::JANELA_LOG_FALHA_MS);
         }
         std::fprintf(arquivo, "ESTADO ms=%" PRIu32 " saude=%s causas=0x%" PRIx32 " interno=%" PRIu32 " bloco=%" PRIu32 " interno_min=%" PRIu32 " bloco_min=%" PRIu32 " psram=%" PRIu32 " psram_bloco=%" PRIu32 " psram_min=%" PRIu32 " psram_bloco_min=%" PRIu32 " heap_min=%" PRIu32 " pilha_min=%" PRIu32 " tarefa_pilha=%s dma=%u dma_bloco=%u\n",
                      instante, servico_diagnostico_nome_estado(saude.estado), saude.causas_ativas,
@@ -176,26 +738,108 @@ void registrar_diagnostico_esp() {
         std::fprintf(arquivo, "ERROS sensores=%" PRIu32 " i2c=%" PRIu32 " uart=%" PRIu32 " descartes_uart=%" PRIu32 " ota=%" PRIu32 " supervisao=%" PRIu32 " csv=%s descartes_csv=%" PRIu32 "\n",
                      saude.erros_sensores, saude.erros_i2c, saude.erros_uart, saude.descartes_uart,
                      saude.falhas_ota, saude.falhas_supervisao, esp_err_to_name(registro.ultimo_erro), registro.amostras_descartadas);
-        std::fprintf(arquivo, "UPLOAD ativo=%d confirmando=%d concluidos=%" PRIu32 "/%" PRIu32 " pendentes=%" PRIu32 " ultimo=%s wifi=%d rssi=%d\n",
+        std::fprintf(arquivo, "UPLOAD ativo=%d confirmando=%d concluidos=%" PRIu32 "/%" PRIu32
+                     " pendentes=%" PRIu32 " bytes=%" PRIu32 "/%" PRIu32
+                     " taxa_b_s=%" PRIu32 " eta_s=%" PRIu32 " ultimo=%s wifi=%d rssi=%d\n",
                      registro.sincronizacao_em_andamento, registro.aguardando_confirmacao_upload,
                      registro.arquivos_upload_concluidos, registro.arquivos_upload_total,
-                     registro.arquivos_pendentes, esp_err_to_name(registro.ultimo_resultado_sincronizacao),
+                     registro.arquivos_pendentes, registro.arquivo_atual_bytes_enviados,
+                     registro.arquivo_atual_bytes_total, registro.velocidade_upload_bytes_s,
+                     registro.tempo_restante_upload_s,
+                     esp_err_to_name(registro.ultimo_resultado_sincronizacao),
                      saude.wifi_conectado, saude.wifi_rssi_dbm);
-        const auto sensores = servico_diagnostico_obter_sensores();
-        std::fprintf(arquivo, "SENSORES adc=%s mpu=%s encoder=%s odometro_nvs=%s\n",
-                     esp_err_to_name(sensores.adc.ultimo_erro), esp_err_to_name(sensores.mpu6050.ultimo_erro),
-                     esp_err_to_name(sensores.encoder.ultimo_erro), esp_err_to_name(sensores.persistencia_odometro.ultimo_erro));
+        std::fprintf(arquivo,
+            "SAT equipe_responde=%d visitante_responde=%d equipe_latencia_ms=%" PRIu32
+            " visitante_latencia_ms=%" PRIu32 " equipe_seq=%u visitante_seq=%u"
+            " equipe_ack=%" PRIu32 " visitante_ack=%" PRIu32
+            " equipe_invalidas=%" PRIu32 " visitante_invalidas=%" PRIu32 "\n",
+            saude.equipe_respondendo, saude.visitantes_respondendo,
+            saude.latencia_equipe_ms, saude.latencia_visitantes_ms,
+            static_cast<unsigned>(equipe.ultima_sequencia_confirmada),
+            static_cast<unsigned>(visitantes.ultima_sequencia_confirmada),
+            equipe.confirmacoes_recebidas, visitantes.confirmacoes_recebidas,
+            equipe.confirmacoes_invalidas, visitantes.confirmacoes_invalidas);
+        std::fprintf(arquivo,
+            "OTA mestre=%s ultimo=%s falhas=%" PRIu32 " equipe=%s equipe_erro=%s"
+            " visitantes=%s visitantes_erro=%s\n",
+            servico_ota_nome_estado(ota.estado), esp_err_to_name(ota.ultimo_erro),
+            ota.falhas, servico_ota_nome_estado_satelite(ota.equipe.estado),
+            esp_err_to_name(ota.equipe.ultimo_erro),
+            servico_ota_nome_estado_satelite(ota.visitantes.estado),
+            esp_err_to_name(ota.visitantes.ultimo_erro));
+        const bool detalhes = novo || falha_nova || ultimo_log_ms == 0 ||
+            instante - ultimo_log_tarefas_ms >= configuracao::INTERVALO_LOG_ESP_MS;
+        if (detalhes) {
+            const auto retrato = servico_diagnostico_obter_retrato();
+            std::fprintf(arquivo,
+                "SENSORES adc=%s/%" PRIu32 "/%" PRIu32 " mpu=%s/%" PRIu32 "/%" PRIu32
+                " encoder=%s/%" PRIu32 "/%" PRIu32 " odometro_nvs=%s/%" PRIu32 "/%" PRIu32 "\n",
+                esp_err_to_name(sensores.adc.ultimo_erro), sensores.adc.total,
+                sensores.adc.consecutivos,
+                esp_err_to_name(sensores.mpu6050.ultimo_erro), sensores.mpu6050.total,
+                sensores.mpu6050.consecutivos,
+                esp_err_to_name(sensores.encoder.ultimo_erro), sensores.encoder.total,
+                sensores.encoder.consecutivos,
+                esp_err_to_name(sensores.persistencia_odometro.ultimo_erro),
+                sensores.persistencia_odometro.total,
+                sensores.persistencia_odometro.consecutivos);
+            std::fprintf(arquivo,
+                "WIFI ativo=%d conectado=%d sessao=%d ultimo=%s motivo_desconexao=%" PRId32
+                " tentativas=%" PRIu32 " desconexoes_inesperadas=%" PRIu32 "\n",
+                wifi.radio_ativo, wifi.conectado, wifi.sessao_em_andamento,
+                esp_err_to_name(wifi.ultimo_erro), wifi.ultimo_motivo_desconexao,
+                wifi.tentativas_conexao, wifi.desconexoes_inesperadas);
+            std::fprintf(arquivo,
+                "FALHA_CONTEXTO i2c_ultimo=%s i2c_erros=%" PRIu32
+                " i2c_enderecos_ausentes=%" PRIu32 " telemetria_falhas=%" PRIu32
+                " encoder_esq_erros=%" PRIu32 " encoder_dir_erros=%" PRIu32
+                " odometro_validacao=%" PRIu32 " odometro_divergencias=%" PRIu32 "\n",
+                esp_err_to_name(retrato.i2c.ultimo_erro), retrato.i2c.erros,
+                retrato.i2c.enderecos_ausentes,
+                retrato.telemetria.pacotes_com_falha,
+                retrato.encoder_esquerdo.erros_leitura,
+                retrato.encoder_direito.erros_leitura,
+                retrato.odometro.erros_validacao,
+                retrato.odometro.divergencias_detectadas);
+            std::fprintf(arquivo,
+                "SAT_DETALHE equipe_idade_ms=%" PRIu32 " equipe_latencia_max_ms=%" PRIu32
+                " visitantes_idade_ms=%" PRIu32 " visitantes_latencia_max_ms=%" PRIu32
+                " pacotes_gerados=%" PRIu32
+                " pacotes_falhos=%" PRIu32 "\n",
+                equipe.idade_ultima_confirmacao_ms, equipe.maior_latencia_ms,
+                visitantes.idade_ultima_confirmacao_ms,
+                visitantes.maior_latencia_ms,
+                telemetria.pacotes_gerados, telemetria.pacotes_com_falha);
+        }
         for (unsigned i = 0; i < static_cast<unsigned>(ModuloSupervisionado::Quantidade); ++i) {
-            const auto modulo = servico_supervisao_obter_estado(static_cast<ModuloSupervisionado>(i));
+            const auto& modulo = modulos[i];
             if (!modulo.registrado) continue;
+            if (!detalhes && !modulo.atrasado && !modulo.em_recuperacao &&
+                modulo.ultimo_resultado == ESP_OK) continue;
             std::fprintf(arquivo, "SUP %s fase=%s idade_ms=%" PRIu32 " limite_ms=%" PRIu32 " atrasado=%d recuperando=%d falhas=%" PRIu32 " ultimo=%s\n",
                          modulo.nome, modulo.fase, modulo.idade_ultimo_pulso_ms,
                          modulo.tempo_limite_ms, modulo.atrasado, modulo.em_recuperacao,
                          modulo.falhas_detectadas, esp_err_to_name(modulo.ultimo_resultado));
         }
-        if (novo || ultimo_log_tarefas_ms == 0 || instante - ultimo_log_tarefas_ms >= configuracao::INTERVALO_LOG_ESP_MS) {
+        bool tarefas_coletadas = false;
+        if (falha_nova && tarefas_log != nullptr) {
+            servico_diagnostico_obter_tarefas(tarefas_log);
+            tarefas_coletadas = true;
+            for (size_t i = 0; i < tarefas_log->quantidade; ++i) {
+                const auto& t = tarefas_log->tarefas[i];
+                if ((t.pilha_reservada_bytes == 0 ||
+                     t.pilha_minima_livre_bytes >= 512) && t.estado < 4) continue;
+                std::fprintf(arquivo,
+                    "T_ALERTA %s id=%" PRIu32 " estado=%u pilha_livre_min=%" PRIu32
+                    " cpu_decimos=%u\n", t.nome, t.identificador, t.estado,
+                    t.pilha_minima_livre_bytes, t.cpu_decimos);
+            }
+        }
+        if (novo || ultimo_log_tarefas_ms == 0 ||
+            instante - ultimo_log_tarefas_ms >= configuracao::INTERVALO_LOG_ESP_MS ||
+            (falha_nova && instante - ultimo_log_tarefas_ms >= 15000)) {
             if (tarefas_log != nullptr) {
-                servico_diagnostico_obter_tarefas(tarefas_log);
+                if (!tarefas_coletadas) servico_diagnostico_obter_tarefas(tarefas_log);
                 std::fprintf(arquivo, "TAREFAS valido=%d coleta_ms=%llu quantidade=%u\n", tarefas_log->valido,
                              static_cast<unsigned long long>(tarefas_log->coletado_em_ms), static_cast<unsigned>(tarefas_log->quantidade));
                 for (size_t i = 0; i < tarefas_log->quantidade; ++i) {
@@ -215,9 +859,37 @@ void registrar_diagnostico_esp() {
         arquivo = nullptr;
         if (inicio >= 0 && fim >= inicio) bytes_log_sessao += static_cast<size_t>(fim - inicio);
         if (erro || erro_fechamento || inicio < 0 || fim < inicio) goto falhou;
+        if (lote_historico > 0 || incidentes_perdidos > 0) {
+            if (mutex_historico != nullptr &&
+                xSemaphoreTake(mutex_historico, pdMS_TO_TICKS(100)) == pdTRUE) {
+                if (lote_historico > 0 &&
+                    ordem_incidente_pendente == ordem_incidente) {
+                    quantidade_pendente = 0;
+                    ordem_incidente_pendente = 0;
+                    historico_parcial_possivel = false;
+                }
+                incidentes_nao_retidos =
+                    incidentes_nao_retidos >= incidentes_perdidos
+                        ? incidentes_nao_retidos - incidentes_perdidos : 0;
+                xSemaphoreGive(mutex_historico);
+            }
+        }
+        if (descartadas_ram != 0) {
+            (void)__atomic_fetch_sub(&amostras_ram_descartadas,
+                                     descartadas_ram, __ATOMIC_RELAXED);
+        }
     }
     ultimo_log_ms = instante;
     ultimo_log_saude = saude;
+    ultimos_log_sensores = sensores;
+    ultimo_log_telemetria = telemetria;
+    ultimo_log_equipe = equipe;
+    ultimo_log_visitantes = visitantes;
+    ultimo_log_wifi = wifi;
+    ultimo_log_ota = ota;
+    for (unsigned i = 0; i < static_cast<unsigned>(ModuloSupervisionado::Quantidade); ++i) {
+        ultimos_log_modulos[i] = modulos[i];
+    }
     ultimo_log_sincronizacoes = registro.sincronizacoes_finalizadas;
     ultimo_log_descartes = registro.amostras_descartadas;
     ultimo_log_erro_csv = registro.ultimo_erro;
@@ -235,6 +907,168 @@ falhou:
 
 uint32_t agora_ms() {
     return static_cast<uint32_t>(esp_timer_get_time() / 1000);
+}
+
+void tarefa_historico(void*) {
+    AmostraHistorico anterior{};
+    bool tem_anterior = false;
+    uint32_t proxima_captura_ms = 0;
+    bool ultima_captura_grave = false;
+    while (true) {
+        const auto saude = servico_diagnostico_obter_resumo();
+        if (saude.valido) {
+            const auto equipe = servico_telemetria_obter_estatisticas_link(
+                SateliteTelemetria::Equipe);
+            const auto visitantes = servico_telemetria_obter_estatisticas_link(
+                SateliteTelemetria::Visitantes);
+            const auto wifi = servico_wifi_obter_resumo();
+            const auto registro = servico_registro_telemetria_obter_estado();
+            const auto telemetria = servico_telemetria_obter_estatisticas();
+            AmostraHistorico amostra{};
+            amostra.ms = agora_ms();
+            const time_t utc = std::time(nullptr);
+            amostra.utc = utc >= 1704067200 ? static_cast<int64_t>(utc) : 0;
+            amostra.causas = saude.causas_ativas;
+            amostra.heap_interno = saude.heap_interno_livre;
+            amostra.bloco_interno = saude.maior_bloco_heap_interno;
+            amostra.psram = saude.psram_livre;
+            amostra.pilha_minima = saude.bytes_pilha_livres;
+            amostra.erros_sensores = saude.erros_sensores;
+            amostra.erros_i2c = saude.erros_i2c;
+            amostra.erros_uart = saude.erros_uart;
+            amostra.falhas_ota = saude.falhas_ota;
+            amostra.falhas_supervisao = saude.falhas_supervisao;
+            amostra.falhas_telemetria = telemetria.pacotes_com_falha;
+            amostra.descartes_csv = registro.amostras_descartadas;
+            amostra.wifi_desconexoes = wifi.desconexoes_inesperadas;
+            amostra.wifi_erro = static_cast<int32_t>(wifi.ultimo_erro);
+            amostra.link_equipe_invalidas = equipe.confirmacoes_invalidas;
+            amostra.link_visitantes_invalidas = visitantes.confirmacoes_invalidas;
+            amostra.sat_equipe_idade_ms = equipe.idade_ultima_confirmacao_ms;
+            amostra.sat_visitantes_idade_ms = visitantes.idade_ultima_confirmacao_ms;
+            amostra.sat_equipe_rtt_ms = static_cast<uint16_t>(
+                std::min<uint32_t>(equipe.latencia_atual_ms, UINT16_MAX));
+            amostra.sat_visitantes_rtt_ms = static_cast<uint16_t>(
+                std::min<uint32_t>(visitantes.latencia_atual_ms, UINT16_MAX));
+            amostra.saude = static_cast<uint8_t>(saude.estado);
+            amostra.sat_equipe_responde = saude.equipe_respondendo;
+            amostra.sat_visitantes_responde = saude.visitantes_respondendo;
+            std::strncpy(amostra.tarefa_menor_pilha, saude.tarefa_menor_pilha,
+                         sizeof(amostra.tarefa_menor_pilha) - 1);
+            for (unsigned i = 0; i < static_cast<unsigned>(ModuloSupervisionado::Quantidade); ++i) {
+                const auto modulo = servico_supervisao_obter_estado(
+                    static_cast<ModuloSupervisionado>(i));
+                if ((modulo.atrasado || modulo.em_recuperacao) &&
+                    amostra.tarefas_atrasadas < UINT8_MAX) {
+                    amostra.tarefas_atrasadas++;
+                }
+            }
+            const bool falha =
+                (!tem_anterior && (amostra.causas != 0 ||
+                    amostra.saude == static_cast<uint8_t>(EstadoSaudeSistema::Falha))) ||
+                (tem_anterior && (
+                    (amostra.causas & ~anterior.causas) != 0 ||
+                    amostra.erros_sensores > anterior.erros_sensores ||
+                    amostra.erros_i2c > anterior.erros_i2c ||
+                    amostra.erros_uart > anterior.erros_uart ||
+                    amostra.falhas_ota > anterior.falhas_ota ||
+                    amostra.falhas_supervisao > anterior.falhas_supervisao ||
+                    amostra.falhas_telemetria > anterior.falhas_telemetria ||
+                    amostra.descartes_csv > anterior.descartes_csv ||
+                    amostra.wifi_desconexoes > anterior.wifi_desconexoes ||
+                    (amostra.wifi_erro != ESP_OK &&
+                     amostra.wifi_erro != anterior.wifi_erro) ||
+                    amostra.link_equipe_invalidas > anterior.link_equipe_invalidas ||
+                    amostra.link_visitantes_invalidas > anterior.link_visitantes_invalidas ||
+                    (anterior.sat_equipe_responde && !amostra.sat_equipe_responde) ||
+                    (anterior.sat_visitantes_responde && !amostra.sat_visitantes_responde) ||
+                    amostra.tarefas_atrasadas > anterior.tarefas_atrasadas ||
+                    (amostra.saude == static_cast<uint8_t>(EstadoSaudeSistema::Falha) &&
+                     anterior.saude != amostra.saude)));
+            const bool grave =
+                amostra.saude == static_cast<uint8_t>(EstadoSaudeSistema::Falha) ||
+                (amostra.causas & (CausaSaudeHeapCritico |
+                                   CausaSaudePilhaCritica |
+                                   CausaSaudeSupervisao)) != 0 ||
+                amostra.tarefas_atrasadas != 0;
+            const bool capturar_incidente = falha &&
+                (proxima_captura_ms == 0 ||
+                 static_cast<int32_t>(amostra.ms - proxima_captura_ms) >= 0 ||
+                 (grave && !ultima_captura_grave));
+            bool registrada = false;
+            if (xSemaphoreTake(mutex_historico, pdMS_TO_TICKS(100)) == pdTRUE) {
+                amostra.ordem = ++ordem_amostra;
+                if (capturar_incidente) {
+                    if (quantidade_pendente == 0) {
+                        for (size_t i = 0; i < quantidade_historico; ++i) {
+                            historico_pendente[i] = amostras_historico[
+                                (inicio_historico + i) % capacidade_historico];
+                        }
+                        historico_pendente[quantidade_historico] = amostra;
+                        quantidade_pendente = quantidade_historico + 1;
+                        ordem_incidente_pendente = amostra.ordem;
+                    } else if (incidentes_nao_retidos < UINT32_MAX) {
+                        incidentes_nao_retidos++;
+                    }
+                    proxima_captura_ms = amostra.ms + (grave
+                        ? configuracao::JANELA_LOG_FALHA_GRAVE_MS
+                        : configuracao::JANELA_LOG_FALHA_MS);
+                    ultima_captura_grave = grave;
+                }
+                if (quantidade_historico == capacidade_historico) {
+                    amostras_historico[inicio_historico] = amostra;
+                    inicio_historico = (inicio_historico + 1) % capacidade_historico;
+                } else {
+                    amostras_historico[(inicio_historico + quantidade_historico) %
+                                       capacidade_historico] = amostra;
+                    quantidade_historico++;
+                }
+                registrada = true;
+                xSemaphoreGive(mutex_historico);
+            } else {
+                (void)__atomic_fetch_add(&amostras_ram_descartadas, 1U,
+                                         __ATOMIC_RELAXED);
+            }
+            if (registrada) {
+                anterior = amostra;
+                tem_anterior = true;
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
+void iniciar_historico_ram() {
+    if (tarefa_historico_handle != nullptr) return;
+    if (mutex_historico == nullptr) mutex_historico = xSemaphoreCreateMutex();
+    if (mutex_historico == nullptr) return;
+    if (amostras_historico == nullptr) {
+        capacidade_historico = AMOSTRAS_HISTORICO_PSRAM;
+        amostras_historico = static_cast<AmostraHistorico*>(heap_caps_calloc(
+            2 * capacidade_historico + 1, sizeof(AmostraHistorico),
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (amostras_historico == nullptr) {
+            capacidade_historico = AMOSTRAS_HISTORICO_INTERNO;
+            amostras_historico = static_cast<AmostraHistorico*>(heap_caps_calloc(
+                2 * capacidade_historico + 1, sizeof(AmostraHistorico),
+                MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+        }
+        if (amostras_historico == nullptr) {
+            capacidade_historico = 0;
+            ESP_LOGW(ETIQUETA, "Sem memória para histórico pré-falha; diagnóstico SD continua ativo");
+            return;
+        }
+        historico_pendente = amostras_historico + capacidade_historico;
+    }
+    if (configuracao::criar_tarefa(tarefa_historico, "historico_sd", nullptr,
+                                   &tarefa_historico_handle) != pdPASS) {
+        tarefa_historico_handle = nullptr;
+        heap_caps_free(amostras_historico);
+        amostras_historico = nullptr;
+        historico_pendente = nullptr;
+        capacidade_historico = 0;
+        ESP_LOGW(ETIQUETA, "Falha ao iniciar amostragem pré-falha");
+    }
 }
 
 bool termina_com(const char* texto, const char* sufixo) {
@@ -535,6 +1369,11 @@ esp_err_t tratar_evento_http(esp_http_client_event_t* evento) {
     auto* resposta = static_cast<RespostaHttp*>(evento->user_data);
     if (evento->event_id == HTTP_EVENT_ON_HEADER &&
         evento->header_key != nullptr && evento->header_value != nullptr &&
+        strcasecmp(evento->header_key, "Date") == 0) {
+        acertar_relogio_http_interno(evento->header_value);
+    }
+    if (evento->event_id == HTTP_EVENT_ON_HEADER &&
+        evento->header_key != nullptr && evento->header_value != nullptr &&
         strcasecmp(evento->header_key, "Location") == 0) {
         const size_t tamanho = std::strlen(evento->header_value);
         if (tamanho < sizeof(resposta->redirecionamento)) {
@@ -700,13 +1539,19 @@ esp_err_t transmitir_arquivo(esp_http_client_handle_t cliente, FILE* arquivo,
             erro = ESP_FAIL;
             break;
         }
-        const int escritos = esp_http_client_write(
-            cliente, bloco, static_cast<int>(lidos));
-        if (escritos != static_cast<int>(lidos)) {
-            erro = ESP_ERR_HTTP_WRITE_DATA;
-            break;
+        size_t escritos_bloco = 0;
+        while (escritos_bloco < lidos) {
+            const int escritos = esp_http_client_write(
+                cliente, bloco + escritos_bloco,
+                static_cast<int>(lidos - escritos_bloco));
+            if (escritos <= 0) {
+                erro = ESP_ERR_HTTP_WRITE_DATA;
+                break;
+            }
+            escritos_bloco += static_cast<size_t>(escritos);
+            enviados += static_cast<size_t>(escritos);
         }
-        enviados += static_cast<size_t>(escritos);
+        if (erro != ESP_OK) break;
         atualizar_progresso_arquivo(enviados, tamanho, inicio_ms);
         const uint32_t instante_ms = agora_ms();
         if (enviados == tamanho ||
@@ -912,7 +1757,10 @@ esp_err_t sincronizar_com_google(ResultadoSincronizacao* resultado) {
     portEXIT_CRITICAL(&trava_estado);
     ESP_LOGI(ETIQUETA, "Sincronização iniciada: %lu arquivo(s) pendente(s)",
              static_cast<unsigned long>(resultado->arquivos_total));
-    if (resultado->arquivos_total == 0) return ESP_OK;
+    if (resultado->arquivos_total == 0) {
+        ESP_LOGI(ETIQUETA, "Google já está sincronizado: nenhum CSV pendente");
+        return ESP_OK;
+    }
 
     esp_err_t erro = ESP_OK;
     if (configuracao::ENDERECO_GOOGLE_TELEMETRIA[0] == '\0' ||
@@ -925,7 +1773,15 @@ esp_err_t sincronizar_com_google(ResultadoSincronizacao* resultado) {
 
     erro = servico_wifi_abrir_sessao(
         FinalidadeSessaoWifi::SincronizacaoGoogle);
-    if (erro != ESP_OK) return erro;
+    if (erro != ESP_OK) {
+        const ResumoWifi wifi = servico_wifi_obter_resumo();
+        ESP_LOGE(ETIQUETA,
+                 "Sincronização Google sem rede: erro=%s tentativas=%" PRIu32
+                 " desconexao=%" PRId32 " ultimo_wifi=%s",
+                 esp_err_to_name(erro), wifi.tentativas_ultima_sessao,
+                 wifi.ultimo_motivo_desconexao, esp_err_to_name(wifi.ultimo_erro));
+        return erro;
+    }
 
     while (erro == ESP_OK) {
         char nome[96]{};
@@ -948,7 +1804,12 @@ esp_err_t sincronizar_com_google(ResultadoSincronizacao* resultado) {
             resultado->arquivos_total, &tamanho_enviado);
         if (erro == ESP_OK) {
             erro = mover_para_enviados(nome);
-            if (erro != ESP_OK) break;
+            if (erro != ESP_OK) {
+                ESP_LOGE(ETIQUETA,
+                         "Google confirmou %s, mas mover CSV no SD falhou: errno=%d",
+                         nome, errno);
+                break;
+            }
             resultado->arquivos_enviados++;
             resultado->bytes_enviados += tamanho_enviado;
             portENTER_CRITICAL(&trava_estado);
@@ -984,8 +1845,10 @@ void tarefa_registro(void*) {
     while (true) {
         servico_supervisao_informar_atividade(ModuloSupervisionado::RegistroSd,
             "registro_csv", "gravacao/diagnostico SD", 30000);
+        atualizar_backup_configuracao(agora_ms());
         registrar_diagnostico_esp();
-        if (xQueueReceive(fila, &comando, pdMS_TO_TICKS(1000)) != pdTRUE) continue;
+        // Verifica falhas mesmo sem novas amostras, com latência máxima de 500 ms.
+        if (xQueueReceive(fila, &comando, pdMS_TO_TICKS(500)) != pdTRUE) continue;
         esp_err_t erro = ESP_OK;
         if (comando.tipo == TipoComandoRegistro::Amostra) {
             erro = gravar_amostra(comando);
@@ -1071,6 +1934,8 @@ esp_err_t servico_registro_telemetria_iniciar() {
         return ESP_ERR_NOT_SUPPORTED;
     }
     if (estado.iniciado) return ESP_OK;
+    // A amostragem RAM continua mesmo se o SD falhar e o início for repetido.
+    iniciar_historico_ram();
 
     ConfiguracaoCartaoSd sd{};
     sd.ponto_montagem = configuracao::PONTO_MONTAGEM_SD;
@@ -1088,6 +1953,10 @@ esp_err_t servico_registro_telemetria_iniciar() {
     if (erro != ESP_OK) return erro;
 
     (void)recuperar_arquivos_interrompidos();
+    if (criar_diretorio(configuracao::DIRETORIO_LOG_ESP) == ESP_OK) {
+        iniciar_sequencia_logs();
+    }
+    recuperar_backup_configuracao();
     sessao = esp_random();
     fila = xQueueCreate(configuracao::CAPACIDADE_FILA_REGISTRO,
                         sizeof(ComandoRegistro));
@@ -1194,4 +2063,8 @@ EstadoRegistroTelemetria servico_registro_telemetria_obter_estado() {
     const EstadoRegistroTelemetria copia = estado;
     portEXIT_CRITICAL(&trava_estado);
     return copia;
+}
+
+void servico_registro_telemetria_acertar_relogio_http(const char* date_header) {
+    acertar_relogio_http_interno(date_header);
 }

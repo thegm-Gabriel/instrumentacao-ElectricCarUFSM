@@ -27,16 +27,19 @@ comandos e gravação OTA para os dois satélites.
    duplicatas, perdas e reinícios do mestre. Um contador de tempo do mestre
    retrocedendo provoca resincronização da sequência.
 3. Cada pacote aceito produz um ACK de 20 bytes com sequência, tempo do mestre,
-   identidade, versão e capacidades do satélite. O mestre usa esse retorno para
+   identidade e versão do satélite. O mestre usa esse retorno para
    acompanhar a saúde dos enlaces. Quadros de comandos e OTA também têm respostas
    pelo mesmo TX do satélite.
 4. O retrato da API permanece disponível depois de uma interrupção do enlace.
    Consulte `valido` e `idade_ms` para distinguir ausência inicial de dados e
    uma amostra antiga; a interface sinaliza desatualização.
 
-Ao iniciar, ambos confirmam uma imagem OTA pendente somente após UART, Wi-Fi e
-HTTP funcionarem. Se essa inicialização falhar, solicitam rollback. A equipe
-inicializa diagnóstico local como recurso complementar.
+Ao iniciar, ambos deixam uma imagem OTA nova em observação por 2 min após UART,
+Wi-Fi e HTTP funcionarem. Se reiniciar antes da confirmação, o bootloader
+retorna à imagem anterior. Três reinícios por panic ou watchdog na janela de
+5 min após a partida também solicitam rollback. A contagem usa memória RTC e
+é perdida após corte total de energia. A equipe inicializa diagnóstico local
+como recurso complementar.
 
 ## ESP32-S3 da equipe
 
@@ -49,19 +52,43 @@ quando suportada. Ele não oferece servidor DNS local; acesso confiável:
 `web/index.html`, `web/style.css`, `web/layout.css` e `web/app.js` são as fontes
 do painel NEXUS. `web/gerar_painel.py` gera `src/servicos/painel_web.c`,
 incorporado ao binário. As rotas `/`, `/painel`, `/diagnostico` e `/mestre`
-entregam a mesma página com três abas: mestre, equipe e visitantes. O painel
-atualiza telemetria, diagnóstico e respostas de consultas. Gráficos e CSV do
-navegador acumulam dados apenas enquanto a página está aberta.
+entregam o mesmo painel com cinco páginas: telemetria, mestre, equipe, comandos e
+visitantes. A página da equipe mostra seu diagnóstico; ações e acompanhamento
+ficam na página Comandos. A telemetria pode ser consultada a 1, 2, 3 ou 4 Hz
+(padrão de 4 Hz, compatível com os 250 ms da publicação do mestre). As consultas
+de estado OTA, Google e simulador continuam automáticas a cada 2 s,
+independentemente dessa escolha. O cartão Google também permite iniciar a
+sincronização dos arquivos pendentes e acompanhar o progresso informado pelo
+mestre. Uma requisição lenta ou falha pode reduzir a taxa efetiva no navegador.
+Gráficos e CSV do navegador acumulam dados apenas enquanto a página está aberta.
+Os gráficos combinam duas séries no mesmo intervalo de tempo, com escalas e
+unidades nas laterais. Movimento mostra velocidade (escala inicial de 0 a 30 km/h,
+expandida quando uma amostra excede esse valor e restaurada depois)
+e aceleração; o gráfico elétrico permite escolher as duas grandezas. Os
+diagnósticos do mestre e da equipe começam com CPU e memória livre, enquanto
+Visitantes mostra latência e disponibilidade das consultas; seu diagnóstico
+também oferece CPU, temperatura e memória quando a consulta ao satélite responde.
+Ausência de leitura é exibida como lacuna, sem inventar pontos. O arco compacto
+da telemetria mostra ainda acelerador e freio quando esses campos estão válidos.
+O painel da Equipe exibe a quantidade de dispositivos conectados aos pontos de
+acesso Equipe e Visitantes e, nas páginas de cada ESP, lista endereço MAC e tempo
+conectado. O limite de sessão Wi-Fi é 15 minutos por padrão, pode ser alterado
+ou desativado com 0, e desconecta a estação ao expirar. Ele não altera o prazo
+do DHCP nem impede que um dispositivo com a senha salva se reconecte.
 
 | Método e rota | Função |
 |---|---|
 | `GET /api/telemetria` | Última amostra do veículo, idade, sequência e métricas de recepção UART. |
 | `GET /api/diagnostico` | Versão e estado da equipe, Wi-Fi, heap/PSRAM, CPU, tarefas, temperatura, contadores UART, comandos e OTA. |
+| `GET /api/wifi/clientes` | Clientes conectados ao AP Equipe, tempo de sessão e limite configurado. |
+| `POST /api/wifi/limite` | Define o limite de sessão do AP Equipe em minutos. |
+| `POST /api/wifi/desconectar` | Desconecta um cliente do AP Equipe pelo endereço MAC. |
 | `GET /api/mestre?consulta=...` | Consulta o mestre pela UART e transforma a resposta em JSON. |
 | `POST /api/mestre?consulta=...` | Solicita uma ação ao mestre; a resposta confirma o recebimento/aceitação, e ações assíncronas exigem consulta posterior do estado. |
 
-Consultas GET aceitas: `ping`, `versao`, `capacidades`, `saude`, `telemetria`,
-`uart`, `ota`, `wifi`, `diagnostico_mestre`, `configuracao`,
+Consultas GET aceitas: `ping`, `versao`, `saude`, `telemetria`,
+`uart`, `ota`, `sincronizacao`, `wifi`, `diagnostico_mestre`, `configuracao`,
+`simulador`,
 `rede_wifi_salva` (com `indice` de 1 a 5), `satelite_equipe_ping`,
 `satelite_equipe_versao`, `satelite_visitantes_ping` e
 `satelite_visitantes_versao`.
@@ -70,6 +97,7 @@ Ações POST aceitas: `verificar_ota`, `autorizar_mestre`, `autorizar_equipe`,
 `autorizar_visitantes`, `autorizar_todos`, `cancelar_ota`, `resumo_terminal`,
 `alternar_relatorios`, `zerar_percurso`, `sincronizar_google`,
 `intervalo_relatorio`, `intervalo_ota`, `intervalo_telemetria_ota`,
+`simulador_telemetria`,
 `wifi_preparar`, `wifi_conectar_preparada`, `wifi_salvar_preparada`,
 `wifi_conectar_salva`, `wifi_excluir_salva`, `wifi_automatico`,
 `wifi_alterar_principal`, `wifi_restaurar_principal` e `wifi_politica`.
@@ -85,6 +113,7 @@ são rejeitadas. A fila de comandos evita disputas com a recepção UART.
 | Verificação/autorizações/cancelamento OTA, `resumo_terminal`, `alternar_relatorios`, `zerar_percurso`, `sincronizar_google` | Vazio. |
 | `intervalo_relatorio` | Grupo de 0 a 3, quebra de linha e intervalo numérico. |
 | `intervalo_ota`, `intervalo_telemetria_ota` | Um intervalo numérico; o mestre valida a faixa. |
+| `simulador_telemetria` | `1` ativa ou `0` desativa até o próximo reinício. |
 | `wifi_preparar` | SSID, quebra de linha e senha da rede. Prepara a próxima operação. |
 | `wifi_conectar_preparada`, `wifi_salvar_preparada` | Vazio; exigem uma rede preparada. |
 | `wifi_conectar_salva`, `wifi_excluir_salva` | Índice de 1 a 5, conforme a lista consultada. |
@@ -116,6 +145,20 @@ registra os valores efetivamente aplicados. O AP usa `192.168.4.1`, DHCP e DNS
 cativo local opcional: quando ativo, responde consultas IPv4 com o IP do painel.
 O acesso por IP continua funcionando se a tarefa DNS não iniciar.
 
+### QR codes de acesso
+
+Os QR codes em [`artefatos/qr_visitantes`](../artefatos/qr_visitantes) facilitam o acesso pelo celular:
+
+- [`wifi_visitantes.png`](../artefatos/qr_visitantes/wifi_visitantes.png) conecta à rede do ESP de visitantes;
+- [`painel_visitantes.png`](../artefatos/qr_visitantes/painel_visitantes.png) abre `http://192.168.4.1/` depois da conexão.
+
+Há versões SVG para impressão. Se o SSID, a senha ou o IP mudarem, execute
+`python ferramentas/gerar_qr_visitantes.py` a partir da raiz do repositório
+para recriar os quatro arquivos. O gerador requer `qrcode[pil]`
+(`python -m pip install "qrcode[pil]"`) e lê os valores diretamente de
+`firmware/visitantes-s3/include/nucleo/configuracao.h`. O QR da rede contém
+a senha Wi-Fi; distribua-o somente ao público autorizado a conectar-se.
+
 `web/index.html`, `web/style.css` e `web/app.js` são compilados em
 `src/servicos/painel_web.c` por `web/gerar_painel.py`. Há duas rotas:
 `GET /` para a página pública e `GET /api/telemetria` para o JSON. Não há API
@@ -124,6 +167,7 @@ sequência, origem simulada, velocidade, aceleração, potência e percurso, com
 unidades codificadas nos nomes dos campos. Aceleração indisponível ou grandezas
 elétricas não adquiridas são `null`, não zero. Os gráficos e cálculos de energia,
 distância e tempo começam quando a página é aberta.
+O navegador consulta a telemetria a cada 500 ms (2 Hz), sem controle de taxa.
 
 ## Manutenção e fontes de verdade
 

@@ -287,6 +287,6 @@
   updateAge();
   drawCharts();
   poll();
-  setInterval(poll, 1000);
+  setInterval(poll, 500);
   setInterval(() => {updateAge();drawCharts();}, 1000);
 })();

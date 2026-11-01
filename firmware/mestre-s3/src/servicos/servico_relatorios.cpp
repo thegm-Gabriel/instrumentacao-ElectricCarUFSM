@@ -89,12 +89,11 @@ void exibir_link(const char* nome, const EstatisticasLinkTelemetria& link) {
              static_cast<unsigned long>(link.maior_latencia_ms),
              static_cast<unsigned long>(link.idade_ultima_confirmacao_ms));
     ESP_LOGI(ETIQUETA,
-             "[MÓDULO %s] tipo=%u | firmware=%u.%u.%u | capacidades=0x%08lX",
+             "[MÓDULO %s] tipo=%u | firmware=%u.%u.%u",
              nome, static_cast<unsigned>(link.tipo_satelite),
              static_cast<unsigned>(link.versao_maior),
              static_cast<unsigned>(link.versao_menor),
-             static_cast<unsigned>(link.versao_correcao),
-             static_cast<unsigned long>(link.capacidades));
+             static_cast<unsigned>(link.versao_correcao));
 }
 void exibir_relatorios(const DadosTelemetriaVeiculo& dados) {
     const bool resumo_completo = consumir_resumo_completo();

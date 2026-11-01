@@ -11,6 +11,12 @@ atualização, o operador escolhe no terminal qual alvo autorizar. O mestre atua
 sua própria partição por HTTPS. Para um satélite, ele baixa a imagem por HTTPS e a
 retransmite pela UART em blocos confirmados individualmente.
 
+Uma atualização encontrada aguarda autorização por até 5 min. Se ninguém
+autorizar nesse prazo, o mestre descarta a oferta e retorna ao estado de
+cancelamento, sem alterar o firmware em execução. Uma nova consulta ao manifesto
+poderá encontrá-la outra vez. O cabeçalho HTTPS `Date` da consulta também permite
+acertar o relógio UTC dos logs no SD quando ele ainda não tem hora válida.
+
 Na operação **Atualizar todos**, a ordem é equipe, visitantes e, por último,
 mestre. Um alvo sem atualização pendente é ignorado. Se um satélite falhar, o
 mestre encerra a sequência e preserva seu próprio firmware para que o operador
@@ -20,8 +26,14 @@ individualmente.
 O protocolo OTA dos satélites usa sessão, sequência, deslocamento e CRC-32. Blocos
 sem confirmação são repetidos sem regravação duplicada. O satélite grava somente a
 partição inativa, compara o SHA-256 completo, seleciona a nova imagem e reinicia. A
-imagem nova só é confirmada depois que Wi-Fi, UART e servidor web inicializam; se
-isso falhar, o bootloader retorna à versão anterior.
+imagem nova fica pendente enquanto Wi-Fi, UART e servidor web inicializam e por
+mais 2 min de observação. Se reiniciar antes da confirmação, o bootloader retorna
+à versão anterior. Depois da confirmação, o firmware ainda observa reinícios por
+panic ou watchdog até completar 5 min; três eventos desse tipo solicitam
+rollback. A contagem fica na memória RTC e é perdida em um corte total de energia.
+O mesmo mecanismo protege o mestre. O mestre considera a transferência de um
+satélite concluída quando a nova versão responde; a confirmação interna da
+imagem pelo satélite ocorre após a observação de 2 min.
 
 No mestre, o download dos firmwares dos satélites usa três buffers fixos de 4 KiB
 na PSRAM. Enquanto uma tarefa transmite e confirma um bloco pela UART, o cliente
@@ -69,8 +81,8 @@ No terminal de 115200 baud, escolha `2 - Atualização OTA`. O submenu permite:
 9 - Alterar intervalo da telemetria durante OTA
 ```
 
-O mestre só oferece OTA ao satélite que esteja respondendo, anuncie a capacidade
-OTA e tenha uma versão menor que a descrita no manifesto.
+O mestre só oferece OTA ao satélite que esteja respondendo, suporte OTA e tenha
+uma versão menor que a descrita no manifesto.
 
 As mesmas autorizações estão disponíveis na aba **ESP32 — Mestre** de
 `http://192.168.4.1/`, quando o operador está conectado ao ponto de acesso do
@@ -86,9 +98,23 @@ python ferramentas\preparar_release_ota.py
 ```
 
 O script calcula uma impressão digital das fontes de cada projeto e da pasta
-`firmware/compartilhado`. Ele aumenta o número de correção somente dos firmwares
-alterados, compila de forma incremental e confere a versão gravada dentro de cada
-imagem. Uma mudança em código compartilhado versiona os três firmwares.
+`firmware/compartilhado`. Por padrão, incrementa `patch` somente dos firmwares
+alterados e da etiqueta do release, compila de forma incremental e confere a
+versão gravada dentro de cada imagem. Uma mudança em código compartilhado
+versiona os três firmwares.
+
+Escolha explicitamente a parte da versão SemVer para o próximo release:
+
+```powershell
+python ferramentas\preparar_release_ota.py --bump major
+python ferramentas\preparar_release_ota.py --bump minor
+python ferramentas\preparar_release_ota.py --bump patch
+```
+
+`major` incrementa X e zera Y/Z, `minor` incrementa Y e zera Z, e `patch`
+incrementa Z em `X.Y.Z`. A escolha vale para a etiqueta do release e para cada
+firmware alterado. Os firmwares sem mudança preservam sua versão. Se não houver
+mudança nem `--forcar`, o script reutiliza o release existente sem incrementar.
 
 Os arquivos atuais ficam em `versoes/saida`:
 
@@ -108,6 +134,7 @@ Para aumentar uma versão mesmo sem mudança detectada:
 ```powershell
 python ferramentas\preparar_release_ota.py --forcar equipe-s3
 python ferramentas\preparar_release_ota.py --forcar todos
+python ferramentas\preparar_release_ota.py --bump minor --forcar equipe-s3
 ```
 
 Crie no GitHub o release com a etiqueta informada pelo script e anexe os quatro

@@ -55,9 +55,44 @@ static void copiar_texto(char *destino, size_t capacidade, const char *origem)
 }
 
 static codigo_resposta_comando_t executar_consulta(
-    const cabecalho_quadro_comando_t *cabecalho, uint8_t *resposta,
+    const cabecalho_quadro_comando_t *cabecalho, const uint8_t *carga_solicitacao,
+    uint8_t *resposta,
     uint16_t *tamanho_resposta)
 {
+    if (cabecalho->comando == COMANDO_OBTER_DIAGNOSTICO_SATELITE) {
+        if (cabecalho->tamanho_carga != 0 || configuracao_atual.obter_diagnostico == NULL)
+            return RESPOSTA_COMANDO_NAO_SUPORTADO;
+        resposta_diagnostico_satelite_t dados = {0};
+        if (configuracao_atual.obter_diagnostico(&dados) != ESP_OK)
+            return RESPOSTA_COMANDO_ERRO_INTERNO;
+        memcpy(resposta, &dados, sizeof(dados));
+        *tamanho_resposta = sizeof(dados);
+        return RESPOSTA_COMANDO_OK;
+    }
+    if (cabecalho->comando == COMANDO_OBTER_CLIENTES_WIFI_SATELITE) {
+        if (cabecalho->tamanho_carga != 1 || configuracao_atual.obter_clientes_wifi == NULL)
+            return RESPOSTA_COMANDO_NAO_SUPORTADO;
+        resposta_clientes_wifi_satelite_t dados = {0};
+        if (configuracao_atual.obter_clientes_wifi(carga_solicitacao[0], &dados) != ESP_OK)
+            return RESPOSTA_COMANDO_ERRO_INTERNO;
+        memcpy(resposta, &dados, sizeof(dados));
+        *tamanho_resposta = sizeof(dados);
+        return RESPOSTA_COMANDO_OK;
+    }
+    if (cabecalho->comando == COMANDO_GERIR_WIFI_SATELITE) {
+        if (cabecalho->tamanho_carga != sizeof(solicitacao_gestao_wifi_satelite_t) ||
+            configuracao_atual.gerir_wifi == NULL)
+            return RESPOSTA_COMANDO_NAO_SUPORTADO;
+        solicitacao_gestao_wifi_satelite_t solicitacao;
+        resposta_gestao_wifi_satelite_t dados = {0};
+        memcpy(&solicitacao, carga_solicitacao, sizeof(solicitacao));
+        if (solicitacao.alvo != configuracao_atual.no_satelite ||
+            configuracao_atual.gerir_wifi(&solicitacao, &dados) != ESP_OK)
+            return RESPOSTA_COMANDO_ERRO_INTERNO;
+        memcpy(resposta, &dados, sizeof(dados));
+        *tamanho_resposta = sizeof(dados);
+        return RESPOSTA_COMANDO_OK;
+    }
     if (cabecalho->tamanho_carga != 0) return RESPOSTA_COMANDO_CARGA_INVALIDA;
     if (cabecalho->comando == COMANDO_PING) {
         const resposta_comando_ping_t dados = {
@@ -88,7 +123,8 @@ static codigo_resposta_comando_t executar_consulta(
     return RESPOSTA_COMANDO_NAO_SUPORTADO;
 }
 
-static void processar_solicitacao(const cabecalho_quadro_comando_t *cabecalho)
+static void processar_solicitacao(const cabecalho_quadro_comando_t *cabecalho,
+                                  const uint8_t *carga_solicitacao)
 {
     uint8_t repetida[COMANDO_TAMANHO_MAXIMO_QUADRO];
     size_t tamanho_repetida = 0;
@@ -117,7 +153,7 @@ static void processar_solicitacao(const cabecalho_quadro_comando_t *cabecalho)
     uint8_t carga[COMANDO_TAMANHO_MAXIMO_CARGA] = {0};
     uint16_t tamanho_carga = 0;
     const codigo_resposta_comando_t resultado = executar_consulta(
-        cabecalho, carga, &tamanho_carga);
+        cabecalho, carga_solicitacao, carga, &tamanho_carga);
     uint8_t quadro[COMANDO_TAMANHO_MAXIMO_QUADRO];
     const size_t tamanho = protocolo_comandos_montar_quadro(
         quadro, sizeof(quadro), TIPO_QUADRO_COMANDO_RESPOSTA,
@@ -193,7 +229,7 @@ void servico_comandos_satelite_processar_quadro(const uint8_t *quadro,
         return;
     }
     if (cabecalho.tipo == TIPO_QUADRO_COMANDO_SOLICITACAO) {
-        processar_solicitacao(&cabecalho);
+        processar_solicitacao(&cabecalho, quadro + sizeof(cabecalho));
         return;
     }
     resposta_pendente_t pendente = {.cabecalho = cabecalho};

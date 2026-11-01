@@ -14,6 +14,7 @@ idf_component_register(
         "../../compartilhado/protocolos"
         "../../compartilhado/telemetria"
         "../../compartilhado/comum"
+        "../../compartilhado/ota"
     PRIV_REQUIRES
         app_update
         esp_http_client
