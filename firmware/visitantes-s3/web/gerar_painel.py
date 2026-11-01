@@ -1,5 +1,6 @@
 """Gera a página pública embutida no firmware a partir de HTML, CSS e JS."""
 
+import base64
 from pathlib import Path
 
 
@@ -12,6 +13,8 @@ def main() -> None:
     css = (ROOT / "style.css").read_text(encoding="utf-8")
     js = (ROOT / "app.js").read_text(encoding="utf-8")
     html = html.replace("/* VISITANTES_CSS */", css).replace("/* VISITANTES_JS */", js)
+    logo = ROOT.parent.parent / "compartilhado" / "web" / "logo_carro_eletrico.png"
+    html = html.replace("/* PROJECT_LOGO */", "data:image/png;base64," + base64.b64encode(logo.read_bytes()).decode("ascii"))
     lines = [
         "// Gerado por web/gerar_painel.py. Edite os arquivos em web/.",
         '#include "servicos/painel_web.h"',

@@ -52,9 +52,11 @@ quando suportada. Ele não oferece servidor DNS local; acesso confiável:
 `web/index.html`, `web/style.css`, `web/layout.css` e `web/app.js` são as fontes
 do painel NEXUS. `web/gerar_painel.py` gera `src/servicos/painel_web.c`,
 incorporado ao binário. As rotas `/`, `/painel`, `/diagnostico` e `/mestre`
-entregam o mesmo painel com cinco páginas: telemetria, mestre, equipe, comandos e
-visitantes. A página da equipe mostra seu diagnóstico; ações e acompanhamento
-ficam na página Comandos. A telemetria pode ser consultada a 1, 2, 3 ou 4 Hz
+entregam o mesmo painel com seis páginas, nesta ordem: telemetria, comandos,
+mestre, equipe, visitantes e sobre. As páginas dos ESPs mostram diagnóstico; ações e acompanhamento
+ficam na página Comandos. O resumo de saúde do mestre é consultado periodicamente:
+uma operação degradada ou falha aparece em aviso discreto com suas causas ativas
+e acesso ao diagnóstico. A telemetria pode ser consultada a 1, 2, 3 ou 4 Hz
 (padrão de 4 Hz, compatível com os 250 ms da publicação do mestre). As consultas
 de estado OTA, Google e simulador continuam automáticas a cada 2 s,
 independentemente dessa escolha. O cartão Google também permite iniciar a
@@ -68,11 +70,18 @@ e aceleração; o gráfico elétrico permite escolher as duas grandezas. Os
 diagnósticos do mestre e da equipe começam com CPU e memória livre, enquanto
 Visitantes mostra latência e disponibilidade das consultas; seu diagnóstico
 também oferece CPU, temperatura e memória quando a consulta ao satélite responde.
-Ausência de leitura é exibida como lacuna, sem inventar pontos. O arco compacto
-da telemetria mostra ainda acelerador e freio quando esses campos estão válidos.
+Ausência de leitura é exibida como lacuna, sem inventar pontos. O instrumento
+da telemetria destaca a velocidade em um arco e apresenta acelerador e freio
+em dois medidores separados quando esses campos estão válidos. A página Sobre
+explica o projeto Carro Elétrico UFSM-CS, identifica orientação e equipe discente
+e apresenta o símbolo do carro. O painel público de Visitantes também traz essa
+identidade e os créditos. A imagem fonte fica em
+`firmware/compartilhado/web/logo_carro_eletrico.png` e é incorporada ao HTML
+pelos dois geradores, sem requisição adicional no navegador.
 O painel da Equipe exibe a quantidade de dispositivos conectados aos pontos de
-acesso Equipe e Visitantes e, nas páginas de cada ESP, lista endereço MAC e tempo
-conectado. O limite de sessão Wi-Fi é 15 minutos por padrão, pode ser alterado
+acesso Equipe e Visitantes. As listas de endereço MAC, tempo conectado e ações de
+desconexão ficam na página Comandos, separadas da rede externa do mestre usada
+para OTA e Google. O limite de sessão Wi-Fi é 15 minutos por padrão, pode ser alterado
 ou desativado com 0, e desconecta a estação ao expirar. Ele não altera o prazo
 do DHCP nem impede que um dispositivo com a senha salva se reconecte.
 
@@ -167,6 +176,10 @@ sequência, origem simulada, velocidade, aceleração, potência e percurso, com
 unidades codificadas nos nomes dos campos. Aceleração indisponível ou grandezas
 elétricas não adquiridas são `null`, não zero. Os gráficos e cálculos de energia,
 distância e tempo começam quando a página é aberta.
+O painel público destaca velocidade, aceleração e percurso. Bateria e potência
+aparecem quando há leitura; no modo real sem aquisição elétrica, uma nota explica
+a ausência. A escala de velocidade começa em 30 km/h e se expande quando as
+leituras ultrapassam esse valor.
 O navegador consulta a telemetria a cada 500 ms (2 Hz), sem controle de taxa.
 
 ## Manutenção e fontes de verdade

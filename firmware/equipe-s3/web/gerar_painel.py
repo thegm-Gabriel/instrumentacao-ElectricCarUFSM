@@ -1,5 +1,6 @@
 """Gera o recurso HTML embutido no firmware, sem dependências externas."""
 
+import base64
 from pathlib import Path
 
 
@@ -13,6 +14,8 @@ def main() -> None:
     css += "\n" + (ROOT / "layout.css").read_text(encoding="utf-8")
     js = (ROOT / "app.js").read_text(encoding="utf-8")
     html = html.replace("/* NEXUS_CSS */", css).replace("/* NEXUS_JS */", js)
+    logo = ROOT.parent.parent / "compartilhado" / "web" / "logo_carro_eletrico.png"
+    html = html.replace("/* PROJECT_LOGO */", "data:image/png;base64," + base64.b64encode(logo.read_bytes()).decode("ascii"))
     lines = ["// Gerado por web/gerar_painel.py. Edite os arquivos em web/.",
              '#include "servicos/painel_web.h"', "", "const char PAGINA_WEB[] ="]
     for offset in range(0, len(html), 900):

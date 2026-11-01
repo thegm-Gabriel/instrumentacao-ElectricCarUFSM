@@ -41,16 +41,19 @@
   const marchas = ['Estacionado','Neutro','Frente','Ré'];
 
   function showTab(tab, historyMode = 'replace') {
-    if (!['telemetria','mestre','equipe','visitantes','comandos'].includes(tab)) tab = 'telemetria';
+    if (!['telemetria','comandos','mestre','equipe','visitantes','sobre'].includes(tab)) tab = 'telemetria';
     state.tab = tab;
     document.querySelectorAll('.page').forEach(el => el.classList.toggle('active', el.id === tab));
     document.querySelectorAll('.tab').forEach(el => { const active = el.dataset.tab === tab; el.classList.toggle('active', active); el.setAttribute('aria-selected', String(active)); el.tabIndex = active ? 0 : -1; });
     if (location.hash !== '#' + tab) history[historyMode+'State'](null, '', '#' + tab);
     if (tab === 'telemetria') requestAnimationFrame(drawCharts);
     else if (tab === 'mestre') renderDevice('mestre','mestre');
-    else if (tab === 'equipe' || tab === 'visitantes') {renderGroup(tab);pollWifiClients(tab,true);}
+    else if (tab === 'equipe' || tab === 'visitantes') renderGroup(tab);
+    else if (tab === 'comandos') {pollWifiClients('equipe',true);pollWifiClients('visitantes',true);}
   }
   document.querySelectorAll('.tab').forEach(el => el.addEventListener('click', () => showTab(el.dataset.tab, 'push')));
+  document.querySelectorAll('[data-scroll-to]').forEach(button=>button.addEventListener('click',()=>{$(button.dataset.scrollTo).scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'start'});document.querySelectorAll('[data-scroll-to]').forEach(item=>item.classList.toggle('active',item===button));}));
+  document.querySelectorAll('[data-open-clients]').forEach(button=>button.addEventListener('click',()=>{showTab('comandos','push');requestAnimationFrame(()=>$('wifi-clients-'+button.dataset.openClients).scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'center'}));}));
   $('tab-telemetria').closest('.tabs').addEventListener('keydown', event => {
     const tabs=[...document.querySelectorAll('.tab')],index=tabs.indexOf(document.activeElement);
     if(index<0)return;
@@ -70,11 +73,11 @@
     set('speed-scale-max',String(scale));
     const throttle=d?.simulado?value(d,'acelerador_decimos_percentual',10):null;
     const brake=d?.simulado?value(d,'freio_decimos_percentual',10):null;
-    $('throttle-arc').style.strokeDasharray=(Math.max(0,Math.min(100,throttle||0)))+' 100';
-    $('brake-arc').style.strokeDasharray=(Math.max(0,Math.min(100,brake||0)))+' 100';
+    $('throttle-fill').style.width=(Math.max(0,Math.min(100,throttle||0)))+'%';
+    $('brake-fill').style.width=(Math.max(0,Math.min(100,brake||0)))+'%';
     set('throttle-arc-value',throttle===null?'—':number(throttle,0)+'%');
     set('brake-arc-value',brake===null?'—':number(brake,0)+'%');
-    $('speed-fill').closest('svg').setAttribute('aria-label','Velocidade em escala de 0 a '+scale+' km/h; acelerador e freio em porcentagem');
+    $('speed-fill').closest('svg').setAttribute('aria-label','Velocidade em escala de 0 a '+scale+' km/h');
   }
 
   function event(text, kind = 'info', command = false) {
@@ -96,11 +99,30 @@
     tone('esp-dot', !state.visitorsChecked ? 'neutral' : state.visitorsOnline ? 'good' : 'bad'); set('esp-status', !state.visitorsChecked ? 'Não consultado' : state.visitorsOnline ? 'Respondendo' : 'Sem resposta');
     const elapsed = state.lastSample ? Date.now() - state.lastSample : null;
     set('updated-status', elapsed === null ? 'Não disponível' : 'há ' + age(elapsed));
-    set('record-status', state.samples.length ? 'Histórico nesta página' : 'Sem gravação no dispositivo');
+    set('record-status', state.samples.length ? 'Histórico local' : 'Sem histórico');
     const stale = !state.telemetry || !state.telemetry.valido || state.telemetry.idade_ms >= 2000 || elapsed === null || elapsed > 4000;
     document.querySelectorAll('.speed-card,.metric-card,.quick-strip,.chart-card,.detail-card').forEach(el => el.classList.toggle('stale', stale));
     if (state.telemetry) badge('data-badge', state.telemetry.simulado ? 'Dados simulados' : stale ? 'Dados desatualizados' : 'Dados do mestre', state.telemetry.simulado ? 'warn' : stale ? 'warn' : 'good');
+    renderHealth();
   }
+  const healthCauses=['Memória crítica','Pilha de tarefa baixa','Sensor','I²C','UART','Supervisão de tarefas','Equipe sem resposta','Visitantes sem resposta','Wi-Fi fraco','Falha OTA recente','Persistência no SD','Memória baixa'];
+  function renderHealth(){
+    const health=state.master.saude,fresh=state.masterOnline&&health&&Date.now()-(state.lastHealthAt||0)<30000;
+    const notice=$('health-notice');
+    if(!fresh){tone('health-dot',state.masterChecked&&!state.masterOnline?'bad':'neutral');set('health-status',state.masterChecked&&!state.masterOnline?'Mestre sem resposta':'Aguardando consulta');notice.hidden=true;return;}
+    const level=Number(health.estado)||0;
+    const labels=['Normal','Recuperando','Operação degradada','Falha detectada'];
+    tone('health-dot',level===0?'good':level===3?'bad':'warn');
+    set('health-status',labels[level]||'Estado desconhecido');
+    notice.hidden=level===0;
+    if(level===0)return;
+    notice.className='health-notice '+(level===3?'bad':'warn');
+    set('health-notice-title',level===3?'Falha detectada no mestre':level===1?'Mestre em recuperação':'Operação degradada');
+    const mask=Number(health.causas_ativas)||0;
+    const causes=healthCauses.filter((_,index)=>(mask&(1<<index))!==0);
+    set('health-notice-detail',causes.length?'Causas informadas: '+causes.slice(0,3).join(', ')+(causes.length>3?' e mais '+(causes.length-3)+'.':'.'):'O mestre informou um estado de atenção. Consulte o diagnóstico para detalhes.');
+  }
+  $('health-details').addEventListener('click',()=>showTab('mestre','push'));
   async function getJSON(url, timeout = 7000) {
     const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), timeout);
     try { const response = await fetch(url, {cache:'no-store', signal:controller.signal}); state.lastHttp = Date.now(); state.browserOnline = true; const body = await response.json(); if (!response.ok || body.ok === false) throw new Error(body.erro || 'Resposta ' + response.status); return body; }
@@ -170,7 +192,7 @@
   async function masterQuery(consult, quiet = true) {
     const key = 'master-' + consult; if (state.polls[key]) return state.polls[key];
     const pending=(async()=>{
-      try { const d = await remote(() => getJSON('/api/mestre?consulta=' + encodeURIComponent(consult), 18000)); const restored=consult==='ping'&&!state.masterOnline;state.master[consult] = d; state.masterOnline = true; if(restored){state.lastCommandPoll=0;state.lastAuxPoll=0;}updateMasterUI(consult,d); if(consult==='ping')deviceSample('mestre',{rtt:value(d,'rtt_ms')});if(consult==='diagnostico_mestre')deviceSample('mestre',{cpu:d.cpu_valida?value(d,'cpu_total_decimos_percentual',10):null,core0:d.cpu_valida?value(d,'cpu_nucleo_0_decimos_percentual',10):null,core1:d.cpu_valida?value(d,'cpu_nucleo_1_decimos_percentual',10):null,heap:value(d,'heap_interno_livre',1024),temp:d.temperatura_valida?value(d,'temperatura_centesimos_c',100):null}); if (!quiet) commandEvent('MESTRE', consult, 'Executado', d); return d; }
+      try { const d = await remote(() => getJSON('/api/mestre?consulta=' + encodeURIComponent(consult), 18000)); const restored=consult==='ping'&&!state.masterOnline;state.master[consult] = d; state.masterOnline = true; if(consult==='saude')state.lastHealthAt=Date.now(); if(restored){state.lastCommandPoll=0;state.lastAuxPoll=0;}updateMasterUI(consult,d); if(consult==='ping')deviceSample('mestre',{rtt:value(d,'rtt_ms')});if(consult==='diagnostico_mestre')deviceSample('mestre',{cpu:d.cpu_valida?value(d,'cpu_total_decimos_percentual',10):null,core0:d.cpu_valida?value(d,'cpu_nucleo_0_decimos_percentual',10):null,core1:d.cpu_valida?value(d,'cpu_nucleo_1_decimos_percentual',10):null,heap:value(d,'heap_interno_livre',1024),temp:d.temperatura_valida?value(d,'temperatura_centesimos_c',100):null}); if (!quiet) commandEvent('MESTRE', consult, 'Executado', d); return d; }
       catch (error) { if (consult === 'ping'){state.masterOnline = false;deviceSample('mestre',{rtt:null,cpu:null,core0:null,core1:null,heap:null,temp:null});} if (!quiet) commandEvent('MESTRE', consult, error.name === 'AbortError' ? 'Tempo esgotado' : 'Falhou', null, error.message); return null; }
       finally {if(consult==='ping')state.masterChecked=true;updateStatus();availability();renderDevice('mestre','mestre');}
     })();
@@ -212,7 +234,7 @@
   function dataRows(id) {
     const d = deviceData(id), no = 'Não disponível';
     if (id === 'equipe') return [['Firmware',d?.versao_firmware || no],['CPU',d?.cpu_valida ? format(value(d,'cpu_total_decimos_percentual',10),'%',1) : no],['Temperatura interna',d?.temperatura_valida ? format(value(d,'temperatura_centesimos_c',100),'°C',1) : no],['Wi-Fi',d ? d.wifi_ssid + ' · ' + d.clientes_wifi + ' cliente(s)' : no],['UART RX',d ? String(d.uart_recepcoes_ok) : no],['Tempo ligado',d ? age(d.tempo_ativo_ms) : no],['Heap interno livre',d ? bytes(d.heap_interno_livre) : no],['PSRAM livre',d?.psram_total ? bytes(d.psram_livre) : no],['Último reinício',d ? 'Código ' + d.motivo_reinicio : no]];
-    if (id === 'mestre') {const diag=state.master.diagnostico_mestre,version=state.master.versao,ping=state.master.ping,sync=state.master.sincronizacao;return [['Firmware',version?.firmware || no],['CPU',diag?.cpu_valida ? format(value(diag,'cpu_total_decimos_percentual',10),'%',1) : no],['Temperatura interna',diag?.temperatura_valida ? format(value(diag,'temperatura_centesimos_c',100),'°C',1) : no],['Tempo ligado',ping ? age(ping.tempo_ativo_ms) : no],['Heap livre',diag ? bytes(diag.heap_livre) : no],['PSRAM',diag?.psram_disponivel ? bytes(diag.psram_livre) : no],['Último reinício',diag ? 'Código ' + diag.motivo_ultimo_reset : no],['Sincronização Google',sync ? sync.em_andamento ? 'Em andamento' : sync.sincronizacoes_finalizadas ? sync.ultimo_resultado_sincronizacao===0 ? 'Concluída' : 'Falhou' : 'Pronta' : no],['Arquivos pendentes no SD',sync ? String(sync.arquivos_pendentes) : no]];}
+    if (id === 'mestre') {const diag=state.master.diagnostico_mestre,version=state.master.versao,ping=state.master.ping,sync=state.master.sincronizacao,health=state.masterOnline&&Date.now()-(state.lastHealthAt||0)<30000?state.master.saude:null;const causes=healthCauses.filter((_,index)=>((Number(health?.causas_ativas)||0)&(1<<index))!==0);return [['Firmware',version?.firmware || no],['Saúde do sistema',health?(['Normal','Recuperando','Operação degradada','Falha detectada'][health.estado]||no):no],['Causas ativas',health?causes.length?causes.join(', '):'Nenhuma':no],['CPU',diag?.cpu_valida ? format(value(diag,'cpu_total_decimos_percentual',10),'%',1) : no],['Temperatura interna',diag?.temperatura_valida ? format(value(diag,'temperatura_centesimos_c',100),'°C',1) : no],['Tempo ligado',ping ? age(ping.tempo_ativo_ms) : no],['Heap livre',diag ? bytes(diag.heap_livre) : no],['PSRAM',diag?.psram_disponivel ? bytes(diag.psram_livre) : no],['Último reinício',diag ? 'Código ' + diag.motivo_ultimo_reset : no],['Sincronização Google',sync ? sync.em_andamento ? 'Em andamento' : sync.sincronizacoes_finalizadas ? sync.ultimo_resultado_sincronizacao===0 ? 'Concluída' : 'Falhou' : 'Pronta' : no],['Arquivos pendentes no SD',sync ? String(sync.arquivos_pendentes) : no]];}
     const ping=state.visitors.ping,version=state.visitors.versao,diag=state.visitors.diagnostico;
     return [['Firmware',version?.firmware || no],['CPU',diag?.cpu_valida?format(value(diag,'cpu_total_decimos_percentual',10),'%',1):no],['CPU núcleo 0',diag?.cpu_valida?format(value(diag,'cpu_nucleo_0_decimos_percentual',10),'%',1):no],['CPU núcleo 1',diag?.cpu_valida?format(value(diag,'cpu_nucleo_1_decimos_percentual',10),'%',1):no],['Temperatura interna',diag?.temperatura_valida?format(value(diag,'temperatura_centesimos_c',100),'°C',1):no],['Heap interno livre',diag?bytes(diag.heap_interno_livre):no],['Heap mínimo',diag?bytes(diag.heap_interno_minimo):no],['Maior bloco interno',diag?bytes(diag.heap_interno_maior_bloco):no],['PSRAM livre',diag?.psram_total?bytes(diag.psram_livre):no],['Tarefas ativas',diag&&Number.isFinite(diag.tarefas_ativas)?String(diag.tarefas_ativas):no],['Tempo ligado',diag?age(diag.tempo_ativo_ms):ping&&!ping.error?age(ping.tempo_ativo_ms):no],['Último reinício',diag&&Number.isFinite(diag.motivo_reinicio)?'Código '+diag.motivo_reinicio:no],['Dispositivos no Wi-Fi',diag?String(diag.clientes_wifi):no]];
   }
@@ -283,6 +305,7 @@
     $('refresh-ota-state').disabled=state.busy;
     $('refresh-sync-state').disabled=state.busy||!state.masterOnline||(Number.isFinite(capabilities)&&(capabilities&CAP_SYNC)===0);
     $('refresh-simulator-state').disabled=state.busy||!state.masterOnline||(Number.isFinite(capabilities)&&(capabilities&CAP_SIMULATOR)===0);
+    $('refresh-wifi-state').disabled=state.busy||!state.masterOnline;
     const supported=Number.isFinite(capabilities)&&(capabilities&(128|256|512))!==0;
     badge('master-command-status',state.masterChecked&&!state.masterOnline?'Mestre sem resposta':supported?'Comandos disponíveis':Number.isFinite(capabilities)?'Ações não anunciadas pelo mestre':'Aguardando resposta do mestre',state.masterChecked&&!state.masterOnline?'bad':supported?'good':'muted');
   }
@@ -373,15 +396,16 @@
     }
     if(consult==='configuracao'){
       set('report-state',data.relatorios_pausados?'Pausados':'Ativos');
+      document.querySelector('[data-master-action="alternar_relatorios"]').textContent=data.relatorios_pausados?'Retomar relatórios':'Pausar relatórios';
       const group=Number($('report-group').value);
       if(Array.isArray(data.intervalos_relatorios_ms))setField('report-interval',data.intervalos_relatorios_ms[group]);
       setField('ota-interval',data.intervalo_ota_minutos);
       setField('telemetry-ota-interval',data.intervalo_telemetria_ota_ms);
       setField('wifi-auto',data.wifi_automatico?'1':'0');
       setField('wifi-attempts',data.tentativas_wifi);
-      setField('wifi-attempt-time',data.tempo_tentativa_wifi_ms);
-      setField('wifi-retry-interval',data.intervalo_tentativas_wifi_ms);
-      setField('wifi-session-limit',data.tempo_limite_wifi_ms);
+      setField('wifi-attempt-time',data.tempo_tentativa_wifi_ms/1000);
+      setField('wifi-retry-interval',data.intervalo_tentativas_wifi_ms/1000);
+      setField('wifi-session-limit',data.tempo_limite_wifi_ms/1000);
     }
     if(consult==='ota')renderOtaState(data);
     if(consult==='sincronizacao')renderSyncState(data);
@@ -392,7 +416,7 @@
       set('simulator-checked','Estado confirmado no mestre às '+new Date().toLocaleTimeString('pt-BR')+'. A alteração via web é temporária e se perde ao reiniciar.');
       observeOperationalRun(consult,data);
     }
-    if(consult==='wifi')set('wifi-command-state',data.conectado?'Mestre conectado a '+(data.rede||'rede não identificada')+' · RSSI '+data.rssi_dbm+' dBm':data.radio_ativo?'Rádio do mestre ativo; sem conexão informada.':'Rádio do mestre inativo.');
+    if(consult==='wifi')set('wifi-command-state',data.conectado?'Rede externa ativa: '+(data.rede||'rede não identificada')+' · sinal '+data.rssi_dbm+' dBm':data.radio_ativo?'Wi-Fi externo ligado; ainda sem conexão confirmada.':'Wi-Fi externo desligado. Isso é normal fora das sessões de OTA e Google.');
     if(consult==='wifi'||consult==='configuracao')observeOperationalRun(consult,data);
   }
   async function loadSavedNetworks(count){
@@ -416,6 +440,11 @@
     if(!raw||!Number.isInteger(n)||n<min||n>max)throw new Error('Confira '+(input.closest('label')?.textContent.trim()||id)+' ('+min+' a '+max+').');
     return String(n);
   }
+  function wifiSecondsField(id){
+    const input=$(id),raw=input.value.trim(),seconds=Number(raw),min=Number(input.min),max=Number(input.max);
+    if(!raw||!Number.isFinite(seconds)||seconds<min||seconds>max)throw new Error('Confira '+(input.closest('label')?.textContent.trim()||id)+' ('+min+' a '+max+' s).');
+    return String(Math.round(seconds*1000));
+  }
   function permission(){const secret=$('wifi-permission').value;if(!secret||secret.includes('\n')||bytesLength(secret)>=108)throw new Error('Informe uma permissão administrativa válida.');return secret;}
   function preparedNetwork(){const ssid=$('wifi-ssid').value,password=$('wifi-password').value;if(!ssid||bytesLength(ssid)>32||bytesLength(password)<8||bytesLength(password)>63||ssid.includes('\n')||password.includes('\n'))throw new Error('Informe SSID de até 32 bytes e senha de 8 a 63 bytes.');return ssid+'\n'+password;}
   function savedIndex(){const index=$('wifi-saved').value;if(!/^[1-5]$/.test(index))throw new Error('Selecione uma rede salva informada pelo mestre.');return index;}
@@ -436,7 +465,7 @@
     if(action==='wifi_conectar_salva'||action==='wifi_excluir_salva'){plan.steps[0].body=savedIndex();plan.refresh=['wifi','configuracao'];if(action==='wifi_conectar_salva')plan.expectedSsid=($('wifi-saved').selectedOptions[0]?.textContent||'').split(' · ').slice(1).join(' · ');}
     if(action==='wifi_restaurar_principal'){plan.steps[0].body=permission();plan.secret=true;plan.refresh=['wifi','configuracao'];}
     if(action==='wifi_automatico'){const enabled=$('wifi-auto').value==='1';plan.steps[0].body=(enabled?'1':'0')+'\n'+permission();plan.secret=true;plan.refresh=['configuracao'];plan.expected={field:'wifi_automatico',value:enabled,label:'Conexão automática'};}
-    if(action==='wifi_politica'){plan.steps[0].body=['wifi-attempts','wifi-attempt-time','wifi-retry-interval','wifi-session-limit'].map(numberField).join('\n')+'\n'+permission();plan.secret=true;plan.refresh=['configuracao'];}
+    if(action==='wifi_politica'){plan.steps[0].body=[numberField('wifi-attempts'),wifiSecondsField('wifi-attempt-time'),wifiSecondsField('wifi-retry-interval'),wifiSecondsField('wifi-session-limit')].join('\n')+'\n'+permission();plan.secret=true;plan.refresh=['configuracao'];}
     return plan;
   }
   function observedConfiguration(plan,config){
@@ -511,14 +540,29 @@
         message(plan.name+': resposta recebida pelo mestre.'+(checked?' Estado consultado.':''),'success');
       }
       else message(plan.name+': resposta recebida. O andamento aparece no painel de '+(run.followSync?'sincronização':'OTA')+'.','success');
-      if(plan.secret){$('wifi-password').value='';$('wifi-permission').value='';}
+      if(plan.secret){
+        if(['wifi_test','wifi_primary'].includes(plan.action))$('wifi-password').value='';
+        if(['wifi_primary','wifi_restaurar_principal','wifi_automatico','wifi_politica'].includes(plan.action))$('wifi-permission').value='';
+      }
     }catch(error){const timeout=error.name==='AbortError',reason=timeout?'O tempo de resposta esgotou':error.message;updateRun(run,timeout?'Sem resposta':'Falhou','Etapa '+run.step+' de '+plan.steps.length+': '+reason+'. A etapa não teve confirmação de sucesso. Confira o estado antes de repetir a ação.',timeout?'warn':'bad');message(plan.name+': '+reason+'. Confira o estado antes de repetir a ação.','error');}
     finally{state.busy=false;availability();}
   }
   document.querySelectorAll('[data-master-action]').forEach(button=>button.addEventListener('click',()=>{
     if(state.busy||button.disabled)return;
-    try{state.pending=buildPlan(button.dataset.masterAction);$('confirm-title').textContent=state.pending.name;$('confirm-text').textContent='Enviar '+state.pending.steps.length+' solicitação(ões) ao mestre? A resposta confirma o recebimento; operações como OTA e Wi-Fi podem continuar depois.';$('confirm-dialog').showModal();}
-    catch(error){message(error.message,'error');}
+    const wifiAction=button.dataset.masterAction.startsWith('wifi_');
+    if(wifiAction)$('wifi-form-error').hidden=true;
+    try{
+      state.pending=buildPlan(button.dataset.masterAction);
+      $('confirm-title').textContent=state.pending.name;
+      $('confirm-text').textContent='Enviar '+state.pending.steps.length+' solicitação(ões) ao mestre? A resposta confirma o recebimento; operações como OTA e Wi-Fi podem continuar depois.';
+      const destructive=['zerar_percurso','wifi_excluir_salva','wifi_primary','wifi_restaurar_principal','cancelar_ota'].includes(button.dataset.masterAction);
+      $('confirm-action').className='button'+(destructive?' danger':'');
+      $('confirm-action').textContent=destructive?'Confirmar ação':'Enviar comando';
+      $('confirm-dialog').showModal();
+    }catch(error){
+      if(wifiAction){$('wifi-form-error').textContent=error.message;$('wifi-form-error').hidden=false;$('wifi-form-error').scrollIntoView({block:'nearest'});}
+      else message(error.message,'error');
+    }
   }));
   $('confirm-dialog').addEventListener('close',()=>{const plan=state.pending;state.pending=null;if($('confirm-dialog').returnValue==='confirm'&&plan)executePlan(plan);});
   $('run-master-query').addEventListener('click',async()=>{
@@ -544,6 +588,14 @@
     if(state.busy)return;state.busy=true;availability();
     try{if(!await masterQuery('simulador'))set('simulator-checked','Não foi possível consultar agora. O estado exibido é o último recebido.');}
     finally{state.busy=false;availability();}
+  });
+  $('refresh-wifi-state').addEventListener('click',async()=>{
+    if(state.busy)return;state.busy=true;availability();
+    try{
+      if(!await masterQuery('wifi')){set('wifi-command-state','Sem resposta do mestre. O estado da rede não pôde ser confirmado agora.');return;}
+      const config=await masterQuery('configuracao');
+      if(config)await loadSavedNetworks(config.quantidade_redes_wifi);
+    }finally{state.busy=false;availability();}
   });
   $('export-csv').addEventListener('click',()=>{const rows=['horario_local;origem;velocidade_kmh;aceleracao_ms2;potencia_w;corrente_a;tensao_v'];state.samples.filter(s=>!s.gap).forEach(s=>rows.push([new Date(s.time).toISOString(),s.simulated?'simulado':'mestre',s.speed,s.accel,s.power,s.current,s.voltage].map(v=>v===null?'':String(v)).join(';')));const url=URL.createObjectURL(new Blob([rows.join('\n')],{type:'text/csv;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='nexus-telemetria-'+new Date().toISOString().slice(0,19).replace(/:/g,'-')+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});
 
@@ -694,6 +746,8 @@
       if(state.busy)return;
       await masterQuery('diagnostico_mestre');
       if(state.busy)return;
+      await masterQuery('saude');
+      if(state.busy)return;
       await visitorsQuery('ping');
       if(state.visitorsOnline)await visitorsQuery('diagnostico');
       const now=Date.now();
@@ -707,17 +761,19 @@
   const wifiPanels={equipe:{},visitantes:{}};
   function setupWifiPanel(group){
     const panel=$('wifi-clients-'+group),label=group==='equipe'?'Equipe':'Visitantes';
-    panel.innerHTML='<div class="wifi-clients-head"><div><h2>Conexões Wi-Fi · '+label+'</h2><p>Dispositivos conectados ao ponto de acesso deste ESP.</p></div><span class="wifi-clients-summary">Aguardando consulta</span></div><form class="wifi-client-settings"><label>Limite por conexão (min)<input type="number" min="0" max="1440" step="1" value="15" aria-label="Limite de tempo por conexão na rede '+label+'"></label><button type="submit" class="button">Salvar limite</button><p>0 desativa o limite. Um dispositivo desconectado pode se conectar novamente.</p></form><div class="wifi-client-list"><p class="wifi-client-empty">Aguardando lista de clientes.</p></div><p class="command-live-meta wifi-client-checked">Nenhuma consulta concluída.</p>';
+    panel.innerHTML='<div class="wifi-clients-head"><div><h2>Rede da '+label+'</h2><p>Celulares e outros dispositivos conectados ao painel deste ESP.</p></div><div class="wifi-clients-actions"><span class="wifi-clients-summary">Aguardando consulta</span><button type="button" class="button secondary wifi-clients-refresh">Atualizar</button></div></div><form class="wifi-client-settings"><label>Tempo máximo por conexão (min)<input type="number" min="0" max="1440" step="1" value="15" aria-label="Tempo máximo de conexão na rede '+label+'"></label><button type="submit" class="button">Salvar tempo</button><p>0 deixa a conexão sem limite. Um dispositivo desconectado pode entrar novamente.</p></form><p class="wifi-client-feedback" role="status" hidden></p><div class="wifi-client-list"><p class="wifi-client-empty">Aguardando lista de dispositivos.</p></div><p class="command-live-meta wifi-client-checked">Nenhuma consulta concluída.</p>';
+    panel.querySelector('.wifi-clients-refresh').addEventListener('click',()=>pollWifiClients(group,true));
     const form=panel.querySelector('form');
     form.addEventListener('submit',async event=>{
       event.preventDefault();const minutes=Number(form.querySelector('input').value);
       if(!Number.isInteger(minutes)||minutes<0||minutes>1440)return;
       const button=form.querySelector('button');button.disabled=true;
-      try{await wifiCommand(group,'limite',minutes);panel.querySelector('.wifi-client-checked').textContent='Limite salvo. Consultando estado atualizado...';await pollWifiClients(group,true);}
-      catch(error){panel.querySelector('.wifi-client-checked').textContent='Não foi possível salvar o limite: '+error.message;}
+      try{await wifiCommand(group,'limite',minutes);wifiFeedback(group,'Tempo máximo salvo: '+(minutes?minutes+' min por conexão':'sem limite')+'.','good');await pollWifiClients(group,true);}
+      catch(error){wifiFeedback(group,'Não foi possível salvar o tempo: '+error.message,'bad');}
       finally{button.disabled=false;}
     });
   }
+  function wifiFeedback(group,text,kind){const el=$('wifi-clients-'+group).querySelector('.wifi-client-feedback');el.textContent=text;el.className='wifi-client-feedback '+kind;el.hidden=false;}
   async function wifiCommand(group,action,value){
     const local=group==='equipe',url=local?'/api/wifi/'+(action==='limite'?'limite':'desconectar'):'/api/mestre?consulta=satelite_visitantes_'+(action==='limite'?'limite':'kick');
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),18000);
@@ -743,7 +799,7 @@
         const row=document.createElement('div'),mac=document.createElement('strong'),duration=document.createElement('span'),button=document.createElement('button');
         row.className='wifi-client-row';mac.textContent=client.mac;duration.dataset.connectedMs=String(Number(client.conectado_ms)||0);duration.dataset.checkedAt=String(view.checked);duration.textContent='Conectado há '+age(Number(client.conectado_ms)||0);
         button.type='button';button.className='button danger';button.textContent='Desconectar';button.setAttribute('aria-label','Desconectar '+client.mac);
-        button.addEventListener('click',async()=>{if(!confirm('Desconectar '+client.mac+' da rede '+(group==='equipe'?'Equipe':'Visitantes')+'?'))return;button.disabled=true;try{await wifiCommand(group,'kick',client.mac);await pollWifiClients(group,true);}catch(error){panel.querySelector('.wifi-client-checked').textContent='Resposta não confirmada ('+error.message+'). A conexão pode ter caído; consulte a lista novamente.';}finally{button.disabled=false;}});
+        button.addEventListener('click',async()=>{if(!confirm('Desconectar '+client.mac+' da rede '+(group==='equipe'?'Equipe':'Visitantes')+'?'))return;button.disabled=true;try{await wifiCommand(group,'kick',client.mac);wifiFeedback(group,'Desconexão solicitada para '+client.mac+'.','good');await pollWifiClients(group,true);}catch(error){wifiFeedback(group,'Resposta não confirmada para '+client.mac+': '+error.message+'. Consulte a lista novamente.','bad');}finally{button.disabled=false;}});
         row.append(mac,duration,button);list.append(row);
       });
       panel.querySelector('.wifi-client-checked').textContent='Consultado às '+new Date(view.checked).toLocaleTimeString('pt-BR')+'. O limite é por conexão, não é o prazo do endereço IP.';
@@ -751,7 +807,7 @@
     finally{view.busy=false;}
   }
   setupWifiPanel('equipe');setupWifiPanel('visitantes');
-  setInterval(()=>{pollWifiClients('equipe');if(state.tab==='visitantes')pollWifiClients('visitantes');},10000);
+  setInterval(()=>{pollWifiClients('equipe');if(state.tab==='comandos')pollWifiClients('visitantes');},10000);
   setInterval(()=>{document.querySelectorAll('.wifi-client-row span[data-connected-ms]').forEach(el=>{el.textContent='Conectado há '+age(Number(el.dataset.connectedMs)+Date.now()-Number(el.dataset.checkedAt));});},1000);
   makeGroup('equipe');makeGroup('visitantes');showTab(location.hash.slice(1));renderEvents();renderMasterCommandHistory();availability();updateStatus();
   pollTelemetry();pollLocal();pollRemote();pollCommandStates();pollWifiClients('equipe');

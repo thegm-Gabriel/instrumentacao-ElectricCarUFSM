@@ -23,6 +23,7 @@
     const status = document.querySelector('.live-status');
     if (status.className !== 'live-status ' + kind) status.className = 'live-status ' + kind;
     if ($('status-label').textContent !== label) $('status-label').textContent = label;
+    document.body.dataset.feed = kind;
   }
 
   function elapsedText(ms) {
@@ -33,7 +34,7 @@
 
   function updateAge() {
     $('last-update').textContent = state.lastSampleAt ? 'Última leitura ' + elapsedText(Date.now() - state.lastSampleAt) : 'Sem leitura';
-    if (state.firstSampleAt) setValue('session-value', format(Math.floor((Date.now() - state.firstSampleAt) / 60000), 0) + ' min');
+    if (state.firstSampleAt) {const elapsed=Date.now()-state.firstSampleAt;setValue('session-value',elapsed<60000?format(Math.floor(elapsed/1000),0)+' s':format(elapsed/60000,1)+' min');}
     if (state.lastSampleAt && Date.now() - state.lastSampleAt > 2500 && !state.gapOpen) addGap();
   }
 
@@ -71,7 +72,9 @@
     setValue('speed-value', speed === null ? 'Sem leitura' : format(speed, 1));
     $('motion-state').textContent = speed === null ? 'Aguardando dados' : speed < 0.5 ? 'Parado' : 'Em movimento';
     $('speed-source').textContent = simulated ? 'Velocidade simulada' : 'Velocidade informada pelo veículo';
-    $('speed-arc').style.strokeDasharray = (speed === null ? 0 : Math.min(100, Math.max(0, speed / 30 * 100))) + ' 100';
+    const speedScale = Math.max(30, Math.ceil(Math.max(0, speed || 0) * 1.08 / 5) * 5);
+    $('speed-arc').style.strokeDasharray = (speed === null ? 0 : Math.min(100, Math.max(0, speed / speedScale * 100))) + ' 100';
+    $('speed-scale-label').textContent = 'Escala até ' + speedScale + ' km/h';
 
     setValue('battery-value', charge === null ? 'Sem leitura' : format(charge, 1), charge === null ? '' : '%');
     $('battery-fill').style.width = charge === null ? '0%' : Math.max(0, Math.min(100, charge)) + '%';
@@ -84,12 +87,23 @@
     setValue('accel-value', accel === null ? 'Sem leitura' : format(accel, 2), accel === null ? '' : 'm/s²');
     $('accel-hint').textContent = accel === null ? 'Aguardando leitura válida do sensor.' : simulated ? 'Dados simulados.' : accel > 0.15 ? 'Acelerando · leitura do sensor.' : accel < -0.15 ? 'Desacelerando · leitura do sensor.' : 'Velocidade estável · leitura do sensor.';
 
+    const distance = readNumber(data, 'percurso_metros');
+    setValue('trip-value', distance === null ? 'Sem leitura' : format(distance / 1000, 2), distance === null ? '' : 'km');
+    $('trip-hint').textContent = simulated ? 'Percurso gerado pela simulação.' : 'Percurso informado pelo mestre.';
+    const hasElectricData = charge !== null || power !== null;
+    $('energy-live-grid').hidden = !hasElectricData;
+    $('energy-unavailable').hidden = hasElectricData;
+    document.querySelectorAll('.electric-detail').forEach(card => {card.hidden = !hasElectricData;});
+    document.querySelector('#details-title').closest('.section').querySelector('.detail-grid').classList.toggle('compact',!hasElectricData);
+    ['power','battery'].forEach(key => {$('visitor-chart-signal').querySelector('option[value="'+key+'"]').disabled = !hasElectricData;});
+    if (!hasElectricData && ['power','battery'].includes(state.chartSignal)) {state.chartSignal='accel';$('visitor-chart-signal').value='accel';}
+    if (!hasElectricData) $('energy-unavailable').textContent = 'Este veículo ainda não envia medições de bateria ou potência elétrica no modo real. Movimento e percurso continuam disponíveis acima.';
+
     setValue('voltage-value', voltage === null || voltage <= 0 ? 'Sem leitura' : format(voltage, 2) + ' V');
     $('voltage-hint').textContent = simulated ? 'Valor simulado.' : 'Sem medição no modo real.';
     setValue('current-value', current === null ? 'Sem leitura' : format(current, 2) + ' A');
     $('current-hint').textContent = simulated ? 'Valor simulado.' : 'Sem medição no modo real.';
     setValue('energy-value', state.energyWh === null ? 'Sem leitura' : format(state.energyWh, 1) + ' Wh');
-    const distance = readNumber(data, 'percurso_metros');
     if (distance !== null) {
       if (state.firstDistance === null || distance < state.firstDistance) state.firstDistance = distance;
       setValue('distance-value', format(Math.max(0, distance - state.firstDistance) / 1000, 2) + ' km');
@@ -188,7 +202,11 @@
     const highest = numeric.length ? Math.max(0, ...numeric) : 0;
     const lowest = numeric.length ? Math.min(0, ...numeric) : 0;
     let limit = state.chartLimits[key];
-    if(key==='speed')limit={min:0,max:30};
+    if(key==='speed'){
+      limit={min:0,max:Math.max(30,Math.ceil(highest*1.08/5)*5)};
+      $('speed-chart-scale').textContent='Escala de 0 a '+limit.max+' km/h · ajustada às leituras visíveis';
+      $('speed-chart').setAttribute('aria-label','Gráfico da velocidade ao longo do tempo, escala de 0 a '+limit.max+' quilômetros por hora');
+    }
     else if(key==='battery')limit={min:0,max:100};
     else if(key==='accel'){
       const peak=niceCeiling(Math.max(Math.abs(highest),Math.abs(lowest))*1.12,1);
