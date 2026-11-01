@@ -53,8 +53,19 @@ quando suportada. Ele não oferece servidor DNS local; acesso confiável:
 do painel NEXUS. `web/gerar_painel.py` gera `src/servicos/painel_web.c`,
 incorporado ao binário. As rotas `/`, `/painel`, `/diagnostico` e `/mestre`
 entregam o mesmo painel com seis páginas, nesta ordem: telemetria, comandos,
-mestre, equipe, visitantes e sobre. As páginas dos ESPs mostram diagnóstico; ações e acompanhamento
-ficam na página Comandos. O resumo de saúde do mestre é consultado periodicamente:
+mestre, equipe, visitantes e sobre.
+
+| Página da Equipe | O que apresenta ou permite fazer |
+|---|---|
+| Telemetria | Velocidade, movimento, energia disponível, histórico desta sessão, qualidade do enlace e contagem de clientes dos APs. |
+| Comandos | Envio e acompanhamento de ações; Google, simulação, Wi-Fi externo do mestre, clientes dos dois APs e OTA. |
+| ESP32 — Mestre | Saúde, causas de degradação, memória, CPU, tarefas e estado obtido por consultas UART. |
+| ESP32 — Equipe | Diagnóstico local, recepção UART e estado do ponto de acesso técnico. |
+| ESP32 — Visitantes | Diagnóstico remoto, disponibilidade, memória, CPU e clientes quando o satélite responde. |
+| Sobre | Intenção do projeto, símbolo, orientação e equipe discente. |
+
+As páginas dos ESPs mostram diagnóstico; ações e acompanhamento ficam na página
+Comandos. O resumo de saúde do mestre é consultado periodicamente:
 uma operação degradada ou falha aparece em aviso discreto com suas causas ativas
 e acesso ao diagnóstico. A telemetria pode ser consultada a 1, 2, 3 ou 4 Hz
 (padrão de 4 Hz, compatível com os 250 ms da publicação do mestre). As consultas
@@ -78,6 +89,7 @@ e apresenta o símbolo do carro. O painel público de Visitantes também traz es
 identidade e os créditos. A imagem fonte fica em
 `firmware/compartilhado/web/logo_carro_eletrico.png` e é incorporada ao HTML
 pelos dois geradores, sem requisição adicional no navegador.
+
 O painel da Equipe exibe a quantidade de dispositivos conectados aos pontos de
 acesso Equipe e Visitantes. As listas de endereço MAC, tempo conectado e ações de
 desconexão ficam na página Comandos, separadas da rede externa do mestre usada
@@ -184,8 +196,9 @@ O navegador consulta a telemetria a cada 500 ms (2 Hz), sem controle de taxa.
 
 ## Manutenção e fontes de verdade
 
-- Ajuste rede e UART nos respectivos `include/nucleo/configuracao.h`; mantenha
-  `configuracao_enlace_uart.h` igual nos três firmwares.
+- Ajuste rede e UART nos respectivos `include/nucleo/configuracao.h`; use o
+  contrato único `firmware/compartilhado/protocolos/configuracao_enlace_uart.h`
+  nos três firmwares.
 - Edite HTML/CSS/JS em `web/` e regenere `painel_web.c` antes da compilação.
 - Ao mudar campos binários, atualize o protocolo compartilhado e a versão de
   telemetria. Ao mudar a API, revise `servidor_web.c` e o JavaScript do painel.

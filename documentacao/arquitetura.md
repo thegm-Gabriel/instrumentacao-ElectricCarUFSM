@@ -2,6 +2,9 @@
 
 [Índice da documentação](README.md)
 
+Para as decisões de divisão do código, contratos entre camadas e exemplos de
+fluxos completos, leia também [filosofia do código](filosofia.md).
+
 O sistema possui um mestre responsável pelos sensores e dois satélites dedicados
 à apresentação. Essa separação mantém a aquisição independente da quantidade de
 clientes Wi-Fi e permite atualizar ou reiniciar uma interface sem interromper as

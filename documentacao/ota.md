@@ -84,65 +84,27 @@ No terminal de 115200 baud, escolha `2 - Atualização OTA`. O submenu permite:
 O mestre só oferece OTA ao satélite que esteja respondendo, suporte OTA e tenha
 uma versão menor que a descrita no manifesto.
 
-As mesmas autorizações estão disponíveis na aba **ESP32 — Mestre** de
+As mesmas autorizações estão disponíveis na página **Comandos** de
 `http://192.168.4.1/`, quando o operador está conectado ao ponto de acesso do
 módulo da equipe. A página exige
 confirmação para ações que alteram estado e acompanha o resultado pela UART.
 
 ## Preparar um release
 
-Execute o preparador sem informar versões:
+O processo completo de escolha entre **major, minor e patch**, versões
+independentes por ESP, conferência dos binários, tag e anexos está em
+[versionamento](versionamento.md). As opções e saídas de cada script estão no
+[manual de ferramentas](ferramentas.md). O caminho normal é:
 
 ```powershell
-python ferramentas\preparar_release_ota.py
-```
-
-O script calcula uma impressão digital das fontes de cada projeto e da pasta
-`firmware/compartilhado`. Por padrão, incrementa `patch` somente dos firmwares
-alterados e da etiqueta do release, compila de forma incremental e confere a
-versão gravada dentro de cada imagem. Uma mudança em código compartilhado
-versiona os três firmwares.
-
-Escolha explicitamente a parte da versão SemVer para o próximo release:
-
-```powershell
-python ferramentas\preparar_release_ota.py --bump major
-python ferramentas\preparar_release_ota.py --bump minor
 python ferramentas\preparar_release_ota.py --bump patch
 ```
 
-`major` incrementa X e zera Y/Z, `minor` incrementa Y e zera Z, e `patch`
-incrementa Z em `X.Y.Z`. A escolha vale para a etiqueta do release e para cada
-firmware alterado. Os firmwares sem mudança preservam sua versão. Se não houver
-mudança nem `--forcar`, o script reutiliza o release existente sem incrementar.
-
-Os arquivos atuais ficam em `versoes/saida`:
-
-```text
-mestre-s3.bin
-equipe-s3.bin
-visitantes-s3.bin
-manifesto-firmwares.json
-```
-
-Antes de substituir essa saída, o script move o conjunto anterior para
-`versoes/historico/vVERSAO`. O controle das versões e impressões digitais fica em
-`versoes/estado_versoes.json`. Esse arquivo deve ser mantido no repositório.
-
-Para aumentar uma versão mesmo sem mudança detectada:
-
-```powershell
-python ferramentas\preparar_release_ota.py --forcar equipe-s3
-python ferramentas\preparar_release_ota.py --forcar todos
-python ferramentas\preparar_release_ota.py --bump minor --forcar equipe-s3
-```
-
-Crie no GitHub o release com a etiqueta informada pelo script e anexe os quatro
-arquivos de `versoes/saida`. O repositório precisa ser público enquanto o firmware
-não implementar autenticação para downloads privados.
-
-O fluxo `.github/workflows/publicar-firmware-mestre.yml` também foi adaptado aos
-três alvos. Depois de executar o preparador e versionar
-`versoes/estado_versoes.json`, envie uma tag igual à etiqueta mostrada pelo script;
-o GitHub Actions recompila cada imagem com sua versão registrada e publica os
-quatro arquivos no mesmo release.
+O preparador detecta fontes alteradas, incrementa somente as versões internas
+afetadas e a etiqueta do conjunto, compila, confere a versão de cada imagem e
+gera `versoes/saida/manifesto-firmwares.json`. A publicação precisa conter esse
+manifesto e os três `.bin` da mesma preparação. O repositório precisa ser
+público enquanto o download HTTPS do firmware não tiver autenticação para
+releases privados. O fluxo
+`.github/workflows/publicar-firmware-mestre.yml` pode recompilar e publicar os
+quatro anexos quando uma tag compatível com o estado versionado é enviada.
