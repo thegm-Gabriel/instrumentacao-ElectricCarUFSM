@@ -105,3 +105,10 @@ e serialização, CRC-16, limites de conteúdo, ACK, sequência com perda,
 duplicação e retorno, além da recuperação do parser após quadro incompleto ou
 corrompido. Ela não é incluída no firmware normal e pode ser executada com o
 executor de testes do PlatformIO no ambiente do mestre.
+
+## Preparação de controle remoto
+
+A Equipe pode solicitar marcha, limites de velocidade e aceleração e parada
+remota ao mestre. O estado é apenas preparatório, sem atuação física. Consulte
+[Controle remoto](controle-remoto.md) para o contrato UART/HTTP, intertravamentos,
+reinício, acompanhamento no painel e requisitos da integração futura.

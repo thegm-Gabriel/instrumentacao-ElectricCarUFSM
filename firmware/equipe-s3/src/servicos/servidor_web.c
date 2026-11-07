@@ -170,6 +170,7 @@ static void escapar_texto_json(char *destino, size_t capacidade,
 
 static codigo_comando_t localizar_consulta_mestre(const char *consulta)
 {
+    if (strcmp(consulta, "controle_remoto") == 0) return COMANDO_OBTER_CONTROLE_REMOTO;
     if (strcmp(consulta, "ping") == 0) return COMANDO_PING;
     if (strcmp(consulta, "versao") == 0) return COMANDO_OBTER_VERSAO;
     if (strcmp(consulta, "saude") == 0) return COMANDO_OBTER_SAUDE;
@@ -210,7 +211,11 @@ static codigo_comando_t localizar_consulta_mestre(const char *consulta)
     if (strcmp(consulta, "cancelar_ota") == 0) return COMANDO_CANCELAR_OTA;
     if (strcmp(consulta, "resumo_terminal") == 0)
         return COMANDO_SOLICITAR_RESUMO_TERMINAL;
-    if (strcmp(consulta, "alternar_relatorios") == 0 ||
+    if (strcmp(consulta, "definir_marcha") == 0 ||
+        strcmp(consulta, "velocidade_maxima") == 0 ||
+        strcmp(consulta, "aceleracao_maxima") == 0 ||
+        strcmp(consulta, "parada_remota") == 0 ||
+        strcmp(consulta, "alternar_relatorios") == 0 ||
         strcmp(consulta, "zerar_percurso") == 0 ||
         strcmp(consulta, "sincronizar_google") == 0 ||
         strcmp(consulta, "intervalo_relatorio") == 0 ||
@@ -251,6 +256,10 @@ static bool comando_exige_confirmacao(codigo_comando_t comando)
 
 static acao_mestre_t localizar_acao_mestre(const char *consulta)
 {
+    if (strcmp(consulta, "definir_marcha") == 0) return ACAO_MESTRE_DEFINIR_MARCHA;
+    if (strcmp(consulta, "velocidade_maxima") == 0) return ACAO_MESTRE_DEFINIR_VELOCIDADE_MAXIMA;
+    if (strcmp(consulta, "aceleracao_maxima") == 0) return ACAO_MESTRE_DEFINIR_ACELERACAO_MAXIMA;
+    if (strcmp(consulta, "parada_remota") == 0) return ACAO_MESTRE_DEFINIR_PARADA_REMOTA;
     if (strcmp(consulta, "alternar_relatorios") == 0)
         return ACAO_MESTRE_ALTERNAR_RELATORIOS;
     if (strcmp(consulta, "zerar_percurso") == 0)
@@ -351,6 +360,15 @@ static bool preparar_acao_mestre(const char *consulta, char *corpo,
         case ACAO_MESTRE_DEFINIR_INTERVALO_TELEMETRIA_OTA:
             if (!converter_uint32(proximo_campo(&cursor), &valor))
                 return false;
+            solicitacao->valor = valor;
+            return true;
+        case ACAO_MESTRE_DEFINIR_MARCHA:
+        case ACAO_MESTRE_DEFINIR_VELOCIDADE_MAXIMA:
+        case ACAO_MESTRE_DEFINIR_ACELERACAO_MAXIMA:
+        case ACAO_MESTRE_DEFINIR_PARADA_REMOTA:
+            if (!corpo[0]) return false;
+            for (const char *p = corpo; *p; ++p) if (*p < '0' || *p > '9') return false;
+            if (!converter_uint32(corpo, &valor)) return false;
             solicitacao->valor = valor;
             return true;
         case ACAO_MESTRE_DEFINIR_SIMULADOR:
@@ -889,6 +907,22 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
             (unsigned long)dados.tempo_tentativa_wifi_ms,
             (unsigned long)dados.intervalo_tentativas_wifi_ms,
             (unsigned long)dados.tempo_limite_wifi_ms);
+    } else if (comando == COMANDO_OBTER_CONTROLE_REMOTO &&
+               tamanho_resposta == sizeof(estado_controle_remoto_t)) {
+        estado_controle_remoto_t dados;
+        memcpy(&dados, resposta, sizeof(dados));
+        if (dados.formato != CONTROLE_REMOTO_FORMATO)
+            return httpd_resp_send_err(requisicao, HTTPD_500_INTERNAL_SERVER_ERROR, "Formato de controle remoto incompatível");
+        tamanho = snprintf(json, sizeof(json),
+            "{\"ok\":true,\"formato\":%u,\"atuacao_habilitada\":%s,"
+            "\"marcha_solicitada\":%u,\"parada_solicitada\":%s,"
+            "\"velocidade_maxima_centesimos_kmh\":%lu,\"aceleracao_maxima_milesimos_ms2\":%lu,"
+            "\"revisao\":%lu,\"alterado_em_ms\":%lu}",
+            dados.formato, dados.atuacao_habilitada ? "true" : "false",
+            dados.marcha_solicitada, dados.parada_solicitada ? "true" : "false",
+            (unsigned long)dados.velocidade_maxima_centesimos_kmh,
+            (unsigned long)dados.aceleracao_maxima_milesimos_ms2,
+            (unsigned long)dados.revisao, (unsigned long)dados.alterado_em_ms);
     } else if (comando == COMANDO_OBTER_ESTADO_SIMULADOR &&
                tamanho_resposta == sizeof(resposta_simulador_mestre_t)) {
         resposta_simulador_mestre_t dados;

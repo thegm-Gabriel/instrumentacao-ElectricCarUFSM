@@ -19,6 +19,7 @@ depois o guia do componente que pretende operar ou modificar.
 | Controlador principal | [Firmware mestre](mestre.md) | Aquisição, odômetro, telemetria, SD, terminal, Wi-Fi, diagnóstico, OLED e sinalização. |
 | Painéis locais | [Satélites e APIs](satelites.md) | Equipe, visitantes, rotas HTTP, comandos e comportamento sem enlace. |
 | Formato dos dados | [Protocolos](protocolos.md) | Pacotes UART de telemetria, ACK, comandos e OTA. |
+| Pedidos de condução futuros | [Controle remoto](controle-remoto.md) | Marcha, limites e parada remota preparados no mestre, sem atuação física. |
 | Atualizações | [OTA e releases](ota.md) | Manifesto, primeira gravação, autorização, publicação e rollback. |
 | Números de versão | [Versionamento](versionamento.md) | Major, minor, patch, versões independentes e preparação/publicação. |
 | Comandos de desenvolvimento | [Ferramentas](ferramentas.md) | Geradores das páginas e QR, segredos, compilação, testes e scripts de release. |

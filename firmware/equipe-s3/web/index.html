@@ -80,7 +80,21 @@
     </section>
     <section id="comandos" class="page" role="tabpanel" aria-labelledby="tab-comandos">
       <div class="page-heading"><div><p class="section-kicker">Centro de operação</p><h1 id="title-comandos">Comandos</h1><p>Ações enviadas ao mestre, com confirmação e acompanhamento do resultado.</p></div><span id="master-command-status" class="badge muted">Aguardando mestre</span></div>
-      <nav class="command-jump" aria-label="Seções dos comandos"><button type="button" data-scroll-to="command-overview">Última ação</button><button type="button" data-scroll-to="sync-card">Google</button><button type="button" data-scroll-to="wifi-master">Wi-Fi do mestre</button><button type="button" data-scroll-to="wifi-local">Redes locais</button><button type="button" data-scroll-to="ota-command">OTA</button><button type="button" data-scroll-to="operation-command">Operação</button></nav>
+      <article id="remote-control" class="card remote-control">
+        <div class="card-top"><div><span class="section-kicker">Preparação para integração</span><h2>Controle remoto do veículo</h2></div><span class="badge warn">Sem atuação física</span></div>
+        <p class="context-note">Estes comandos guardam pedidos no mestre. Não acionam motor nem freio e não substituem uma parada de emergência física.</p>
+        <p id="remote-state" role="status">Aguardando estado do mestre.</p>
+        <dl class="remote-readings"><div><dt>Marcha solicitada</dt><dd id="remote-gear-current">—</dd></div><div><dt>Limite de velocidade solicitado</dt><dd id="remote-speed-current">—</dd></div><div><dt>Limite de aceleração solicitado</dt><dd id="remote-accel-current">—</dd></div><div><dt>Pedido de parada</dt><dd id="remote-stop-current">—</dd></div></dl>
+        <div class="remote-fields">
+          <label>Marcha<select id="remote-gear"><option value="0">Neutro</option><option value="1">Frente</option><option value="2">Ré</option></select><button class="button" data-master-action="definir_marcha" data-cap="8192">Enviar marcha</button></label>
+          <label>Velocidade máxima (km/h)<input id="remote-speed" type="number" min="0" max="35" step="0.01" value="0"><button class="button" data-master-action="velocidade_maxima" data-cap="8192">Enviar limite</button></label>
+          <label>Aceleração máxima (m/s²)<input id="remote-accel" type="number" min="0" max="5" step="0.001" value="0"><button class="button" data-master-action="aceleracao_maxima" data-cap="8192">Enviar limite</button></label>
+        </div>
+        <p class="context-note">Para preparar frente ou ré, defina limites maiores que zero e libere o pedido de parada. Passe por neutro antes de inverter o sentido. Reiniciar o mestre restaura neutro, limites zero e parada solicitada.</p>
+        <div class="command-row"><button class="button danger" data-master-action="parada_remota" data-cap="8192">Solicitar parada remota</button><button class="button secondary" data-master-action="liberar_parada_remota" data-cap="8192">Liberar pedido de parada</button><button id="refresh-remote-control" class="button secondary">Atualizar estado</button></div>
+        <p id="remote-checked" class="context-note">Nenhuma consulta recebida.</p>
+      </article>
+      <nav class="command-jump" aria-label="Seções dos comandos"><button type="button" data-scroll-to="command-overview">Última ação</button><button type="button" data-scroll-to="sync-card">Google</button><button type="button" data-scroll-to="wifi-master">Wi-Fi do mestre</button><button type="button" data-scroll-to="wifi-local">Redes locais</button><button type="button" data-scroll-to="ota-command">OTA</button><button type="button" data-scroll-to="operation-command">Operação</button><button type="button" data-scroll-to="remote-control">Controle remoto</button></nav>
       <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
       <div class="section-heading command-heading"><div><h2>Acompanhamento</h2><span>Resposta do comando e estado observado depois da execução.</span></div></div>
       <article id="command-overview" class="card command-overview" aria-live="polite">

@@ -53,6 +53,9 @@ class SimuladorEquipe:
         self.inicio = time.monotonic()
         self.cenario = cenario
         self.simulado = True
+        self.controle = dict(formato=1, atuacao_habilitada=False, marcha_solicitada=0,
+                            parada_solicitada=True, velocidade_maxima_centesimos_kmh=0,
+                            aceleracao_maxima_milesimos_ms2=0, revisao=0, alterado_em_ms=0)
         self.solicitacao = 0
         self.percurso_base = 0
         self.redes = ["Laboratório UFSM", "Rede de testes"]
@@ -169,7 +172,9 @@ class SimuladorEquipe:
         if nome in ("ping", "satelite_equipe_ping", "satelite_visitantes_ping"):
             return dict(tempo_ativo_ms=int(self.tempo()*1000), rtt_ms=18 if nome == "ping" else 42)
         if nome in ("versao", "satelite_equipe_versao", "satelite_visitantes_versao"):
-            return dict(firmware="0.0.0-previa", capacidades=8191)
+            return dict(firmware="0.0.0-previa", capacidades=16383)
+        if nome == "controle_remoto":
+            return dict(self.controle)
         if nome == "telemetria":
             return self.telemetria()
         if nome == "uart":
@@ -217,6 +222,26 @@ class SimuladorEquipe:
         if self.cenario == "sem-mestre":
             raise ConnectionError("Cenário de prévia: mestre sem resposta.")
         lines = corpo.splitlines()
+        fields = {"definir_marcha": ("marcha_solicitada", 2),
+                  "velocidade_maxima": ("velocidade_maxima_centesimos_kmh", 3500),
+                  "aceleracao_maxima": ("aceleracao_maxima_milesimos_ms2", 5000),
+                  "parada_remota": ("parada_solicitada", 1)}
+        if nome in fields:
+            field, maximum = fields[nome]
+            if not corpo.isascii() or not corpo.isdecimal() or int(corpo) > maximum:
+                raise ValueError("Valor de preparação inválido.")
+            value = int(corpo)
+            c = self.controle
+            if nome == "definir_marcha" and value and (c["parada_solicitada"] or
+                    not c["velocidade_maxima_centesimos_kmh"] or not c["aceleracao_maxima_milesimos_ms2"] or
+                    c["marcha_solicitada"] not in (0, value)):
+                raise ValueError("Defina limites, libere a parada e passe por neutro.")
+            c[field] = bool(value) if nome == "parada_remota" else value
+            if c["parada_solicitada"] or not c["velocidade_maxima_centesimos_kmh"] or not c["aceleracao_maxima_milesimos_ms2"]:
+                c["marcha_solicitada"] = 0
+            c["revisao"] += 1
+            c["alterado_em_ms"] = int(self.tempo()*1000)
+            return {}
         protected = {"wifi_alterar_principal": 1, "wifi_restaurar_principal": 1,
                      "wifi_automatico": 2, "wifi_politica": 5}
         if nome in protected and (len(lines) != protected[nome] or not lines[-1].strip()):

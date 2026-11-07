@@ -107,6 +107,36 @@ class SimuladorTests(unittest.TestCase):
         self.sim.comando("simulador_telemetria", "0")
         self.assertFalse(self.sim.telemetria()["simulado"])
 
+    def test_controle_remoto_intertravamentos_e_parada_sem_retomada(self):
+        self.assertFalse(self.sim.consulta("controle_remoto", {})["atuacao_habilitada"])
+        with self.assertRaises(ValueError):
+            self.sim.comando("definir_marcha", "1")
+        self.sim.comando("velocidade_maxima", "2500")
+        self.sim.comando("aceleracao_maxima", "1200")
+        self.sim.comando("parada_remota", "0")
+        self.sim.comando("definir_marcha", "1")
+        with self.assertRaises(ValueError):
+            self.sim.comando("definir_marcha", "2")
+        self.sim.comando("parada_remota", "1")
+        self.sim.comando("parada_remota", "0")
+        self.assertEqual(self.sim.controle["marcha_solicitada"], 0)
+        self.sim.comando("definir_marcha", "2")
+        self.sim.comando("velocidade_maxima", "0")
+        self.assertEqual(self.sim.controle["marcha_solicitada"], 0)
+        fresh = SimuladorEquipe().controle
+        self.assertTrue(fresh["parada_solicitada"])
+        self.assertEqual(fresh["velocidade_maxima_centesimos_kmh"], 0)
+
+    def test_controle_remoto_recusa_valores_sem_mutacao(self):
+        original = dict(self.sim.controle)
+        for name, body in (("velocidade_maxima", "3501"), ("aceleracao_maxima", "5001"),
+                           ("definir_marcha", "3"), ("parada_remota", "2"),
+                           ("velocidade_maxima", "-1"), ("velocidade_maxima", "2.5"),
+                           ("definir_marcha", "1\n")):
+            with self.subTest(name=name, body=body), self.assertRaises(ValueError):
+                self.sim.comando(name, body)
+        self.assertEqual(self.sim.controle, original)
+
 
 class HttpTests(unittest.TestCase):
     def setUp(self):
@@ -173,6 +203,16 @@ class HttpTests(unittest.TestCase):
         self.assertFalse(self.request("/api/telemetria")[1]["valido"])
         self.request("/__previa/cenario", "normal")
         self.assertEqual(self.request("/api/mestre?consulta=ping")[0], 200)
+
+    def test_controle_remoto_http_confirmacao_e_erro(self):
+        self.assertEqual(self.request('/api/mestre?consulta=velocidade_maxima', '2300')[0], 200)
+        status, data = self.request('/api/mestre?consulta=controle_remoto')
+        self.assertEqual(status, 200)
+        self.assertEqual(data['velocidade_maxima_centesimos_kmh'], 2300)
+        self.assertFalse(data['atuacao_habilitada'])
+        self.assertEqual(self.request('/api/mestre?consulta=definir_marcha', '1')[0], 400)
+        self.request('/__previa/cenario', 'sem-mestre')
+        self.assertEqual(self.request('/api/mestre?consulta=parada_remota', '1')[0], 503)
 
 
 if __name__ == "__main__":

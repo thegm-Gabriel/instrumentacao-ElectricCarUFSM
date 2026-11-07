@@ -161,3 +161,10 @@ As tarefas de aquisição, telemetria e enlaces ficam no núcleo 1; OTA, CSV e u
 ## Limites e verificações em bancada
 
 O código não comprova a fiação física, calibração mecânica, qualidade de alimentação, presença do cartão ou cobertura da rede. Antes de usar no veículo, confira a relação e o diâmetro de cada roda, orientação do MPU6050, escala do circuito ADC, pull-ups de 3,3 V dos encoders, níveis UART, fonte do buzzer e pinagem SPI/I²S. Teste a aquisição com upload e OTA simultâneos, falha de rede, remoção do SD e reinício após gravação do odômetro. A leitura de pilhas, maior bloco livre e logs no SD ajuda a verificar os piores casos de TLS e atualização. Estes são pontos de validação de integração, não resultados de testes já realizados.
+
+## Preparação de controle remoto
+
+A Equipe pode solicitar marcha, limites de velocidade e aceleração e parada
+remota ao mestre. O estado é apenas preparatório, sem atuação física. Consulte
+[Controle remoto](controle-remoto.md) para o contrato UART/HTTP, intertravamentos,
+reinício, acompanhamento no painel e requisitos da integração futura.

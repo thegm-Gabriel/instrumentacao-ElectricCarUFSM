@@ -135,6 +135,7 @@
     const causes=healthCauses.filter((_,index)=>(mask&(1<<index))!==0);
     set('health-notice-detail',causes.length?'Causas informadas: '+causes.slice(0,3).join(', ')+(causes.length>3?' e mais '+(causes.length-3)+'.':'.'):'O mestre informou um estado de atenção. Consulte o diagnóstico para detalhes.');
   }
+  $('refresh-remote-control').addEventListener('click',async()=>{if(!await masterQuery('controle_remoto'))set('remote-state','Sem resposta · estado solicitado não confirmado');});
   $('health-details').addEventListener('click',()=>showTab('mestre','push'));
   async function getJSON(url, timeout = 7000) {
     const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), timeout);
@@ -294,7 +295,7 @@
     $('device-chart-'+group).setAttribute('aria-label','Histórico de '+charts.map(chart=>chart.label+' em '+chart.unit).join(' e ')+' de '+d.name);requestAnimationFrame(()=>drawDeviceChart(group,id));
     badge(group+'-auto',status+' · atualização automática',status==='Conectado'?'good':status==='Sem resposta'?'bad':'muted');
   }
-  const actionNames={verificar_ota:'Verificar atualizações',autorizar_mestre:'Autorizar OTA do mestre',autorizar_equipe:'Autorizar OTA da Equipe',autorizar_visitantes:'Autorizar OTA de Visitantes',autorizar_todos:'Autorizar OTA de todos',cancelar_ota:'Cancelar OTA',alternar_relatorios:'Pausar ou retomar relatórios',resumo_terminal:'Solicitar resumo no terminal',sincronizar_google:'Solicitar sincronização',zerar_percurso:'Zerar percurso',intervalo_relatorio:'Alterar intervalo do relatório',intervalo_ota:'Alterar intervalo de verificação OTA',intervalo_telemetria_ota:'Alterar telemetria durante OTA',simulador_telemetria:'Alterar simulador de telemetria',wifi_test:'Testar nova rede Wi-Fi',wifi_conectar_salva:'Conectar rede salva',wifi_excluir_salva:'Excluir rede salva',wifi_primary:'Definir nova rede principal',wifi_restaurar_principal:'Restaurar rede principal',wifi_automatico:'Alterar conexão automática',wifi_politica:'Salvar política Wi-Fi'};
+  const actionNames={definir_marcha:'Preparar marcha',velocidade_maxima:'Preparar limite de velocidade',aceleracao_maxima:'Preparar limite de aceleração',parada_remota:'Solicitar parada remota',liberar_parada_remota:'Liberar pedido de parada',verificar_ota:'Verificar atualizações',autorizar_mestre:'Autorizar OTA do mestre',autorizar_equipe:'Autorizar OTA da Equipe',autorizar_visitantes:'Autorizar OTA de Visitantes',autorizar_todos:'Autorizar OTA de todos',cancelar_ota:'Cancelar OTA',alternar_relatorios:'Pausar ou retomar relatórios',resumo_terminal:'Solicitar resumo no terminal',sincronizar_google:'Solicitar sincronização',zerar_percurso:'Zerar percurso',intervalo_relatorio:'Alterar intervalo do relatório',intervalo_ota:'Alterar intervalo de verificação OTA',intervalo_telemetria_ota:'Alterar telemetria durante OTA',simulador_telemetria:'Alterar simulador de telemetria',wifi_test:'Testar nova rede Wi-Fi',wifi_conectar_salva:'Conectar rede salva',wifi_excluir_salva:'Excluir rede salva',wifi_primary:'Definir nova rede principal',wifi_restaurar_principal:'Restaurar rede principal',wifi_automatico:'Alterar conexão automática',wifi_politica:'Salvar política Wi-Fi'};
   const timeOf = time => new Date(time).toLocaleTimeString('pt-BR');
   function runMeta(run) {
     const ids=run.requests.length ? 'Solicitação '+run.requests.map(id=>'#'+id).join(', ') : 'Número da solicitação ainda indisponível';
@@ -435,6 +436,14 @@
     }
     if(consult==='ota')renderOtaState(data);
     if(consult==='sincronizacao')renderSyncState(data);
+    if(consult==='controle_remoto'){
+      set('remote-state',data.atuacao_habilitada?'Estado de atuação incompatível com esta versão do painel.':'Preparado no mestre · sem atuação física');
+      set('remote-gear-current',['Neutro','Frente','Ré'][data.marcha_solicitada]||'Desconhecida');
+      set('remote-speed-current',format(value(data,'velocidade_maxima_centesimos_kmh',100),'km/h',2));
+      set('remote-accel-current',format(value(data,'aceleracao_maxima_milesimos_ms2',1000),'m/s²',3));
+      set('remote-stop-current',data.parada_solicitada?'Solicitada · não aplicada fisicamente':'Pedido liberado · sem atuação');
+      set('remote-checked','Consultado às '+timeOf(Date.now())+' · revisão '+data.revisao+'. Valores solicitados; nenhuma atuação confirmada.');
+    }
     if(consult==='simulador'){
       if(document.activeElement!==$('simulator-toggle'))$('simulator-toggle').value=data.ativo?'1':'0';
       badge('simulator-badge',data.ativo?'Simulação ativa':'Sensores reais',data.ativo?'warn':'good');
@@ -482,6 +491,14 @@
     if(action==='zerar_percurso')plan.note='O percurso atualizado aparece na página Telemetria; a API não relaciona essa leitura ao comando.';
     if(action==='resumo_terminal')plan.note='O resumo é emitido no terminal físico do mestre; a API não devolve seu conteúdo.';
     if(action==='sincronizar_google')plan.refresh=['sincronizacao'];
+    if(['definir_marcha','velocidade_maxima','aceleracao_maxima','parada_remota','liberar_parada_remota'].includes(action)){
+      const fields={definir_marcha:['remote-gear',1,2,'marcha_solicitada'],velocidade_maxima:['remote-speed',100,35,'velocidade_maxima_centesimos_kmh'],aceleracao_maxima:['remote-accel',1000,5,'aceleracao_maxima_milesimos_ms2']};
+      let value,field;
+      if(fields[action]){const [id,scale,max,key]=fields[action],raw=$(id).value.trim(),n=Number(raw);if(!raw||!Number.isFinite(n)||n<0||n>max||Math.abs(n*scale-Math.round(n*scale))>1e-6)throw Error('Confira a faixa e a precisão do valor informado.');value=Math.round(n*scale);field=key;}
+      else{value=action==='parada_remota'?1:0;field='parada_solicitada';plan.steps[0].code='parada_remota';}
+      plan.steps[0].body=String(value);plan.refresh=['controle_remoto'];plan.expected={field,value:field==='parada_solicitada'?!!value:value};
+      plan.note='Pedido preparado no mestre, sem atuação física sobre o veículo.';
+    }
     if(action==='simulador_telemetria'){const enabled=$('simulator-toggle').value==='1';plan.steps[0].body=enabled?'1':'0';plan.refresh=['simulador'];plan.expected={field:'ativo',value:enabled,label:'Simulador de telemetria'};}
     if(action==='intervalo_relatorio'){const group=Number($('report-group').value),interval=Number(numberField('report-interval'));plan.steps[0].body=group+'\n'+interval;plan.refresh=['configuracao'];plan.expected={field:'intervalos_relatorios_ms',index:group,value:interval,label:'Intervalo do relatório'};}
     if(action==='intervalo_ota'){const interval=Number(numberField('ota-interval'));plan.steps[0].body=String(interval);plan.refresh=['configuracao'];plan.expected={field:'intervalo_ota_minutos',value:interval,label:'Verificação OTA'};}
@@ -559,6 +576,7 @@
         const otaObserved=run.followOta&&state.master.ota&&checked?' Último estado observado: '+(otaMasterStates[state.master.ota.estado]||'desconhecido')+'.':'';
         const configObserved=observed.configuracao?observedConfiguration(plan,observed.configuracao):null;
         if(configObserved)updateRun(run,configObserved.matches?'Valor observado':'Valor divergente',configObserved.text+' A resposta inicial confirma o aceite; esta leitura mostra a configuração atual.',configObserved.matches?'good':'warn');
+        else if(observed.controle_remoto){const matches=observed.controle_remoto[plan.expected.field]===plan.expected.value;updateRun(run,matches?'Pedido confirmado':'Estado divergente',matches?'Valor solicitado confirmado no mestre. Sem atuação física sobre o veículo.':'O estado consultado difere do pedido; confira os valores atuais.',matches?'good':'warn');}
         else if(observed.simulador)updateRun(run,observed.simulador.ativo===plan.expected?.value?'Estado confirmado':'Estado divergente','O mestre informa telemetria '+(observed.simulador.ativo?'simulada':'real')+'. O padrão após reiniciar é '+(observed.simulador.padrao_firmware?'simulado':'real')+'.',observed.simulador.ativo===plan.expected?.value?'good':'warn');
         else if(plan.steps[0].code==='alternar_relatorios'&&observed.configuracao)updateRun(run,'Estado consultado','Relatórios no mestre: '+(observed.configuracao.relatorios_pausados?'pausados':'ativos')+'. A consulta mostra o estado atual após a solicitação.','good');
         else if(observed.wifi)updateRun(run,'Wi-Fi consultado',observed.wifi.conectado?'Mestre conectado a '+(observed.wifi.rede||'uma rede não identificada')+'.':'O mestre ainda não informa conexão Wi-Fi ativa. Consulte novamente após a operação.','warn');
@@ -584,6 +602,7 @@
       const destructive=['zerar_percurso','wifi_excluir_salva','wifi_primary','wifi_restaurar_principal','cancelar_ota'].includes(button.dataset.masterAction);
       $('confirm-action').className='button'+(destructive?' danger':'');
       $('confirm-action').textContent=destructive?'Confirmar ação':'Enviar comando';
+      if(state.pending.refresh.includes('controle_remoto'))$('confirm-text').textContent='Registrar este pedido no mestre? Esta versão apenas prepara o estado, sem acionar motor ou freio.';
       $('confirm-dialog').showModal();
     }catch(error){
       if(wifiAction){$('wifi-form-error').textContent=error.message;$('wifi-form-error').hidden=false;$('wifi-form-error').scrollIntoView({block:'nearest'});}
@@ -743,6 +762,9 @@
           badge('simulator-badge','Não suportado','muted');
           set('simulator-state','O firmware atual do mestre não informa o estado do simulador.');
         }
+        if(Number.isFinite(capabilities)&&(capabilities&8192)!==0){
+          if(!await masterQuery('controle_remoto')){set('remote-state','Sem resposta · estado solicitado não confirmado');set('remote-checked','A última leitura pode estar desatualizada.');}
+        }else{set('remote-state','Este mestre ainda não oferece preparação de controle remoto.');}
         state.lastCommandPoll=Date.now();
       }
       if(state.busy)return;

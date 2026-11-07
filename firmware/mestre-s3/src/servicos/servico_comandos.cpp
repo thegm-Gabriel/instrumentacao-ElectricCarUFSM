@@ -1,6 +1,7 @@
 // Implementa despacho, resposta e repetição confiável de comandos.
 #include "nucleo/configuracao_tarefas.h"
 #include "servicos/servico_comandos.h"
+#include "servicos/servico_controle_remoto.h"
 
 #include <algorithm>
 #include <cmath>
@@ -41,7 +42,7 @@ constexpr uint32_t CAPACIDADES_MESTRE =
     CAPACIDADE_COMANDO_CONTROLE_OPERACIONAL |
     CAPACIDADE_COMANDO_DIAGNOSTICO |
     CAPACIDADE_COMANDO_SINCRONIZACAO |
-    CAPACIDADE_COMANDO_SIMULADOR;
+    CAPACIDADE_COMANDO_SIMULADOR | CAPACIDADE_COMANDO_CONTROLE_REMOTO;
 
 struct RespostaPendente {
     DestinoUart origem;
@@ -341,7 +342,7 @@ codigo_resposta_comando_t executar_acao_mestre(
     solicitacao_acao_mestre_t solicitacao{};
     std::memcpy(&solicitacao, carga, sizeof(solicitacao));
     if (solicitacao.acao < ACAO_MESTRE_ALTERNAR_RELATORIOS ||
-        solicitacao.acao > ACAO_MESTRE_DEFINIR_SIMULADOR) {
+        solicitacao.acao > ACAO_MESTRE_DEFINIR_PARADA_REMOTA) {
         return RESPOSTA_COMANDO_CARGA_INVALIDA;
     }
     if (solicitacao.reservado != 0 &&
@@ -350,6 +351,8 @@ codigo_resposta_comando_t executar_acao_mestre(
               SOLICITACAO_ACAO_CONFIRMACAO_SINCRONIZACAO_DETALHADA)) {
         return RESPOSTA_COMANDO_CARGA_INVALIDA;
     }
+    if (solicitacao.acao >= ACAO_MESTRE_DEFINIR_MARCHA &&
+        solicitacao.texto[sizeof(solicitacao.texto) - 1] != '\0') return RESPOSTA_COMANDO_CARGA_INVALIDA;
     solicitacao.texto[sizeof(solicitacao.texto) - 1] = '\0';
     const auto acao = static_cast<acao_mestre_t>(solicitacao.acao);
     esp_err_t erro = ESP_ERR_NOT_SUPPORTED;
@@ -442,6 +445,21 @@ codigo_resposta_comando_t executar_acao_mestre(
             politica.tempo_limite_sessao_ms = solicitacao.valor_4;
             erro = servico_wifi_definir_politica(politica,
                                                   solicitacao.texto);
+            break;
+        }
+        case ACAO_MESTRE_DEFINIR_MARCHA:
+        case ACAO_MESTRE_DEFINIR_VELOCIDADE_MAXIMA:
+        case ACAO_MESTRE_DEFINIR_ACELERACAO_MAXIMA:
+        case ACAO_MESTRE_DEFINIR_PARADA_REMOTA: {
+            if (solicitacao.alvo || solicitacao.valor_2 || solicitacao.valor_3 || solicitacao.valor_4 ||
+                std::any_of(solicitacao.texto, solicitacao.texto + sizeof(solicitacao.texto), [](char c){return c != 0;})) {
+                erro = ESP_ERR_INVALID_ARG;
+                break;
+            }
+            const auto ajuste = acao == ACAO_MESTRE_DEFINIR_MARCHA ? AjusteControleRemoto::Marcha :
+                acao == ACAO_MESTRE_DEFINIR_VELOCIDADE_MAXIMA ? AjusteControleRemoto::VelocidadeMaxima :
+                acao == ACAO_MESTRE_DEFINIR_ACELERACAO_MAXIMA ? AjusteControleRemoto::AceleracaoMaxima : AjusteControleRemoto::Parada;
+            erro = servico_controle_remoto_definir(ajuste, solicitacao.valor);
             break;
         }
         case ACAO_MESTRE_DEFINIR_SIMULADOR:
@@ -884,7 +902,20 @@ codigo_resposta_comando_t solicitar_resumo_terminal(
     return RESPOSTA_COMANDO_OK;
 }
 
+codigo_resposta_comando_t responder_controle_remoto(
+    DestinoUart origem, const uint8_t*, uint16_t tamanho_carga,
+    uint8_t* resposta, uint16_t* tamanho_resposta) {
+    if (origem != DestinoUart::Equipe) return RESPOSTA_COMANDO_NEGADO;
+    if (tamanho_carga) return RESPOSTA_COMANDO_CARGA_INVALIDA;
+    const auto dados = servico_controle_remoto_obter_estado();
+    static_assert(sizeof(dados) <= COMANDO_TAMANHO_MAXIMO_CARGA, "Estado remoto excede quadro");
+    std::memcpy(resposta, &dados, sizeof(dados));
+    *tamanho_resposta = sizeof(dados);
+    return RESPOSTA_COMANDO_OK;
+}
+
 constexpr RegistroComando COMANDOS[] = {
+    {COMANDO_OBTER_CONTROLE_REMOTO, responder_controle_remoto},
     {COMANDO_PING, responder_ping},
     {COMANDO_OBTER_VERSAO, responder_versao},
     {COMANDO_OBTER_CAPACIDADES, responder_capacidades},

@@ -1,18 +1,18 @@
 {
   "versao_formato": 1,
-  "versao_release": "0.3.2",
+  "versao_release": "0.3.3",
   "firmwares": {
     "mestre-s3": {
       "versao": "0.3.0",
       "impressao_digital": "5b5091ca608ce3e73ff5fb3ba25b40d796060af5c4415853af5d33cf558cbdda"
     },
     "equipe-s3": {
-      "versao": "0.2.2",
-      "impressao_digital": "5e0e5e6658f21e3b27becabbc26ba613fac8c73dc1b931b8695f123f894be77c"
+      "versao": "0.2.3",
+      "impressao_digital": "27c9308aa45886fbfc9a5c20deaaa2c5d19cf831444b2c77548ae7a75308e3ac"
     },
     "visitantes-s3": {
-      "versao": "0.2.2",
-      "impressao_digital": "a016f937b32c037a2c1936427be1b82235b8b2b235ea63bfa0b8a1f0ecbf4459"
+      "versao": "0.2.3",
+      "impressao_digital": "5f56ea8bd30c610239f26978573e6601f672cb07a70af033541cf8b78cd4437c"
     }
   }
 }

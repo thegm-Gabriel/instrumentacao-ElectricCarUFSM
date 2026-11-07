@@ -239,3 +239,10 @@ do veículo nem uma previsão de autonomia calculada pelo navegador.
   telemetria. Ao mudar a API, revise `servidor_web.c` e o JavaScript do painel.
 - Os detalhes de enquadramento estão no [guia de protocolos](protocolos.md)
   e a atualização de firmware no [guia OTA](ota.md).
+
+## Preparação de controle remoto
+
+A Equipe pode solicitar marcha, limites de velocidade e aceleração e parada
+remota ao mestre. O estado é apenas preparatório, sem atuação física. Consulte
+[Controle remoto](controle-remoto.md) para o contrato UART/HTTP, intertravamentos,
+reinício, acompanhamento no painel e requisitos da integração futura.
