@@ -4,10 +4,32 @@
   const $ = id => document.getElementById(id);
   const format = (value, digits = 1) => value.toLocaleString('pt-BR', {minimumFractionDigits:digits, maximumFractionDigits:digits});
   const finite = value => typeof value === 'number' && Number.isFinite(value);
+  const speedGaugeMax = 35;
+  const consumptionMinMeters = 20;
+  const speedColors = [[69,216,191],[234,213,104],[255,159,83],[255,98,115]];
+  const throttleColors = [[69,216,191],[166,222,111],[246,197,92]];
+  const brakeColors = [[246,205,127],[255,153,86],[255,98,115]];
+
+  function colorAt(colors, fraction) {
+    const position = Math.max(0, Math.min(1, fraction)) * (colors.length - 1);
+    const index = Math.min(colors.length - 2, Math.floor(position));
+    const weight = position - index;
+    return 'rgb(' + colors[index].map((channel, i) => Math.round(channel + (colors[index + 1][i] - channel) * weight)).join(',') + ')';
+  }
+
+  function updatePedal(id, value, colors, reverse) {
+    const valid = finite(value) && value >= 0 && value <= 100;
+    setValue(id + '-value', valid ? format(value, 0) + '%' : 'Sem leitura');
+    const fill = $(id + '-fill');
+    const fraction = valid ? value / 100 : 0;
+    fill.style.width = (fraction * 100) + '%';
+    fill.style.background = 'linear-gradient(to ' + (reverse ? 'left' : 'right') + ',' + colorAt(colors, 0) + ',' + colorAt(colors, fraction) + ')';
+  }
   const state = {
     lastData:null, lastSampleAt:0, firstSampleAt:0, lastSequence:null,
     samples:[], gapOpen:false, rangeMinutes:1, chartSignal:'accel',
     firstDistance:null, previousEnergy:null, energyWh:null,
+    consumptionWh:0, consumptionMeters:0,
     chartLimits:{}, hovering:{}, fetching:false,
   };
 
@@ -45,6 +67,8 @@
     state.firstDistance = null;
     state.previousEnergy = null;
     state.energyWh = null;
+    state.consumptionWh = 0;
+    state.consumptionMeters = 0;
     state.chartLimits = {};
   }
 
@@ -68,36 +92,51 @@
     const charge = simulated ? readNumber(data, 'carga_decimos_percentual', 10) : null;
     const voltage = simulated ? readNumber(data, 'tensao_pacote_mv', 1000) : null;
     const current = simulated ? readNumber(data, 'corrente_centesimos_a', 100) : null;
+    const range = readNumber(data, 'autonomia_decimos_km', 10);
 
     setValue('speed-value', speed === null ? 'Sem leitura' : format(speed, 1));
     $('motion-state').textContent = speed === null ? 'Aguardando dados' : speed < 0.5 ? 'Parado' : 'Em movimento';
-    $('speed-source').textContent = simulated ? 'Velocidade simulada' : 'Velocidade informada pelo veículo';
-    const speedScale = Math.max(30, Math.ceil(Math.max(0, speed || 0) * 1.08 / 5) * 5);
-    $('speed-arc').style.strokeDasharray = (speed === null ? 0 : Math.min(100, Math.max(0, speed / speedScale * 100))) + ' 100';
-    $('speed-scale-label').textContent = 'Escala até ' + speedScale + ' km/h';
+    $('speed-source').textContent = simulated ? 'Leitura simulada' : 'Leitura do veículo';
+    const fraction = speed === null ? 0 : Math.min(1, Math.max(0, speed / speedGaugeMax));
+    $('speed-arc').style.strokeDasharray = (fraction * 100) + ' 100';
+    $('speed-tone-start').setAttribute('stop-color', colorAt(speedColors, fraction * 0.65));
+    $('speed-tone-end').setAttribute('stop-color', colorAt(speedColors, fraction));
+    $('speed-marker').toggleAttribute('hidden', speed === null);
+    $('speed-marker').style.transform = 'rotate(' + (fraction * 180) + 'deg)';
+    updatePedal('throttle', readNumber(data, 'acelerador_decimos_percentual', 10), throttleColors, false);
+    updatePedal('brake', readNumber(data, 'freio_decimos_percentual', 10), brakeColors, true);
 
     setValue('battery-value', charge === null ? 'Sem leitura' : format(charge, 1), charge === null ? '' : '%');
     $('battery-fill').style.width = charge === null ? '0%' : Math.max(0, Math.min(100, charge)) + '%';
-    $('battery-hint').textContent = simulated ? 'Simulação · carga estimada, sem medição validada.' : 'Sem medição validada no modo real.';
+    $('battery-hint').textContent = simulated ? 'Carga estimada pela simulação.' : 'Sem medição validada no modo real.';
 
     const powerUnit = power === null ? '' : Math.abs(power) >= 1000 ? 'kW' : 'W';
     setValue('power-value', power === null ? 'Sem leitura' : format(powerUnit === 'kW' ? power / 1000 : power, powerUnit === 'kW' ? 2 : 0), powerUnit);
     $('power-hint').textContent = power === null ? 'Potência elétrica sem leitura no modo real.' : power < 0 ? 'Simulação · devolução de energia ao sistema.' : 'Simulação · consumo elétrico, não potência nas rodas.';
+
+    setValue('range-value', range === null ? 'Sem leitura' : format(range, 1), range === null ? '' : 'km');
+    $('range-hint').textContent = range === null ? 'Estimativa não disponível.' : simulated ? 'Autonomia simulada.' : 'Estimativa informada pelo veículo.';
+    const consumption = power !== null && state.consumptionMeters >= consumptionMinMeters
+      ? state.consumptionWh / (state.consumptionMeters / 1000) : null;
+    setValue('consumption-value', consumption === null ? 'Sem leitura' : format(consumption, 1), consumption === null ? '' : 'Wh/km');
+    $('consumption-hint').textContent = power === null ? 'Aguardando leituras de energia.' : consumption === null
+      ? 'Aguardando ' + consumptionMinMeters + ' m com energia e percurso.'
+      : 'Trechos acompanhados nesta página · sem descontar regeneração.';
 
     setValue('accel-value', accel === null ? 'Sem leitura' : format(accel, 2), accel === null ? '' : 'm/s²');
     $('accel-hint').textContent = accel === null ? 'Aguardando leitura válida do sensor.' : simulated ? 'Dados simulados.' : accel > 0.15 ? 'Acelerando · leitura do sensor.' : accel < -0.15 ? 'Desacelerando · leitura do sensor.' : 'Velocidade estável · leitura do sensor.';
 
     const distance = readNumber(data, 'percurso_metros');
     setValue('trip-value', distance === null ? 'Sem leitura' : format(distance / 1000, 2), distance === null ? '' : 'km');
-    $('trip-hint').textContent = simulated ? 'Percurso gerado pela simulação.' : 'Percurso informado pelo mestre.';
+    $('trip-hint').textContent = simulated ? 'Percurso simulado.' : 'Percurso registrado pelo veículo.';
     const hasElectricData = charge !== null || power !== null;
-    $('energy-live-grid').hidden = !hasElectricData;
-    $('energy-unavailable').hidden = hasElectricData;
+    $('energy-live-grid').hidden = !hasElectricData && range === null;
+    $('energy-unavailable').hidden = hasElectricData || range !== null;
     document.querySelectorAll('.electric-detail').forEach(card => {card.hidden = !hasElectricData;});
     document.querySelector('#details-title').closest('.section').querySelector('.detail-grid').classList.toggle('compact',!hasElectricData);
     ['power','battery'].forEach(key => {$('visitor-chart-signal').querySelector('option[value="'+key+'"]').disabled = !hasElectricData;});
     if (!hasElectricData && ['power','battery'].includes(state.chartSignal)) {state.chartSignal='accel';$('visitor-chart-signal').value='accel';}
-    if (!hasElectricData) $('energy-unavailable').textContent = 'Este veículo ainda não envia medições de bateria ou potência elétrica no modo real. Movimento e percurso continuam disponíveis acima.';
+    if (!hasElectricData) $('energy-unavailable').textContent = 'O veículo ainda não envia leituras de bateria e potência.';
 
     setValue('voltage-value', voltage === null || voltage <= 0 ? 'Sem leitura' : format(voltage, 2) + ' V');
     $('voltage-hint').textContent = simulated ? 'Valor simulado.' : 'Sem medição no modo real.';
@@ -109,16 +148,13 @@
       setValue('distance-value', format(Math.max(0, distance - state.firstDistance) / 1000, 2) + ' km');
     }
     $('data-note').hidden = !simulated;
-    if (simulated) $('data-note').textContent = 'Demonstração: os valores deste veículo são simulados. Os gráficos registram apenas as leituras recebidas nesta página.';
+    if (simulated) $('data-note').textContent = 'Demonstração · Os valores apresentados são simulados.';
   }
 
-  function acceptSample(data) {
-    if (state.lastData && state.lastData.simulado !== data.simulado) resetSession();
-    const now = Date.now();
-    if (!state.firstSampleAt) state.firstSampleAt = now;
-    const power = data.simulado ? readNumber(data, 'potencia_w') : null;
+  // Energia e distância do consumo médio devem cobrir os mesmos intervalos.
+  function accumulateEnergy(power, distance, now) {
     if (power !== null) {
-      if (state.previousEnergy && now - state.previousEnergy.time <= 3000) {
+      if (state.previousEnergy && now > state.previousEnergy.time && now - state.previousEnergy.time <= 3000) {
         const hours = (now - state.previousEnergy.time) / 3600000;
         const before = state.previousEnergy.power;
         let consumed = 0;
@@ -126,9 +162,24 @@
         else if (before > 0) consumed = before * before / (2 * (before - power));
         else if (power > 0) consumed = power * power / (2 * (power - before));
         state.energyWh = (state.energyWh || 0) + consumed * hours;
+        if (finite(distance) && finite(state.previousEnergy.distance) && distance >= state.previousEnergy.distance) {
+          state.consumptionWh += consumed * hours;
+          state.consumptionMeters += distance - state.previousEnergy.distance;
+        }
       }
-      state.previousEnergy = {time:now, power};
+      state.previousEnergy = {time:now, power, distance};
     } else state.previousEnergy = null;
+  }
+
+  function acceptSample(data) {
+    const distance = readNumber(data, 'percurso_metros');
+    const previousDistance = state.lastData ? readNumber(state.lastData, 'percurso_metros') : null;
+    if (state.lastData && (state.lastData.simulado !== data.simulado ||
+        (distance !== null && previousDistance !== null && distance < previousDistance))) resetSession();
+    const now = Date.now();
+    if (!state.firstSampleAt) state.firstSampleAt = now;
+    const power = data.simulado ? readNumber(data, 'potencia_w') : null;
+    accumulateEnergy(power, distance, now);
     state.samples.push({time:now, speed:readNumber(data, 'velocidade_centesimos_kmh', 100), power,accel:data.aceleracao_disponivel?readNumber(data,'aceleracao_milesimos_ms2',1000):null,battery:data.simulado?readNumber(data,'carga_decimos_percentual',10):null});
     state.samples = state.samples.filter(sample => now - sample.time <= 610000);
     state.gapOpen = false;
@@ -251,7 +302,7 @@
 
   function drawCharts() {
     const series=chartSeries[state.chartSignal];
-    $('secondary-chart-title').textContent=series.label+' ao longo do tempo';
+    $('secondary-chart-title').textContent=series.label;
     $('secondary-chart-unit').textContent=series.unit;
     $('power-empty').textContent=series.empty;
     $('power-chart').setAttribute('aria-label','Gráfico de '+series.label.toLowerCase()+' ao longo do tempo');

@@ -64,7 +64,7 @@
           "min_island_area": 10.0,
           "min_thickness": 0.25,
           "pad_connection": 2,
-          "remove_islands": 0,
+          "remove_islands": 1,
           "thermal_relief_gap": 0.5,
           "thermal_relief_spoke_width": 0.6
         }
@@ -250,6 +250,10 @@
         {
           "diameter": 1.7,
           "drill": 1.0
+        },
+        {
+          "diameter": 3.0,
+          "drill": 2.0
         }
       ],
       "zones_allow_external_fillets": false
@@ -261,7 +265,7 @@
       "internal_id": "",
       "mfg": "",
       "mpn": "",
-      "sch_revision": ""
+      "sch_revision": "v4"
     },
     "layer_pairs": [],
     "layer_presets": [],
@@ -690,13 +694,33 @@
         "uuid": "a6a0623f-2a95-43a6-8599-d3816813ca95"
       }
     ],
-    "used_designators": "U1-2,U4-7,BZ1,R1-14,J1-11,MARCHA1-3,#PWR1-56,C1-5,ACEL1,Q1-4,ACEL\\-DIV1-3,AmpOp1,AmpOp\\-DIV1-2,Cartao_SD1-3,S3\\-Visitantes1,S3\\-Equipe1,ADC1,K1,D1,ENABLE_DRIVER1,RELE1,AMS1118,ESP1",
+    "used_designators": "U1-7,BZ1,#FLG1-4,R1-14,J1-11,MARCHA1-3,#PWR1-56,C1-5,ACEL1,Q1-5,ACEL\\-DIV1-3,AmpOp1,AmpOp\\-DIV1-2,Cartao_SD1-3,S3\\-Visitantes1,S3\\-Equipe1,ADC1-3,K1,D1,ENABLE_DRIVER1,RELE1,AMS1117-1118,ESP1,BUCK1",
     "variants": []
   },
   "sheets": [
     [
       "a6a0623f-2a95-43a6-8599-d3816813ca95",
       "KiCad_pcb_telemetria"
+    ],
+    [
+      "d80fd1ed-0ec2-4f37-9dbf-d41af72db77f",
+      "ALIMENTACAO"
+    ],
+    [
+      "df19b557-724c-4fba-9eb4-a9ce09874a31",
+      "ESP32-S3-MESTRE"
+    ],
+    [
+      "bcdccc42-6153-47ae-ab54-f8c0e35f9d8a",
+      "CONTROLE DO DRIVER"
+    ],
+    [
+      "4b4b7fe6-eb15-49a3-aa1f-4f208f494a19",
+      "PERIFÉRICOS"
+    ],
+    [
+      "f070913d-6607-42f1-8e9a-014b1c734763",
+      "COMUNICAÇÃO WI-FI"
     ]
   ],
   "text_variables": {},

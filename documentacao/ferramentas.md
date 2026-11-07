@@ -14,11 +14,14 @@ upload explícito.
 |---|---|---|---|
 | `firmware/equipe-s3/web/gerar_painel.py` | Após editar a página técnica. | `index.html`, `style.css`, `layout.css`, `app.js` e o logo compartilhado. | `firmware/equipe-s3/src/servicos/painel_web.c`. |
 | `firmware/visitantes-s3/web/gerar_painel.py` | Após editar a página pública. | `index.html`, `style.css`, `app.js` e o logo compartilhado. | `firmware/visitantes-s3/src/servicos/painel_web.c`. |
+| `ferramentas/visualizar_painel_visitantes.py` | Ver a página pública no PC ou celular antes de gravar o ESP. | As mesmas fontes da página e telemetria simulada local. | Servidor HTTP local na porta 8765. |
+| `ferramentas/visualizar_painel_equipe.py` | Experimentar o painel técnico, os comandos e os estados de saúde no PC ou celular. | Fontes da Equipe e APIs simuladas em memória. | Servidor HTTP local na porta 8766. |
 | `ferramentas/gerar_segredos_ota.py` | Criar a configuração local inicial do Wi-Fi usado pelo mestre. | Variáveis `OTA_WIFI_SSID` e `OTA_WIFI_SENHA`. | `firmware/mestre-s3/include/nucleo/segredos_ota.h`. |
 | `ferramentas/gerar_qr_visitantes.py` | Quando SSID, senha ou IP público dos Visitantes mudar. | Macros de `firmware/visitantes-s3/include/nucleo/configuracao.h`. | Dois PNGs e dois SVGs em `artefatos/qr_visitantes`. |
 | `ferramentas/preparar_release_ota.py` | Preparar um conjunto OTA versionado. | Fontes, estado anterior, escolha de incremento e imagens anteriores quando reutilizadas. | Três `.bin`, manifesto, histórico e `estado_versoes.json`. |
 | `ferramentas/criar_manifesto_ota.py` | Gerar manualmente o manifesto de três imagens já compiladas. | Caminho e versão de cada `.bin`, etiqueta e repositório. | JSON com URL, SHA-256 e tamanho por alvo. |
 | `ferramentas/test_preparar_release_ota.py` | Conferir as regras de incremento SemVer. | Casos de teste locais. | Resultado `unittest`; não compila firmware. |
+| `ferramentas/test_visualizar_painel_equipe.py` | Conferir as APIs e transições da prévia técnica. | Cenários e requisições HTTP em localhost. | Resultado `unittest`; não acessa ESPs. |
 
 ## Gerar os painéis incorporados
 
@@ -35,6 +38,85 @@ e inclua ambos no commit. Se o símbolo mudar, substitua
 geradores. `node --check firmware/equipe-s3/web/app.js` e o comando equivalente
 de Visitantes verificam sintaxe de JavaScript; ainda é preciso testar a página
 em tela estreita, resposta ausente e dados reais/simulados.
+
+### Prévia local da página de visitantes
+
+```powershell
+python ferramentas\visualizar_painel_visitantes.py
+```
+
+Abra `http://127.0.0.1:8765/` no navegador. O servidor monta o mesmo HTML
+incorporado pelo gerador e responde à API de telemetria com dados simulados,
+identificados como demonstração na página. Ele lê as fontes a cada abertura:
+após editar HTML, CSS ou JavaScript, atualize o navegador. Use `Ctrl+C` para
+encerrar. Se a porta estiver ocupada, passe `--porta 8766` e abra o endereço
+correspondente. A prévia permite avaliar layout e interações; dados reais e
+comportamento de rede ainda dependem do ESP.
+
+Para abrir também no celular, conecte-o à mesma rede Wi-Fi do PC e execute:
+
+```powershell
+python ferramentas\visualizar_painel_visitantes.py --rede
+```
+
+No PC, consulte o endereço IPv4 da conexão Wi-Fi com `ipconfig`. No celular,
+abra `http://IP_DO_PC:8765/`, substituindo `IP_DO_PC` por esse endereço. A
+opção `--rede` faz o servidor aceitar conexões da rede local; sem ela, aceita
+somente conexões do próprio PC. Se o celular não conseguir abrir, confira se a
+rede permite comunicação entre dispositivos e se o firewall do Windows
+permite o Python na rede privada.
+
+### Prévia local da página da equipe
+
+```powershell
+python ferramentas\visualizar_painel_equipe.py --rede
+```
+
+No PC, abra `http://127.0.0.1:8766/`. No celular conectado à mesma rede,
+abra `http://IP_DO_PC:8766/`; obtenha o IPv4 do PC com `ipconfig`. Sem `--rede`,
+o acesso fica restrito ao próprio computador. `--porta 8770`, por exemplo,
+permite escolher outra porta. As prévias da Equipe e de Visitantes podem rodar
+ao mesmo tempo em terminais separados, usando suas portas padrão.
+
+A ferramenta usa **as mesmas fontes HTML, CSS e JavaScript do firmware da
+Equipe**. Atualize o navegador depois de editar a interface; reinicie o script
+se alterar o simulador Python. Encerre com `Ctrl+C`. Não é necessário gerar o
+arquivo C nem compilar para usar a prévia.
+
+Uma faixa exclusiva da prévia identifica que **todos os dados e comandos são
+simulados**, inclusive se você selecionar “Sensores reais” no painel. Essa
+faixa permite alternar entre funcionamento normal, operação degradada e mestre
+sem resposta. Também é possível iniciar em um cenário específico:
+
+```powershell
+python ferramentas\visualizar_painel_equipe.py --rede --cenario degradado
+python ferramentas\visualizar_painel_equipe.py --cenario sem-mestre
+```
+
+O ambiente fornece telemetria a 4 Hz, diagnósticos dos três ESPs, clientes Wi-Fi,
+redes salvas e configurações de exemplo. Os comandos modificam apenas o estado
+em memória: a sincronização simula três arquivos em aproximadamente 12 s; a
+consulta OTA oferece uma versão após 2 s e a transferência simulada leva 10 s.
+Sem autorização, a oferta expira em aproximadamente 60 s. Reiniciar o script
+restaura os valores iniciais; todos os navegadores conectados à mesma instância
+compartilham esse estado.
+
+Use nomes e senhas fictícios nos formulários. A ferramenta não acessa ESPs,
+Google ou redes Wi-Fi, não atualiza firmware e descarta as senhas recebidas.
+A permissão administrativa da prévia aceita um texto fictício não vazio;
+isso permite testar o formulário, sem reproduzir a autenticação do firmware.
+O simulador serve para avaliar a interface e seus estados; UART, SD, tempos
+reais de transmissão e reconexões físicas ainda precisam de teste em bancada.
+
+Para conferir o simulador após uma alteração:
+
+```powershell
+python -m unittest discover -s ferramentas -p test_visualizar_painel_equipe.py -v
+```
+
+Os testes cobrem progresso e conclusão de Google/OTA, expiração de autorização,
+configuração Wi-Fi, clientes, cenários sem mestre e respostas HTTP. Usam uma
+porta local temporária e a liberam ao terminar.
 
 ## Criar segredos locais do mestre
 

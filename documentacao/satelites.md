@@ -65,7 +65,13 @@ mestre, equipe, visitantes e sobre.
 | Sobre | Intenção do projeto, símbolo, orientação e equipe discente. |
 
 As páginas dos ESPs mostram diagnóstico; ações e acompanhamento ficam na página
-Comandos. O resumo de saúde do mestre é consultado periodicamente:
+Comandos. CPU em uso, memória interna livre e temperatura aparecem em destaque
+nos três diagnósticos. As abas e os indicadores de conexão se reorganizam em
+linhas no celular. Na página Comandos, os botões preenchidos identificam ações;
+consultas de estado têm apresentação secundária. Os atalhos abrem a seção
+correspondente, inclusive quando recolhida, e os ajustes protegidos de Wi-Fi
+têm um campo próprio para permissão administrativa.
+O resumo de saúde do mestre é consultado periodicamente:
 uma operação degradada ou falha aparece em aviso discreto com suas causas ativas
 e acesso ao diagnóstico. A telemetria pode ser consultada a 1, 2, 3 ou 4 Hz
 (padrão de 4 Hz, compatível com os 250 ms da publicação do mestre). As consultas
@@ -89,6 +95,11 @@ e apresenta o símbolo do carro. O painel público de Visitantes também traz es
 identidade e os créditos. A imagem fonte fica em
 `firmware/compartilhado/web/logo_carro_eletrico.png` e é incorporada ao HTML
 pelos dois geradores, sem requisição adicional no navegador.
+
+Para experimentar a interface no PC ou celular sem gravar o ESP, use
+`python ferramentas/visualizar_painel_equipe.py --rede`. A prévia possui
+telemetria, comandos e cenários de saúde simulados; veja o procedimento e as
+limitações em [ferramentas](ferramentas.md#prévia-local-da-página-da-equipe).
 
 O painel da Equipe exibe a quantidade de dispositivos conectados aos pontos de
 acesso Equipe e Visitantes. As listas de endereço MAC, tempo conectado e ações de
@@ -184,15 +195,39 @@ a senha Wi-Fi; distribua-o somente ao público autorizado a conectar-se.
 `src/servicos/painel_web.c` por `web/gerar_painel.py`. Há duas rotas:
 `GET /` para a página pública e `GET /api/telemetria` para o JSON. Não há API
 de diagnósticos ou de comandos nessa rede. O endpoint publica validade, idade,
-sequência, origem simulada, velocidade, aceleração, potência e percurso, com
+sequência, origem simulada, velocidade, aceleração, percentuais de acelerador e
+freio, potência e percurso, com
 unidades codificadas nos nomes dos campos. Aceleração indisponível ou grandezas
 elétricas não adquiridas são `null`, não zero. Os gráficos e cálculos de energia,
 distância e tempo começam quando a página é aberta.
 O painel público destaca velocidade, aceleração e percurso. Bateria e potência
 aparecem quando há leitura; no modo real sem aquisição elétrica, uma nota explica
-a ausência. A escala de velocidade começa em 30 km/h e se expande quando as
-leituras ultrapassam esse valor.
+a ausência. O velocímetro tem escala fixa de 0 a 35 km/h e muda gradualmente de
+verde-água para amarelo, laranja e vermelho conforme a velocidade aumenta.
+Arco, marcações e indicador compartilham o mesmo centro; o valor numérico continua
+mostrando a leitura completa acima da escala. As barras de acelerador e freio
+preenchem em direção ao centro, respectivamente da esquerda para a direita e da
+direita para a esquerda, com cores graduais. A API publica
+`acelerador_decimos_percentual` e `freio_decimos_percentual` em décimos de por cento;
+como o firmware atual só adquire esses percentuais na simulação, são `null` no
+modo real, apresentados como “Sem leitura”. O gráfico de velocidade mantém sua
+escala automática a partir de 30 km/h. A apresentação do projeto fica ao fim,
+com acesso pelo cabeçalho.
 O navegador consulta a telemetria a cada 500 ms (2 Hz), sem controle de taxa.
+
+A seção de energia também apresenta **autonomia restante** em km, recebida no
+campo `autonomia_decimos_km`, e **consumo médio** em Wh/km. A autonomia é uma
+estimativa do mestre; atualmente só existe no modo simulado e é `null` no modo
+real. A prévia local fornece esse campo para experimentar a interface.
+O consumo médio é calculado pelo navegador, dividindo a energia positiva
+integrada pela distância dos mesmos intervalos válidos. Inclui energia gasta
+parado e não desconta regeneração. Só aparece após 20 m de distância acumulada
+com leituras de potência e percurso. Lacunas de comunicação, falta de potência
+ou de percurso não acrescentam distância ao denominador; intervalos acima de
+3 segundos também são descartados. Recarregar a página, trocar a origem entre
+real/simulado ou receber um percurso menor que o anterior reinicia o cálculo.
+Ele representa os trechos acompanhados nesta página, não o histórico inteiro
+do veículo nem uma previsão de autonomia calculada pelo navegador.
 
 ## Manutenção e fontes de verdade
 

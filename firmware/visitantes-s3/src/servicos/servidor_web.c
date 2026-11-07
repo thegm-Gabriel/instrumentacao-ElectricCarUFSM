@@ -39,32 +39,41 @@ static esp_err_t responder_telemetria(httpd_req_t *requisicao)
     char corrente[24] = "null";
     char carga[24] = "null";
     char potencia[24] = "null";
+    char acelerador[8] = "null";
+    char freio[8] = "null";
+    char autonomia[8] = "null";
     if (aceleracao_disponivel) {
         snprintf(aceleracao, sizeof(aceleracao), "%d",
                  dados.aceleracao_milesimos_ms2);
     }
     // O modo real atual não adquire grandezas elétricas. Zero não é medição.
     if (dados.valido && dados.simulado) {
+        // Os percentuais dos pedais também só são adquiridos pelo simulador atual.
+        snprintf(acelerador, sizeof(acelerador), "%u", (unsigned)dados.acelerador_decimos_percentual);
+        snprintf(freio, sizeof(freio), "%u", (unsigned)dados.freio_decimos_percentual);
         snprintf(tensao, sizeof(tensao), "%u", (unsigned)dados.tensao_pacote_mv);
         snprintf(corrente, sizeof(corrente), "%d", dados.corrente_centesimos_a);
         snprintf(carga, sizeof(carga), "%u", (unsigned)dados.carga_decimos_percentual);
         snprintf(potencia, sizeof(potencia), "%d", dados.potencia_w);
+        snprintf(autonomia, sizeof(autonomia), "%u", (unsigned)dados.autonomia_decimos_km);
     }
-    char json[512];
+    char json[768];
     const int tamanho = snprintf(
         json, sizeof(json),
         "{\"valido\":%s,\"idade_ms\":%lu,\"sequencia\":%u,"
         "\"simulado\":%s,\"velocidade_centesimos_kmh\":%u,"
+        "\"acelerador_decimos_percentual\":%s,\"freio_decimos_percentual\":%s,"
         "\"aceleracao_disponivel\":%s,\"aceleracao_milesimos_ms2\":%s,"
         "\"tensao_pacote_mv\":%s,\"corrente_centesimos_a\":%s,"
         "\"carga_decimos_percentual\":%s,\"potencia_w\":%s,"
-        "\"percurso_metros\":%lu}",
+        "\"autonomia_decimos_km\":%s,\"percurso_metros\":%lu}",
         dados.valido ? "true" : "false", (unsigned long)idade,
         (unsigned)dados.sequencia, dados.simulado ? "true" : "false",
         (unsigned)dados.velocidade_centesimos_kmh,
+        acelerador, freio,
         aceleracao_disponivel ? "true" : "false", aceleracao,
         tensao, corrente, carga, potencia,
-        (unsigned long)dados.percurso_metros);
+        autonomia, (unsigned long)dados.percurso_metros);
     if (tamanho < 0 || tamanho >= (int)sizeof(json)) {
         return httpd_resp_send_err(requisicao,
                                    HTTPD_500_INTERNAL_SERVER_ERROR,
