@@ -4,8 +4,8 @@
 
 O mestre transmite telemetria ao vivo aos satélites a 4 Hz e registra uma cópia
 histórica independente a 1 Hz. Os CSVs são gravados no cartão SD durante o uso e
-só são enviados quando a equipe escolhe a opção **Enviar telemetria pendente ao
-Google** no terminal.
+só são enviados quando a equipe solicita **Enviar telemetria pendente ao
+Google** no terminal do mestre ou na página Comandos do ESP da Equipe.
 
 ## Preparação com uma conta Google pessoal
 
@@ -64,8 +64,9 @@ O envio não é automático durante o percurso. Ao fim da operação, use **Envi
 telemetria pendente ao Google** no terminal ou na página **Comandos** de
 `http://192.168.4.1/`, conectado ao ponto de acesso da equipe. O
 mestre fecha o lote atual, abre uma sessão Wi-Fi temporária e processa os arquivos
-pendentes. Se a rede ou o Google falhar, o CSV permanece no cartão para uma nova
-tentativa.
+pendentes. A página exige a chave administrativa própria da Equipe antes de
+enviar a ação; veja [satélites](satelites.md). Se a rede ou o Google falhar, o
+CSV permanece no cartão para uma nova tentativa.
 
 O painel da equipe consulta automaticamente o estado da sincronização a cada
 2 s e mostra arquivo atual, bytes, porcentagem, velocidade, tempo restante,

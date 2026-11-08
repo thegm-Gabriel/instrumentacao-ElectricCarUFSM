@@ -21,7 +21,10 @@ corrente, tensão e potência aparece antes dos comandos. A idade da telemetria
 é indicada; campos indisponíveis no modo real não recebem valores simulados.
 Os valores solicitados aparecem acima dos formulários. Marcha, limites e
 liberação pedem confirmação. **Solicitar parada envia imediatamente, sem
-diálogo de confirmação**, acompanhado de aviso discreto. A página Comandos
+diálogo de confirmação**, acompanhado de aviso discreto. Antes de uma situação
+urgente, use **Preparar acesso** e informe a chave administrativa do ESP da
+Equipe, mostrada no terminal serial; isso evita a entrada da chave no primeiro
+toque no botão de parada. A página Comandos
 mantém o histórico e o estado observado. O estado é consultado
 automaticamente no ciclo de estados operacionais (aproximadamente 2 s, sujeito
 ao tempo das demais consultas UART), além do botão Atualizar estado.
@@ -40,7 +43,8 @@ que outro operador pode ter alterado. A revisão identifica alterações, mas n�
 O botão de parada permanece disponível durante outra operação do painel e
 envia sua requisição sem esperar a fila de consultas do navegador. Um segundo
 toque enquanto o envio está pendente é ignorado. A comunicação e o processamento
-no mestre ainda podem atrasar ou falhar; resposta e estado consultado aparecem
+no mestre ainda podem atrasar ou falhar; a Equipe reserva uma vaga HTTP para
+ações, separada das duas vagas de consultas. Resposta e estado consultado aparecem
 separadamente. A interface não apresenta o pedido como frenagem física confirmada.
 
 ## Estado, limites e reinício

@@ -61,8 +61,11 @@ como a UART ou o navegador funcionam.
 7. **Configuração e segredo têm destinos distintos.** Limites físicos ficam em
    cabeçalhos `configuracao_*.h`; preferências persistentes ficam na NVS.
    `segredos_ota.h` é local e ignorado pelo Git. O retrato de configuração no SD
-   exclui senhas e recupera automaticamente apenas o odômetro quando falta sua
-   chave na NVS.
+   exclui senhas. Na partida, ele recupera o odômetro, a política Wi-Fi, a
+   preferência de conexão automática e o intervalo OTA se os respectivos dados
+   NVS estiverem ausentes. Também repõe os intervalos e a pausa dos relatórios
+   antes de iniciar esse serviço. Nomes de redes são informativos e não recriam
+   perfis sem credenciais.
 
 ## Sequência: leitura até as duas páginas
 
@@ -73,9 +76,10 @@ como a UART ou o navegador funcionam.
    instante do mestre, aplica CRC-16 e entrega cópias às duas filas UART. O
    produtor não espera o TX físico ou a página web.
 3. Cada receptor separa telemetria, comandos e OTA pelo enquadramento. Só publica
-   a nova amostra após validar cabeçalho, versão, tamanho, CRC e plausibilidade.
-   Ele confirma a sequência em um ACK; o mestre mede RTT, perdas e idade da
-   resposta por satélite.
+   uma amostra nova após validar cabeçalho, versão, tamanho, CRC, plausibilidade
+   e sequência. Uma retransmissão duplicada recebe ACK, mas não renova a idade
+   da amostra nem aumenta o contador de amostras válidas. O mestre mede RTT,
+   perdas e idade da resposta por satélite.
 4. O servidor de cada AP lê o retrato publicado. O navegador da Equipe consulta
    `/api/telemetria` a 1, 2, 3 ou 4 Hz, escolhido na página; Visitantes consulta
    a 2 Hz. Essa é a frequência de consulta, que pode cair se a rede ou o

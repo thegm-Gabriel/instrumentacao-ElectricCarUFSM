@@ -103,8 +103,11 @@ da carga no cabeçalho. Os tipos são iniciar, dados, finalizar, cancelar e
 resposta. O limite atual é 4096 bytes de carga por bloco; 2048 bytes permanece
 como tamanho compatível para versões antigas. O início leva tamanho total,
 SHA-256 esperado e versão. Cada bloco recebe confirmação; o satélite rejeita
-sessão, sequência, deslocamento e tamanho incompatíveis. Ao finalizar, compara
-o hash completo antes de selecionar a partição inativa e reiniciar. O
+sessão, sequência, deslocamento e tamanho incompatíveis. Um cancelamento de
+sessão antiga não aborta uma transferência nova; a resposta informa sessão
+inválida. Os receptores verificam o prazo da OTA também após cada lote UART,
+sem depender de uma pausa no tráfego. Ao finalizar, compara o hash completo
+antes de selecionar a partição inativa e reiniciar. O
 [guia de OTA](ota.md) cobre publicação,
 autorização e rollback.
 

@@ -248,6 +248,7 @@ struct BackupConfiguracao {
     uint32_t sequencia = 0;
     uint64_t odometro_mm = 0;
     PoliticaConexaoWifi politica_wifi{};
+    bool conexao_automatica_wifi = false;
     uint32_t intervalo_ota_min = 0;
     uint32_t intervalos_relatorios_ms[4]{};
     bool relatorios_pausados = false;
@@ -294,8 +295,11 @@ bool ler_backup(const char* caminho, BackupConfiguracao* backup) {
         return false;
     }
     uint32_t tentativas = 0;
+    uint32_t automatico = 0;
     uint32_t pausados = 0;
-    if (!ler_campo_backup(conteudo, "wifi_tentativas", &tentativas) ||
+    if (!ler_campo_backup(conteudo, "wifi_automatico", &automatico) ||
+        automatico > 1 ||
+        !ler_campo_backup(conteudo, "wifi_tentativas", &tentativas) ||
         tentativas > UINT8_MAX ||
         !ler_campo_backup(conteudo, "wifi_tempo_tentativa_ms",
                           &backup->politica_wifi.tempo_por_tentativa_ms) ||
@@ -318,6 +322,7 @@ bool ler_backup(const char* caminho, BackupConfiguracao* backup) {
     backup->sequencia = numero;
     backup->odometro_mm = static_cast<uint64_t>(total);
     backup->politica_wifi.tentativas_por_rede = static_cast<uint8_t>(tentativas);
+    backup->conexao_automatica_wifi = automatico != 0;
     backup->relatorios_pausados = pausados != 0;
     return true;
 }
@@ -346,7 +351,7 @@ void recuperar_backup_configuracao() {
                  esp_err_to_name(erro));
     }
     const esp_err_t wifi = servico_wifi_restaurar_politica_se_ausente(
-        escolhido.politica_wifi);
+        escolhido.politica_wifi, escolhido.conexao_automatica_wifi);
     if (wifi == ESP_OK) {
         ESP_LOGI(ETIQUETA, "Política Wi-Fi restaurada do SD; redes exigem credenciais");
     } else if (wifi != ESP_ERR_INVALID_STATE) {

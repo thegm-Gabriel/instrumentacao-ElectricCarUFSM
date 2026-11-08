@@ -7,11 +7,6 @@ ESP32-S3 precisam compartilhar o GND. Os firmwares devem usar a mesma taxa,
 definida uma única vez em
 `firmware/compartilhado/protocolos/configuracao_enlace_uart.h`.
 
-Ao migrar equipamentos já gravados em 921600 baud por OTA, atualize primeiro os
-dois satélites usando o mestre antigo e atualize o mestre por último. Durante
-essa transição, um satélite já atualizado ficará temporariamente sem enlace com
-o mestre antigo.
-
 O mestre usa o módulo ESP32-S3-WROOM-1-N16R8. Como a PSRAM é Octal, reserve os
 GPIOs 33 a 37 para a interface interna de memória e não os use em periféricos. A
 pinagem também usa GPIO 38 a 42, 47 e 48, sem ocupar os pinos da PSRAM.

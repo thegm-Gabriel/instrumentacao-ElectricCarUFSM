@@ -25,8 +25,11 @@ individualmente.
 
 O protocolo OTA dos satélites usa sessão, sequência, deslocamento e CRC-32. Blocos
 sem confirmação são repetidos sem regravação duplicada. O satélite grava somente a
-partição inativa, compara o SHA-256 completo, seleciona a nova imagem e reinicia. A
-imagem nova fica pendente enquanto Wi-Fi, UART e servidor web inicializam e por
+partição inativa, compara o SHA-256 completo, seleciona a nova imagem e reinicia.
+A sessão identifica todos os quadros: um `CANCELAR` de sessão antiga não aborta
+uma transferência nova. O prazo de uma transferência parcial é verificado pelo
+receptor mesmo quando continua chegando tráfego de outra família pela UART.
+A imagem nova fica pendente enquanto Wi-Fi, UART e servidor web inicializam e por
 mais 2 min de observação. Se reiniciar antes da confirmação, o bootloader retorna
 à versão anterior. Depois da confirmação, o firmware ainda observa reinícios por
 panic ou watchdog até completar 5 min; três eventos desse tipo solicitam
@@ -88,6 +91,8 @@ As mesmas autorizações estão disponíveis na página **Comandos** de
 `http://192.168.4.1/`, quando o operador está conectado ao ponto de acesso do
 módulo da equipe. A página exige
 confirmação para ações que alteram estado e acompanha o resultado pela UART.
+O envio HTTP também exige a chave administrativa do ESP da Equipe, diferente
+da senha Wi-Fi; veja [satélites](satelites.md).
 
 ## Preparar um release
 

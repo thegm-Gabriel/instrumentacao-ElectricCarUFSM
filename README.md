@@ -1,70 +1,74 @@
 <div align="center">
-  <img src="firmware/compartilhado/web/logo_carro_eletrico.png" alt="Símbolo do Carro Elétrico UFSM-CS" width="230">
+  <img src="firmware/compartilhado/web/logo_carro_eletrico.png" alt="Símbolo do Carro Elétrico UFSM-CS" width="210">
   <h1>Carro Elétrico UFSM-CS</h1>
-  <p><strong>Um laboratório em movimento para aprender, experimentar e compartilhar.</strong></p>
-  <p>Universidade Federal de Santa Maria · Campus Cachoeira do Sul</p>
-  <p><a href="#o-projeto">Conheça o projeto</a> · <a href="#o-que-este-repositório-contém">Explore o sistema</a> · <a href="documentacao/README.md">Leia a documentação</a></p>
+  <p><strong>Um laboratório em movimento.</strong></p>
+  <p>Instrumentação, telemetria e controle experimental · Universidade Federal de Santa Maria — Campus Cachoeira do Sul</p>
+  <p>
+    <a href="#o-projeto">O projeto</a> ·
+    <a href="#o-sistema">O sistema</a> ·
+    <a href="#por-onde-começar">Por onde começar</a> ·
+    <a href="documentacao/README.md">Documentação completa</a>
+  </p>
 </div>
 
 ---
 
 ## O projeto
 
-O Carro Elétrico UFSM-CS nasceu da ideia de transformar um veículo em uma
-**bancada didática viva**. Nele, conceitos estudados separadamente em sala de
-aula se encontram: circuitos, acionamentos, programação, sistemas de energia,
-medição e mecânica precisam funcionar juntos. Construir e testar o carro dá aos
-estudantes a oportunidade de formular hipóteses, resolver problemas reais e
-entender as consequências de cada escolha de projeto.
+O carro reúne, em um veículo experimental, conhecimentos de circuitos,
+acionamentos, programação, energia, medição e mecânica. Construí-lo e testá-lo
+permite que estudantes confrontem hipóteses com dados reais e entendam como as
+decisões de uma área afetam as demais.
 
-A proposta também aproxima a universidade da comunidade. Ao apresentar o
-veículo e seus dados de forma compreensível, o projeto permite compartilhar o
-que está sendo desenvolvido e despertar interesse pela engenharia e pela
-mobilidade elétrica. A integração com energia fotovoltaica faz parte da visão
-acadêmica do carro; este repositório descreve a instrumentação implementada,
-sem presumir que todo o sistema de abastecimento já esteja instalado.
+A instrumentação torna esse aprendizado observável e compartilhável. A equipe
+acompanha leituras e falhas durante os testes; visitantes podem conhecer o
+movimento do veículo por um painel de leitura simples. O projeto também busca
+aproximar a universidade da comunidade e despertar interesse pela engenharia e
+pela mobilidade elétrica.
 
-## A instrumentação
+## O sistema
 
-Este repositório dá ao carro meios de **observar e explicar seu funcionamento**.
-O firmware coleta leituras, acompanha a saúde dos módulos, registra dados para
-análise e apresenta telemetria à equipe e aos visitantes. O resultado serve
-tanto ao desenvolvimento técnico quanto às demonstrações do projeto.
+Três ESP32-S3 dividem aquisição, operação e apresentação dos dados:
 
-| Ideia do projeto | Como aparece nesta etapa |
+```mermaid
+flowchart LR
+    S["Sensores e encoders"] --> M["ESP32-S3 Mestre"]
+    M -->|UART| E["ESP32-S3 Equipe"]
+    M -->|UART| V["ESP32-S3 Visitantes"]
+    M --> SD["microSD · histórico e logs"]
+    E --> PE["Painel técnico"]
+    V --> PV["Painel público"]
+```
+
+| Componente | O que faz |
 |---|---|
-| **Aprender fazendo** | Sensores, encoders, comunicação e interfaces dão material para montagem, testes e investigação. |
-| **Medir para compreender** | Telemetria ao vivo, histórico no cartão SD e diagnóstico ajudam a relacionar teoria e comportamento observado. |
-| **Compartilhar conhecimento** | Dois painéis web apresentam os dados com níveis de acesso adequados à equipe e ao público visitante. |
+| **Mestre** | Lê sensores e encoders, calcula a telemetria, registra dados e diagnóstico no microSD e coordena comandos e atualizações OTA. |
+| **Equipe** | Recebe a telemetria por UART, hospeda o painel técnico e encaminha consultas e ações ao mestre. |
+| **Visitantes** | Recebe a telemetria por UART e apresenta uma página pública de leitura. |
+| **Código compartilhado** | Define os formatos dos dados, o enlace UART e os serviços comuns aos firmwares. |
 
-## O que este repositório contém
+Os firmwares são projetos independentes **PlatformIO/ESP-IDF** em
+[`firmware/`](firmware/). A equipe dispõe de páginas separadas para telemetria,
+comandos, controle preparatório e diagnóstico dos ESPs. O painel público mostra
+as leituras do veículo sem controles de operação.
 
-| Componente | Responsabilidade |
-|---|---|
-| **ESP32-S3 Mestre** | Lê sensores e encoders, calcula telemetria, registra CSV e diagnóstico no SD, coordena comandos, Wi-Fi externo e atualizações OTA. |
-| **ESP32-S3 Equipe** | Recebe dados por UART, hospeda o painel técnico e encaminha comandos ao mestre. |
-| **ESP32-S3 Visitantes** | Hospeda o painel público de leitura da telemetria recebida por UART. |
-| **Código compartilhado** | Define os protocolos UART, modelos de dados e serviços comuns aos firmwares. |
-
-Os três firmwares são projetos independentes **PlatformIO/ESP-IDF** em
-[`firmware/`](firmware/). A página da Equipe separa telemetria, comandos,
-controle preparatório e diagnóstico dos ESPs. A de Visitantes mostra movimento,
-energia disponível e o histórico da sessão sem controles do mestre. Os detalhes
-de formatos, limites e recuperação estão na documentação.
+> **Estado atual do controle:** pedidos de marcha, limites e parada remota são
+> registrados no mestre, mas **não acionam fisicamente o veículo**. Ações pelo
+> painel da equipe exigem uma chave administrativa própria, diferente da senha
+> Wi-Fi. Veja [controle remoto](documentacao/controle-remoto.md) e
+> [acesso aos satélites](documentacao/satelites.md).
 
 ## Por onde começar
 
-- [Visão geral e mapa da documentação](documentacao/README.md) — arquitetura,
-  pinagem, funcionamento e guias por dispositivo.
-- [Filosofia do código e fluxos](documentacao/filosofia.md) — responsabilidades,
-  percurso dos dados, comandos e tratamento de falhas.
-- [Ferramentas](documentacao/ferramentas.md) — geração das páginas, QR codes,
-  compilação, testes e preparação de releases.
-- [Versionamento e OTA](documentacao/versionamento.md) — significado de major,
-  minor e patch e processo de publicação dos três firmwares.
-
-Antes de conectar os módulos ou gravar por cabo, confira a
-[pinagem e os níveis elétricos](documentacao/pinagem.md).
+- **Conhecer o funcionamento:** [visão geral da documentação](documentacao/README.md),
+  [arquitetura](documentacao/arquitetura.md) e
+  [filosofia do código](documentacao/filosofia.md).
+- **Montar e testar:** [pinagem e níveis elétricos](documentacao/pinagem.md),
+  [guia do mestre](documentacao/mestre.md) e
+  [guia dos satélites](documentacao/satelites.md).
+- **Desenvolver e publicar:** [ferramentas](documentacao/ferramentas.md),
+  [versionamento](documentacao/versionamento.md) e
+  [atualização OTA](documentacao/ota.md).
 
 ## Equipe
 

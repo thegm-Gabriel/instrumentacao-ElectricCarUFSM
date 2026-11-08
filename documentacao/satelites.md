@@ -22,10 +22,12 @@ comandos e gravação OTA para os dois satélites.
    normal. O enlace UART é 3,3 V, 8N1, 1.000.000 baud, com TX, RX e GND ligados
    nos dois sentidos. A [pinagem](pinagem.md) traz os GPIOs.
 2. `servicos/receptor_uart.c` recebe o fluxo e separa telemetria, comandos e OTA.
-   Só publica um retrato depois de conferir início, versão, tipo, tamanho,
-   CRC-16 e plausibilidade dos campos. Registra CRC, cabeçalho, conteúdo,
-   duplicatas, perdas e reinícios do mestre. Um contador de tempo do mestre
-   retrocedendo provoca resincronização da sequência.
+   Só publica um retrato novo depois de conferir início, versão, tipo, tamanho,
+   CRC-16, plausibilidade e sequência. Uma retransmissão da mesma sequência
+   recebe ACK, mas não substitui a amostra, renova sua idade ou aumenta o
+   contador de amostras válidas. Registra CRC, cabeçalho, conteúdo, duplicatas,
+   perdas e reinícios do mestre. Um contador de tempo do mestre retrocedendo
+   provoca resincronização da sequência.
 3. Cada pacote aceito produz um ACK de 20 bytes com sequência, tempo do mestre,
    identidade e versão do satélite. O mestre usa esse retorno para
    acompanhar a saúde dos enlaces. Quadros de comandos e OTA também têm respostas
@@ -48,6 +50,14 @@ até cinco clientes e a UART1 em GPIO 5 (RX) e 6 (TX). A rede padrão do ESP-IDF
 usa `192.168.4.1` e DHCP. O firmware anuncia o portal HTTP pela opção DHCP 114,
 quando suportada. Ele não oferece servidor DNS local; acesso confiável:
 `http://192.168.4.1/`.
+
+O ponto de acesso usa a mesma senha Wi-Fi configurada no firmware de Visitantes.
+Essa senha autoriza a conexão à rede, mas **não** autoriza ações HTTP: o ESP da
+Equipe cria na primeira partida uma chave administrativa independente e a
+mostra no terminal serial a 115200 baud. A chave permanece na NVS após OTA;
+apagar a NVS gera outra chave. Guarde-a antes de depender do painel para operar.
+Se a autenticação não iniciar, o servidor da Equipe não é aberto; uma imagem OTA
+pendente falha no autoteste e pode voltar à anterior.
 
 `web/index.html`, `web/style.css`, `web/layout.css` e `web/app.js` são as fontes
 do painel NEXUS. `web/gerar_painel.py` gera `src/servicos/painel_web.c`,
@@ -174,6 +184,18 @@ acessíveis sem ela. Até duas consultas simultâneas ao mestre e uma ação
 simultânea podem ocupar tarefas de resposta; uma nova chamada recebe HTTP 503
 quando a respectiva capacidade está ocupada.
 
+O painel usa HTTP local, sem TLS. Basic transporta a chave em cada ação; por
+isso, restrinja o acesso ao AP e não distribua a chave administrativa com o QR
+code da rede. A chave não substitui a senha de permissão validada no mestre
+para alterações de Wi-Fi que a exigem.
+
+**Preparar acesso** envia uma consulta sem efeito ao próprio ESP da Equipe para
+verificar a chave. Uma chave incorreta recebe HTTP 401 e é descartada do
+navegador; nenhuma ação é encaminhada ao mestre. A chave também pode ser
+informada no primeiro envio, mas essa entrada atrasaria um pedido urgente.
+A senha administrativa de certas alterações de Wi-Fi **no mestre** continua
+necessária quando a operação a exigir.
+
 Consultas GET aceitas: `ping`, `versao`, `saude`, `telemetria`,
 `uart`, `ota`, `sincronizacao`, `wifi`, `diagnostico_mestre`, `configuracao`,
 `simulador`,
@@ -210,12 +232,12 @@ são rejeitadas. A fila de comandos evita disputas com a recepção UART.
 | `wifi_politica` | Cinco linhas: tentativas por rede, tempo por tentativa em ms, intervalo entre tentativas em ms, limite da sessão em ms e senha de permissão. |
 
 O HTTP rejeita consulta ausente ou desconhecida e método incompatível com
-`400` ou `405`. Consultas e ações são encaminhadas pela UART; conexão a uma
-rede Wi-Fi pode aguardar até cerca de 185 s, enquanto consultas de satélite
-usam prazo menor. A confirmação visual antes do envio pertence ao JavaScript
-do painel. A API HTTP não exige token próprio: um cliente conectado ao AP pode
-enviar ações diretamente, sujeitas às validações e às senhas exigidas pelo
-serviço do mestre. `ok:true` indica que a resposta de comando foi aceita;
+`400` ou `405`. Ações sem chave válida recebem `401` **antes** de criar a tarefa
+assíncrona ou encaminhar dados pela UART. Consultas e ações autorizadas são
+encaminhadas pela UART; conexão a uma rede Wi-Fi pode aguardar até cerca de
+185 s, enquanto consultas de satélite usam prazo menor. A confirmação visual
+antes do envio pertence ao JavaScript do painel. `ok:true` indica que a
+resposta de comando foi aceita;
 para OTA, upload e outras ações assíncronas, consulte o estado depois.
 
 O painel não recupera sessões passadas do SD nem confirma sozinho o efeito final
@@ -232,6 +254,10 @@ ser alterados por flags de compilação dentro dos limites do cabeçalho. O driv
 registra os valores efetivamente aplicados. O AP usa `192.168.4.1`, DHCP e DNS
 cativo local opcional: quando ativo, responde consultas IPv4 com o IP do painel.
 O acesso por IP continua funcionando se a tarefa DNS não iniciar.
+O servidor redireciona caminhos HTTP desconhecidos para `http://192.168.4.1/`,
+inclusive os usados por alguns sistemas para detectar um portal cativo; a
+abertura automática ainda depende do comportamento do celular. Um pedido a
+uma rota inexistente da API também recebe esse redirecionamento.
 
 ### QR codes de acesso
 
@@ -256,6 +282,7 @@ freio, potência e percurso, com
 unidades codificadas nos nomes dos campos. Aceleração indisponível ou grandezas
 elétricas não adquiridas são `null`, não zero. Os gráficos e cálculos de energia,
 distância e tempo começam quando a página é aberta.
+
 ### Leitura e apresentação pública
 
 O cabeçalho identifica **NEXUS** como sistema de telemetria e controle e

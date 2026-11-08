@@ -113,14 +113,20 @@ o cabeçalho local de credenciais.
 
 Cada `192.168.4.1` pertence ao AP conectado naquele momento. As APIs e as
 limitações dos dados reais e simulados estão no [guia dos satélites](satelites.md).
+No painel da Equipe, as consultas são abertas para quem está no AP. Para
+enviar comandos, use **Preparar acesso** e a chave administrativa exibida no
+serial do satélite da Equipe (115200 baud). A chave é gerada na primeira
+partida e permanece na NVS; a senha do Wi-Fi continua separada. Consulte
+[acesso administrativo e endpoints](satelites.md).
 
 ## Uso durante um teste
 
 1. Ligue o mestre e os satélites com GND e enlaces UART conforme
    [pinagem](pinagem.md). Observe no terminal do mestre (115200 baud) se a
    partida informou falha ou operação degradada.
-2. Conecte o computador à rede da Equipe e abra o painel pelo IP acima. Em
-   **Telemetria**, confira origem real/simulada, idade da amostra e estado dos
+2. Conecte o computador à rede da Equipe e abra o painel pelo IP acima. Antes
+   de enviar ações, obtenha a chave no serial da Equipe e prepare o acesso.
+   Em **Telemetria**, confira origem real/simulada, idade da amostra e estado dos
    enlaces antes de interpretar um número. Uma leitura antiga não representa o
    instante atual.
 3. Use **Comandos** para verificar Google/OTA, alterar a fonte simulada em

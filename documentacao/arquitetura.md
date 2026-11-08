@@ -302,11 +302,14 @@ a persistência do último evento. Credenciais não são incluídas.
 
 O retrato `/sdcard/configuracao_atual.txt` usa checksum, sequência e arquivo
 temporário recuperável. Após validar o arquivo, a partida restaura o odômetro,
-a política de conexão Wi-Fi e o intervalo OTA somente quando os dados NVS
-respectivos estiverem ausentes. Intervalos e pausa dos relatórios são aplicados
+a política e a preferência de conexão automática do Wi-Fi e o intervalo OTA
+somente quando os dados NVS respectivos estiverem ausentes. Intervalos e pausa
+dos relatórios são aplicados
 antes de iniciar a tarefa de relatórios, que não usa NVS para esses ajustes.
 Nomes das redes e parâmetros fixos do CSV permanecem informativos; senhas não
 são copiadas ao SD, portanto perfis de rede não podem ser recriados a partir
 dele. A regravação ocorre no mínimo 60 s após a última gravação concluída;
-uma falha de escrita permite nova tentativa no ciclo seguinte. Um corte de
-energia pode deixar cerca de 1 min de diferença em relação ao valor mais recente.
+uma falha de escrita permite nova tentativa após 5 s, sem repetir o aviso a
+cada amostra. A sequência do backup avança apenas após a gravação concluir.
+Um corte de energia pode deixar cerca de 1 min de diferença em relação ao valor
+mais recente.

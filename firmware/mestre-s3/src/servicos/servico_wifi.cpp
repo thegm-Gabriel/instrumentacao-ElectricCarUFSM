@@ -408,7 +408,7 @@ bool servico_wifi_politica_valida(const PoliticaConexaoWifi& politica) {
 }
 
 esp_err_t servico_wifi_restaurar_politica_se_ausente(
-    const PoliticaConexaoWifi& politica) {
+    const PoliticaConexaoWifi& politica, bool conexao_automatica) {
     if (!servico_wifi_politica_valida(politica)) return ESP_ERR_INVALID_ARG;
     // Uma namespace existente pode conter credenciais ou uma configuração
     // parcial. Nunca alterá-la a partir de um retrato sem senhas.
@@ -423,6 +423,7 @@ esp_err_t servico_wifi_restaurar_politica_se_ausente(
     nvs_handle_t armazenamento = 0;
     esp_err_t erro = nvs_open(ESPACO_NVS, NVS_READWRITE, &armazenamento);
     if (erro == ESP_OK) erro = nvs_set_u8(armazenamento, "versao", VERSAO_ARMAZENAMENTO);
+    if (erro == ESP_OK) erro = nvs_set_u8(armazenamento, "automatico", conexao_automatica ? 1 : 0);
     if (erro == ESP_OK) erro = nvs_set_u8(armazenamento, "tentativas", politica.tentativas_por_rede);
     if (erro == ESP_OK) erro = nvs_set_u32(armazenamento, "tent_ms", politica.tempo_por_tentativa_ms);
     if (erro == ESP_OK) erro = nvs_set_u32(armazenamento, "intervalo_ms", politica.intervalo_entre_tentativas_ms);
