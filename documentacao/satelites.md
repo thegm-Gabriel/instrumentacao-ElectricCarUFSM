@@ -52,20 +52,21 @@ quando suportada. Ele não oferece servidor DNS local; acesso confiável:
 `web/index.html`, `web/style.css`, `web/layout.css` e `web/app.js` são as fontes
 do painel NEXUS. `web/gerar_painel.py` gera `src/servicos/painel_web.c`,
 incorporado ao binário. As rotas `/`, `/painel`, `/diagnostico` e `/mestre`
-entregam o mesmo painel com seis páginas, nesta ordem: telemetria, comandos,
+entregam o mesmo painel com sete páginas: telemetria, comandos, controle,
 mestre, equipe, visitantes e sobre.
 
 | Página da Equipe | O que apresenta ou permite fazer |
 |---|---|
 | Telemetria | Velocidade, movimento, energia disponível, histórico desta sessão, qualidade do enlace e contagem de clientes dos APs. |
 | Comandos | Envio e acompanhamento de ações; Google, simulação, Wi-Fi externo do mestre, clientes dos dois APs e OTA. |
+| Controle | Telemetria essencial, marcha e limites solicitados, liberação e parada remota de envio direto. Não há atuação física nesta versão. |
 | ESP32 — Mestre | Saúde, causas de degradação, memória, CPU, tarefas e estado obtido por consultas UART. |
 | ESP32 — Equipe | Diagnóstico local, recepção UART e estado do ponto de acesso técnico. |
 | ESP32 — Visitantes | Diagnóstico remoto, disponibilidade, memória, CPU e clientes quando o satélite responde. |
 | Sobre | Intenção do projeto, símbolo, orientação e equipe discente. |
 
-As páginas dos ESPs mostram diagnóstico; ações e acompanhamento ficam na página
-Comandos. CPU em uso, memória interna livre e temperatura aparecem em destaque
+As páginas dos ESPs mostram diagnóstico; ações de rede, Google e OTA ficam em
+Comandos, enquanto pedidos de condução ficam em Controle. CPU em uso, memória interna livre e temperatura aparecem em destaque
 nos três diagnósticos. As abas e os indicadores de conexão se reorganizam em
 linhas no celular. Na página Comandos, os botões preenchidos identificam ações;
 consultas de estado têm apresentação secundária. Os atalhos abrem a seção
@@ -89,8 +90,28 @@ Visitantes mostra latência e disponibilidade das consultas; seu diagnóstico
 também oferece CPU, temperatura e memória quando a consulta ao satélite responde.
 Ausência de leitura é exibida como lacuna, sem inventar pontos. O instrumento
 da telemetria destaca a velocidade em um arco e apresenta acelerador e freio
-em dois medidores separados quando esses campos estão válidos. A página Sobre
-explica o projeto Carro Elétrico UFSM-CS, identifica orientação e equipe discente
+em dois medidores separados quando esses campos estão válidos. Um pequeno
+segmento curvo coral é desenhado sobre a faixa do arco e desaparece após cerca de
+1,4 s quando uma amostra nova mostra queda de pelo menos 1,5 km/h e taxa de
+redução de pelo menos 3,5 km/h por segundo, partindo de uma velocidade recente
+de 5 km/h ou mais. Repetições da mesma amostra não contam; após o evento há 4 s
+de intervalo e é preciso voltar a acelerar pelo menos 2 km/h antes de outro
+marcador. A escala do arco mantém a posição do pico até o segmento desaparecer.
+É uma indicação visual de desaceleração percebida no navegador, não o limite de
+velocidade configurado nem um detector de frenagem.
+O arco usa apenas tons frios para manter o marcador distinto; o segmento é
+desenhado uma vez ao surgir e fica estático quando o navegador pede movimento
+reduzido.
+
+O arco começa em 0–30 km/h. A escala só sobe em passos de 5 km/h quando a
+velocidade ultrapassa o máximo atual em mais de 0,15 km/h; ela não aumenta
+antecipadamente ao se aproximar de 30. Para voltar, a leitura (e eventual pico
+visível) deve ficar pelo menos 7 km/h abaixo do máximo por 4 s contínuos.
+Então a escala escolhe de uma vez o menor passo de 5 km/h com 1,5 km/h de
+folga, nunca menos de 30. Isso evita alternância perto do limite e preserva a
+posição do marcador enquanto aparece.
+
+A página Sobre explica o projeto Carro Elétrico UFSM-CS, identifica orientação e equipe discente
 e apresenta o símbolo do carro. O painel público de Visitantes também traz essa
 identidade e os créditos. A imagem fonte fica em
 `firmware/compartilhado/web/logo_carro_eletrico.png` e é incorporada ao HTML
@@ -200,20 +221,73 @@ freio, potência e percurso, com
 unidades codificadas nos nomes dos campos. Aceleração indisponível ou grandezas
 elétricas não adquiridas são `null`, não zero. Os gráficos e cálculos de energia,
 distância e tempo começam quando a página é aberta.
-O painel público destaca velocidade, aceleração e percurso. Bateria e potência
-aparecem quando há leitura; no modo real sem aquisição elétrica, uma nota explica
-a ausência. O velocímetro tem escala fixa de 0 a 35 km/h e muda gradualmente de
-verde-água para amarelo, laranja e vermelho conforme a velocidade aumenta.
-Arco, marcações e indicador compartilham o mesmo centro; o valor numérico continua
-mostrando a leitura completa acima da escala. As barras de acelerador e freio
-preenchem em direção ao centro, respectivamente da esquerda para a direita e da
-direita para a esquerda, com cores graduais. A API publica
-`acelerador_decimos_percentual` e `freio_decimos_percentual` em décimos de por cento;
-como o firmware atual só adquire esses percentuais na simulação, são `null` no
-modo real, apresentados como “Sem leitura”. O gráfico de velocidade mantém sua
-escala automática a partir de 30 km/h. A apresentação do projeto fica ao fim,
-com acesso pelo cabeçalho.
-O navegador consulta a telemetria a cada 500 ms (2 Hz), sem controle de taxa.
+### Leitura e apresentação pública
+
+O cabeçalho identifica **NEXUS** como sistema de telemetria e controle e
+aponta para o Sobre no fim da página. O painel público só lê dados: não expõe
+os comandos do sistema. A página apresenta velocidade, aceleração, percurso e,
+quando recebidos, bateria e grandezas elétricas. No modo real, os campos ainda
+sem aquisição aparecem como “Sem leitura” ou com uma nota de indisponibilidade;
+zero permanece uma leitura válida. Os botões “i” nos cartões de acompanhamento
+abrem descrições curtas por toque, clique ou teclado.
+
+O velocímetro usa **escala fixa de 0 a 35 km/h** e marcações de 5 em 5 km/h;
+10, 20 e 30 têm maior destaque. O preenchimento percorre o mesmo arco de verde
+para amarelo, laranja e vermelho conforme a posição, sem recolorir toda a
+parte já preenchida. Se a leitura nova cair pelo menos 0,18 km/h, o número
+recebe um tom âmbar temporário; ele volta ao branco ao estabilizar, acelerar ou
+parar. Essa cor descreve uma tendência entre amostras, não uma condição de
+segurança. “Sem leitura” usa fonte menor para caber dentro do arco.
+
+Após um pico recente de pelo menos 5 km/h, uma queda de 1,4 km/h ou mais a
+uma taxa de pelo menos 2,3 km/h por segundo mostra um risco discreto **dentro**
+do arco, na posição do pico, e o texto “Pico”. O texto começa a desaparecer
+após cerca de 1,05 s e o risco termina após 1,6 s, ambos com saída gradual.
+Há intervalo de 3,8 s entre eventos, e o marcador só é rearmado depois de
+nova subida de pelo menos 2 km/h acima do vale. Amostras antigas ou inválidas
+reiniciam o rastreamento. O marcador representa uma redução observada no
+navegador; não informa a velocidade máxima configurada para o veículo.
+
+As barras de acelerador e freio crescem da extremidade externa para o centro,
+respectivamente da esquerda para a direita e da direita para a esquerda.
+`acelerador_decimos_percentual` e `freio_decimos_percentual` usam décimos de
+por cento. Como o firmware atual só obtém esses valores na simulação, no modo
+real são `null`. Aceleração negativa colore seu cartão em coral suave; o cartão
+de potência distingue consumo de regeneração com tons próprios. Rótulo, cor e
+número acompanham a mesma transição ao atravessar zero.
+
+Quando há potência, o cartão principal mostra uma faixa com **zero no centro**:
+consumo cresce à direita e regeneração, à esquerda. A escala começa em ±500 W
+e só aumenta durante a sessão se a potência recebida exceder esse alcance;
+não oscila para baixo a cada amostra. Um risco sem rótulo marca, por cerca de
+1,55 s, um pico de magnitude de pelo menos 120 W seguido de queda de pelo menos
+55 W ou 25% (o maior dos dois). Uma inversão de sinal também pode marcar o
+pico anterior; há intervalo de 3,5 s entre marcas. A faixa e esse cartão ficam
+ocultos quando não há leitura elétrica.
+
+O mestre publica telemetria aos satélites nominalmente a cada 250 ms (4 Hz);
+o navegador de Visitantes consulta `/api/telemetria` a cada 500 ms (2 Hz), sem
+ajuste de taxa. Ele aceita apenas sequências novas e estima o período de chegada
+dessas leituras. Números e barras se aproximam do alvo com desaceleração no fim:
+a transição usa cerca de 1,15 vez esse período, limitada a 450–850 ms. Uma
+leitura nova interrompe a transição a partir do valor exibido. Movimento
+reduzido solicitado pelo navegador ou aba oculta aplica o valor imediatamente.
+O tempo de acompanhamento continua avançando como relógio. Mais de 2,5 s sem
+leitura nova abre uma lacuna nos gráficos.
+
+O gráfico **Movimento** une velocidade e aceleração na mesma linha de tempo,
+com escala e unidade próprias nas bordas esquerda e direita. A velocidade
+começa em 0–30 km/h e expande o eixo quando as leituras visíveis exigem; isso
+não altera a escala fixa do velocímetro. O gráfico **Sistema elétrico**, quando
+há dados, oferece quatro comparações: potência/corrente, tensão/corrente,
+potência/tensão ou carga/potência. Ambos usam janelas de 1, 5 ou 10 minutos,
+mostram as duas grandezas no mesmo instante ao tocar o gráfico e preservam
+lacunas em vez de ligar pontos através de falhas. O histórico existe apenas
+enquanto a página está aberta.
+
+O Sobre traz o símbolo do carro, a intenção do projeto, orientação e equipe
+discente. A tipografia dos cartões largos cresce no computador sem ampliar os
+cartões estreitos do celular; não há fontes ou bibliotecas carregadas da rede.
 
 A seção de energia também apresenta **autonomia restante** em km, recebida no
 campo `autonomia_decimos_km`, e **consumo médio** em Wh/km. A autonomia é uma
@@ -241,6 +315,14 @@ do veículo nem uma previsão de autonomia calculada pelo navegador.
   e a atualização de firmware no [guia OTA](ota.md).
 
 ## Preparação de controle remoto
+
+Na página **Comandos**, Última ação, Google, simulação, Wi-Fi do mestre,
+redes locais, consultas, OTA, operação e histórico começam recolhidos. Os
+atalhos no topo abrem automaticamente a seção escolhida e levam o foco até
+ela. Subseções internas podem ser abertas separadamente. A página **Controle**
+reúne telemetria recente, marcha, limites e pedido de parada. Esse pedido é
+enviado sem diálogo de confirmação, com aviso discreto sobre a ausência de
+atuação física; os demais pedidos mantêm a confirmação.
 
 A Equipe pode solicitar marcha, limites de velocidade e aceleração e parada
 remota ao mestre. O estado é apenas preparatório, sem atuação física. Consulte

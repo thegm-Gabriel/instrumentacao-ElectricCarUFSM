@@ -1,12 +1,15 @@
 """Contrato HTTP e transições de estado da prévia, sem ESP ou serviços externos."""
 
 import json
+import sys
 import threading
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, build_opener, ProxyHandler
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from visualizar_painel_equipe import SimuladorEquipe, criar_servidor, GERADOR
 
 
@@ -106,6 +109,36 @@ class SimuladorTests(unittest.TestCase):
         self.assertEqual(self.sim.telemetria()["percurso_metros"], 0)
         self.sim.comando("simulador_telemetria", "0")
         self.assertFalse(self.sim.telemetria()["simulado"])
+
+    def test_trajetoria_variada_e_sinais_coerentes(self):
+        leituras = []
+        for _ in range(180):
+            leituras.append(self.sim.telemetria())
+            self.advance(.25)
+        velocidades = [d["velocidade_centesimos_kmh"] / 100 for d in leituras]
+        variacoes = [(b - a) / .25 for a, b in zip(velocidades, velocidades[1:])]
+        self.assertTrue(any(taxa > 3 for taxa in variacoes))
+        self.assertTrue(any(taxa < -3.5 for taxa in variacoes))
+        self.assertTrue(any(0 < taxa < 1 for taxa in variacoes))
+        self.assertTrue(any(-1 < taxa < 0 for taxa in variacoes))
+        self.assertTrue(any(
+            max(velocidades[max(0, i-12):i]) - velocidades[i] >= 1.5
+            and variacoes[i-1] <= -3.5
+            for i in range(1, len(velocidades))
+        ))
+        self.assertTrue(any(d["freio_decimos_percentual"] > 0 for d in leituras))
+        self.assertTrue(any(d["acelerador_decimos_percentual"] > 0 for d in leituras))
+        self.assertTrue(all(0 <= v <= 38 for v in velocidades))
+        self.assertEqual(sorted(d["percurso_metros"] for d in leituras),
+                         [d["percurso_metros"] for d in leituras])
+        for d in leituras:
+            if d["freio_decimos_percentual"] > 0:
+                self.assertEqual(d["acelerador_decimos_percentual"], 0)
+                self.assertLess(d["aceleracao_milesimos_ms2"], 0)
+                self.assertLessEqual(d["corrente_centesimos_a"], 0)
+            corrente = d["corrente_centesimos_a"] / 100
+            tensao = d["tensao_pacote_mv"] / 1000
+            self.assertAlmostEqual(d["potencia_w"], corrente * tensao, delta=1)
 
     def test_controle_remoto_intertravamentos_e_parada_sem_retomada(self):
         self.assertFalse(self.sim.consulta("controle_remoto", {})["atuacao_habilitada"])

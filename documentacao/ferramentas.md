@@ -2,8 +2,9 @@
 
 [Índice da documentação](README.md) · [Versionamento](versionamento.md)
 
-Execute os comandos abaixo **na raiz do repositório**. Os scripts usam Python;
-as compilações usam PlatformIO com ESP-IDF. Use `python ... --help` nos scripts
+Execute os comandos abaixo **na raiz do repositório**. Os scripts de operação
+usam Python, os testes dos painéis usam Node.js e as compilações usam
+PlatformIO com ESP-IDF. Use `python ... --help` nos scripts
 que aceitam argumentos para confirmar a sintaxe disponível nesta revisão.
 Nenhuma ferramenta deste guia grava firmware em uma placa sem o comando de
 upload explícito.
@@ -20,8 +21,11 @@ upload explícito.
 | `ferramentas/gerar_qr_visitantes.py` | Quando SSID, senha ou IP público dos Visitantes mudar. | Macros de `firmware/visitantes-s3/include/nucleo/configuracao.h`. | Dois PNGs e dois SVGs em `artefatos/qr_visitantes`. |
 | `ferramentas/preparar_release_ota.py` | Preparar um conjunto OTA versionado. | Fontes, estado anterior, escolha de incremento e imagens anteriores quando reutilizadas. | Três `.bin`, manifesto, histórico e `estado_versoes.json`. |
 | `ferramentas/criar_manifesto_ota.py` | Gerar manualmente o manifesto de três imagens já compiladas. | Caminho e versão de cada `.bin`, etiqueta e repositório. | JSON com URL, SHA-256 e tamanho por alvo. |
-| `ferramentas/test_preparar_release_ota.py` | Conferir as regras de incremento SemVer. | Casos de teste locais. | Resultado `unittest`; não compila firmware. |
-| `ferramentas/test_visualizar_painel_equipe.py` | Conferir as APIs e transições da prévia técnica. | Cenários e requisições HTTP em localhost. | Resultado `unittest`; não acessa ESPs. |
+
+Os scripts de operação ficam em `ferramentas/`, cada gerador de painel junto
+das fontes `web/` correspondentes, e os testes de regressão em
+`ferramentas/testes/`. Nenhum script de prévia grava configurações ou firmware
+nos ESPs.
 
 ## Gerar os painéis incorporados
 
@@ -46,8 +50,10 @@ python ferramentas\visualizar_painel_visitantes.py
 ```
 
 Abra `http://127.0.0.1:8765/` no navegador. O servidor monta o mesmo HTML
-incorporado pelo gerador e responde à API de telemetria com dados simulados,
-identificados como demonstração na página. Ele lê as fontes a cada abertura:
+incorporado pelo gerador e responde à API de telemetria com trajetos simulados
+variados, identificados como demonstração na página. A prévia da Equipe usa a
+mesma fonte local; ambas alternam cruzeiro suave e frenagens de intensidades
+diferentes. Ele lê as fontes a cada abertura:
 após editar HTML, CSS ou JavaScript, atualize o navegador. Use `Ctrl+C` para
 encerrar. Se a porta estiver ocupada, passe `--porta 8766` e abra o endereço
 correspondente. A prévia permite avaliar layout e interações; dados reais e
@@ -111,12 +117,28 @@ reais de transmissão e reconexões físicas ainda precisam de teste em bancada.
 Para conferir o simulador após uma alteração:
 
 ```powershell
-python -m unittest discover -s ferramentas -p test_visualizar_painel_equipe.py -v
+python -m unittest discover -s ferramentas/testes -p test_visualizar_painel_equipe.py -v
 ```
 
 Os testes cobrem progresso e conclusão de Google/OTA, expiração de autorização,
 configuração Wi-Fi, clientes, cenários sem mestre e respostas HTTP. Usam uma
 porta local temporária e a liberam ao terminar.
+
+### Testes rápidos das interfaces
+
+```powershell
+node --check firmware\equipe-s3\web\app.js
+node --check firmware\visitantes-s3\web\app.js
+node ferramentas\testes\test_marcador_velocidade.js
+node ferramentas\testes\test_animacao_visitantes.js
+node ferramentas\testes\test_pico_visitantes.js
+node ferramentas\testes\test_pico_potencia_visitantes.js
+```
+
+Esses testes cobrem o marcador do velocímetro técnico, a transição numérica
+do painel público, seu pico de velocidade e os picos de consumo/regeneração.
+Rodam no Node.js sem ESP. Não substituem conferir tamanhos de tela, dados reais,
+perda de enlace e comportamento ao toque com as prévias ou em bancada.
 
 ## Criar segredos locais do mestre
 
@@ -155,8 +177,17 @@ firmware: edite o cabeçalho, regenere os códigos e recompile o satélite.
 pio run -d firmware\mestre-s3 -e mestre-s3-n16r8
 pio run -d firmware\equipe-s3 -e esp32-s3-devkitm-1
 pio run -d firmware\visitantes-s3 -e esp32-s3-devkitm-1
-python -m unittest ferramentas.test_preparar_release_ota
+python -m unittest discover -s ferramentas/testes -p test_preparar_release_ota.py -v
 ```
+
+Se `pio` não estiver no PATH no Windows, use o executável da instalação local:
+
+```powershell
+$pioLocal = Join-Path $env:USERPROFILE '.platformio\penv\Scripts\pio.exe'
+& $pioLocal run -d firmware\visitantes-s3 -e esp32-s3-devkitm-1
+```
+
+O preparador de release procura esse caminho automaticamente.
 
 Acrescente `-t upload` ao comando `pio run` do alvo desejado para gravar **por
 cabo**. Escolha a porta serial conforme sua máquina. A primeira instalação

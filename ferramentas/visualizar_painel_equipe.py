@@ -85,7 +85,7 @@ class SimuladorEquipe:
         d.update(simulado=self.simulado, valido=self.cenario != "sem-mestre",
                  idade_ms=10 if self.cenario != "sem-mestre" else 5000,
                  sequencia=int(self.tempo()*4) % 65536, tempo_mestre_ms=int(self.tempo()*1000),
-                 estado_mpu=7, temperatura_mpu_centesimos_c=3250, marcha=2,
+                 estado_mpu=7, temperatura_mpu_centesimos_c=3250,
                  taxa_pacotes_centesimos_hz=400, taxa_perda_centesimos_percentual=0,
                  falhas_crc=0, pacotes_validos=int(self.tempo()*4))
         d["percurso_metros"] = max(0, d["percurso_metros"] - self.percurso_base)

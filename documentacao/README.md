@@ -99,9 +99,10 @@ o cabeçalho local de credenciais.
 
 - Na rede `UFSM-Carro-Equipe`, abra `http://192.168.4.1/` por HTTP. As rotas
   `/painel`, `/diagnostico` e `/mestre` entregam a mesma interface com seis
-  páginas: **Telemetria, Comandos, ESP32 — Mestre, ESP32 — Equipe,
-  ESP32 — Visitantes e Sobre**. A página Comandos contém ações, clientes Wi-Fi,
-  OTA e Google; as páginas dos ESPs apresentam diagnóstico. O AP da Equipe não
+  páginas: **Telemetria, Comandos, Controle, ESP32 — Mestre, ESP32 — Equipe,
+  ESP32 — Visitantes e Sobre**. Comandos reúne Wi-Fi, OTA e Google; Controle
+  apresenta os pedidos de marcha, limites e parada remota, ainda sem atuação
+  física. As páginas dos ESPs apresentam diagnóstico. O AP da Equipe não
   oferece DNS local; o anúncio do portal pelo DHCP depende do cliente.
 - Na rede `UFSM-Carro-Visitantes`, abra `http://192.168.4.1/`. O DNS cativo
   responde consultas IPv4 com esse IP quando a tarefa DNS está disponível. A

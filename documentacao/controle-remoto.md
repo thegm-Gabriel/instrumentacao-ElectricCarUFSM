@@ -5,7 +5,7 @@
 ## Escopo atual
 
 O mestre recebe pedidos de marcha, velocidade máxima, aceleração máxima e
-**parada remota** enviados pela página Comandos da Equipe. Esta revisão apenas
+**parada remota** enviados pela página Controle da Equipe. Esta revisão apenas
 guarda e consulta os pedidos: **não atua sobre motor, freio ou controlador**.
 Não há confirmação de imobilização do carro. O pedido de parada não substitui
 um dispositivo físico de emergência e a UART/Wi-Fi não garante parada instantânea.
@@ -16,9 +16,13 @@ Visitantes mantém sua interface pública somente de leitura, sem novos comandos
 
 ## Operação pelo painel
 
-Em **Comandos → Controle remoto**, os valores consultados aparecem acima dos
-formulários. Os campos abaixo representam novos pedidos. Há confirmação antes
-do envio e acompanhamento pelo histórico de comandos. O estado é consultado
+Na página **Controle**, a leitura recente de velocidade, acelerador, freio,
+corrente, tensão e potência aparece antes dos comandos. A idade da telemetria
+é indicada; campos indisponíveis no modo real não recebem valores simulados.
+Os valores solicitados aparecem acima dos formulários. Marcha, limites e
+liberação pedem confirmação. **Solicitar parada envia imediatamente, sem
+diálogo de confirmação**, acompanhado de aviso discreto. A página Comandos
+mantém o histórico e o estado observado. O estado é consultado
 automaticamente no ciclo de estados operacionais (aproximadamente 2 s, sujeito
 ao tempo das demais consultas UART), além do botão Atualizar estado.
 
@@ -32,6 +36,12 @@ Sem resposta, os valores anteriores não confirmam o pedido. Dois navegadores
 compartilham o mesmo estado no mestre: uma consulta mostra o valor mais recente,
 que outro operador pode ter alterado. A revisão identifica alterações, mas não
 é um mecanismo de exclusividade ou autorização de operador.
+
+O botão de parada permanece disponível durante outra operação do painel e
+envia sua requisição sem esperar a fila de consultas do navegador. Um segundo
+toque enquanto o envio está pendente é ignorado. A comunicação e o processamento
+no mestre ainda podem atrasar ou falhar; resposta e estado consultado aparecem
+separadamente. A interface não apresenta o pedido como frenagem física confirmada.
 
 ## Estado, limites e reinício
 

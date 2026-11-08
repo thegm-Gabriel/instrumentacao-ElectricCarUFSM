@@ -64,6 +64,19 @@ Falhas de NVS, inicialização do núcleo da aplicação, criação/supervisão 
 
 `USAR_TELEMETRIA_SIMULADA=false` seleciona os sensores reais na partida; `true` usa [`servico_simulador_telemetria.cpp`](../firmware/mestre-s3/src/servicos/servico_simulador_telemetria.cpp). O painel da equipe permite ativar ou desativar a simulação durante a sessão; ao reiniciar, retorna ao valor definido no código. A consulta remota informa fonte atual, padrão, dinâmica e amostras geradas. O ciclo normal é de 250 ms (4 Hz). ADC indisponível, leitura MPU inválida e falha no odômetro são contabilizados ou sinalizados; uma falha pontual não derruba o restante do ciclo. O MPU é amostrado por serviço próprio a 100 Hz, com calibração, compensação de gravidade, filtro e histerese para o sentido longitudinal. A montagem codificada assume X vertical e Y longitudinal positivo para frente. Fontes: [`main.cpp`](../firmware/mestre-s3/src/main.cpp), [`servico_aceleracao.cpp`](../firmware/mestre-s3/src/servicos/servico_aceleracao.cpp).
 
+O simulador sorteia uma semente por inicialização. Cada episódio de 45 s tem
+seis trechos de duração e velocidade alvo variáveis: pode acelerar ou desacelerar
+devagar ou rapidamente, manter quase a mesma velocidade, parar e, ocasionalmente,
+usar marcha à ré. O primeiro episódio termina com uma frenagem curta para
+facilitar a conferência do marcador no painel. A interpolação mantém velocidade
+e aceleração contínuas nas transições. Acelerador acompanha aceleração positiva;
+freio acompanha desaceleração mais forte; corrente negativa representa regeneração
+somente enquanto há movimento. Tensão e potência são calculadas da mesma corrente.
+A prévia local dos painéis usa o mesmo perfil. A semente é registrada uma vez no
+log para reproduzir a sequência.
+A dinâmica configurada altera a rapidez do trajeto; nenhuma leitura simulada
+atua no veículo.
+
 Os dois encoders de 600 P/R são decodificados pelo PCNT em quatro transições por pulso (2.400 contagens/giro). [`servico_odometro.cpp`](../firmware/mestre-s3/src/servicos/servico_odometro.cpp) aplica diâmetro de 0,300 m e relação encoder/roda de 1,0 em cada lado, usa a média das distâncias para velocidade e distância, rejeita saltos acima do limite configurado de 200 km/h e acompanha divergência persistente entre rodas. `percurso_km` recomeça no boot; `odometro_km` é recuperado da NVS e persistido a cada 100 m. Ajuste esses valores à mecânica real em [`configuracao_placa.h`](../firmware/mestre-s3/include/nucleo/configuracao_placa.h).
 
 [`servico_telemetria.cpp`](../firmware/mestre-s3/src/servicos/servico_telemetria.cpp) envia o mesmo retrato a equipe e visitantes, com fila de transmissão por UART. O [protocolo v4](../firmware/compartilhado/protocolos/protocolo_telemetria.h) define pacote de 105 bytes, carga de 98 bytes, CRC-16/CCITT-FALSE e confirmação de 20 bytes. Os retornos permitem medir RTT e idade da última resposta de cada satélite. [`servico_enlace_satelites.cpp`](../firmware/mestre-s3/src/servicos/servico_enlace_satelites.cpp) é o consumidor dos quadros de retorno e os encaminha para telemetria, comandos ou OTA. O [parser do enlace](../firmware/compartilhado/protocolos/protocolo_enlace_uart.h) distingue as três famílias de quadro.

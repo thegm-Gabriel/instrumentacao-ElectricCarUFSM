@@ -1,4 +1,4 @@
-// Declara a geração determinística de telemetria simulada.
+// Declara a geração de trajetos simulados variados para teste sem sensores.
 #pragma once
 
 #include <cstdint>

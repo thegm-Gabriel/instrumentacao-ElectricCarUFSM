@@ -9,21 +9,21 @@
   const set = (id, text) => { const el = $(id); if (el && el.textContent !== text) el.textContent = text; };
   const tone = (id, name) => { const el = $(id); if (el) el.className = 'dot ' + name; };
   const badge = (id, text, name) => { const el = $(id); if (el) { el.textContent = text; el.className = 'badge ' + name; } };
-  const message = (text, kind = '') => { const el = $('notice'); el.hidden = false; el.textContent = text; el.className = 'notice ' + kind; };
-  const state = { tab: 'telemetria', range: 30, signal: 'power', signalSecondary: 'current', telemetry: null, local: null, localAt: 0, master: {}, visitors: {}, browserOnline: false, browserChecked: false, localChecked: false, lastHttp: 0, masterOnline: false, masterChecked: false, visitorsOnline: false, visitorsChecked: false, lastSample: 0, lastSequence: null, samples: [], deviceSamples: {mestre:[],equipe:[],visitantes:[]}, deviceSignal:{mestre:'cpu',equipe:'cpu',visitantes:'rtt'}, deviceSignalSecondary:{mestre:'heap',equipe:'heap',visitantes:'availability'}, events: [], commandEvents: [], commandRuns: [], selected: {mestre:'mestre',equipe:'equipe', visitantes:'visitantes'}, busy: false, energyWh: 0, distanceStart: null, pending: null, polls: {}, telemetryRefreshMs: 250, commandRefreshMs: 2000 };
+  const message = (text, kind = '') => { const el = $(state.tab==='controle'?'critical-notice':'notice'); el.hidden = false; el.textContent = text; el.className = 'notice ' + kind; };
+  const state = { tab: 'telemetria', range: 30, signal: 'power', signalSecondary: 'current', telemetry: null, local: null, localAt: 0, master: {}, visitors: {}, browserOnline: false, browserChecked: false, localChecked: false, lastHttp: 0, masterOnline: false, masterChecked: false, visitorsOnline: false, visitorsChecked: false, lastSample: 0, lastSampleAgeMs: 0, lastSequence: null, samples: [], deviceSamples: {mestre:[],equipe:[],visitantes:[]}, deviceSignal:{mestre:'cpu',equipe:'cpu',visitantes:'rtt'}, deviceSignalSecondary:{mestre:'heap',equipe:'heap',visitantes:'availability'}, events: [], commandEvents: [], commandRuns: [], selected: {mestre:'mestre',equipe:'equipe', visitantes:'visitantes'}, busy: false, energyWh: 0, distanceStart: null, pending: null, polls: {}, telemetryRefreshMs: 250, commandRefreshMs: 2000 };
   const devices = {
     mestre: {group:'mestre', name:'ESP32 mestre', id:'MESTRE', role:'Mestre', function:'Aquisição e telemetria do veículo'},
     equipe: {group:'equipe', name:'ESP32 da equipe', id:'EQUIPE', role:'Satélite / gateway', function:'Recepção UART, Wi-Fi e painel web'},
     visitantes: {group:'visitantes', name:'ESP32 de visitantes', id:'VISITANTES', role:'Satélite', function:'Painel e recepção de telemetria'}
   };
   const deviceChartOptions={
-    mestre:[{key:'cpu',label:'CPU total',unit:'%',color:'#8BC4DF'},{key:'core0',label:'CPU núcleo 0',unit:'%',color:'#8BC4DF'},{key:'core1',label:'CPU núcleo 1',unit:'%',color:'#8BC4DF'},{key:'heap',label:'Memória interna livre',unit:'KiB',color:'#8BD0AF'},{key:'temp',label:'Temperatura interna',unit:'°C',color:'#EBC17F'},{key:'rtt',label:'Tempo de resposta',unit:'ms',color:'#E69B9B'}],
-    equipe:[{key:'cpu',label:'CPU total',unit:'%',color:'#8BC4DF'},{key:'core0',label:'CPU núcleo 0',unit:'%',color:'#8BC4DF'},{key:'core1',label:'CPU núcleo 1',unit:'%',color:'#8BC4DF'},{key:'heap',label:'Memória interna livre',unit:'KiB',color:'#8BD0AF'},{key:'temp',label:'Temperatura interna',unit:'°C',color:'#EBC17F'},{key:'rate',label:'Taxa de telemetria',unit:'Hz',color:'#EBC17F'}],
-    visitantes:[{key:'rtt',label:'Tempo de resposta',unit:'ms',color:'#8BC4DF'},{key:'availability',label:'Disponibilidade',unit:'%',color:'#79C9A3'},{key:'cpu',label:'CPU total',unit:'%',color:'#EBC17F'},{key:'core0',label:'CPU núcleo 0',unit:'%',color:'#8BC4DF'},{key:'core1',label:'CPU núcleo 1',unit:'%',color:'#8BC4DF'},{key:'heap',label:'Memória interna livre',unit:'KiB',color:'#8BD0AF'},{key:'temp',label:'Temperatura interna',unit:'°C',color:'#EBC17F'}]
+    mestre:[{key:'cpu',label:'CPU total',unit:'%',color:'#59D9F7'},{key:'core0',label:'CPU núcleo 0',unit:'%',color:'#59D9F7'},{key:'core1',label:'CPU núcleo 1',unit:'%',color:'#59D9F7'},{key:'heap',label:'Memória interna livre',unit:'KiB',color:'#4CE0A2'},{key:'temp',label:'Temperatura interna',unit:'°C',color:'#FFCA64'},{key:'rtt',label:'Tempo de resposta',unit:'ms',color:'#FF8492'}],
+    equipe:[{key:'cpu',label:'CPU total',unit:'%',color:'#59D9F7'},{key:'core0',label:'CPU núcleo 0',unit:'%',color:'#59D9F7'},{key:'core1',label:'CPU núcleo 1',unit:'%',color:'#59D9F7'},{key:'heap',label:'Memória interna livre',unit:'KiB',color:'#4CE0A2'},{key:'temp',label:'Temperatura interna',unit:'°C',color:'#FFCA64'},{key:'rate',label:'Taxa de telemetria',unit:'Hz',color:'#FFCA64'}],
+    visitantes:[{key:'rtt',label:'Tempo de resposta',unit:'ms',color:'#59D9F7'},{key:'availability',label:'Disponibilidade',unit:'%',color:'#4CE0A2'},{key:'cpu',label:'CPU total',unit:'%',color:'#FFCA64'},{key:'core0',label:'CPU núcleo 0',unit:'%',color:'#59D9F7'},{key:'core1',label:'CPU núcleo 1',unit:'%',color:'#59D9F7'},{key:'heap',label:'Memória interna livre',unit:'KiB',color:'#4CE0A2'},{key:'temp',label:'Temperatura interna',unit:'°C',color:'#FF8492'}]
   };
   function selectedDeviceCharts(id){
     const charts=[state.deviceSignal[id],state.deviceSignalSecondary[id]].map(key=>deviceChartOptions[id].find(option=>option.key===key));
-    if(charts[0].color===charts[1].color)charts[1]={...charts[1],color:'#EBC17F'};
+    if(charts[0].color===charts[1].color)charts[1]={...charts[1],color:'#FFCA64'};
     return charts;
   }
   const CAP_SYNC = 1 << 11;
@@ -38,10 +38,58 @@
     try {localStorage.setItem('nexus-telemetry-refresh-ms',String(selected));} catch (_) { /* Preferência válida apenas nesta sessão. */ }
     pollTelemetry();
   });
+  const statusbar=$('statusbar-toggle').closest('.statusbar');
+  const topbarInner=document.querySelector('.topbar-inner');
+  let statusbarAnimation=null;
+  function placeStatusbarToggle(){
+    const notice=$('health-notice');
+    const noticeSlot=$('statusbar-notice-slot');
+    const host=!statusbar.classList.contains('is-collapsed')?statusbar.querySelector('.statusbar-shell'):notice.hidden?topbarInner:noticeSlot;
+    const toggle=$('statusbar-toggle');
+    if(toggle.parentElement!==host){
+      const wasFocused=document.activeElement===toggle;
+      host.append(toggle);
+      if(wasFocused)toggle.focus({preventScroll:true});
+    }
+    $('health-notice-row').hidden=notice.hidden;
+    topbarInner.classList.toggle('has-statusbar-toggle',host===topbarInner);
+  }
+  function setStatusbarCollapsed(collapsed,smooth=false){
+    const fromHeight=statusbar.getBoundingClientRect().height;
+    if(statusbarAnimation){statusbarAnimation.cancel();statusbarAnimation=null;}
+    statusbar.classList.toggle('is-collapsed',collapsed);
+    $('statusbar-toggle').setAttribute('aria-expanded',String(!collapsed));
+    $('statusbar-toggle').setAttribute('aria-label',collapsed?'Expandir faixa de estado':'Recolher faixa de estado');
+    $('statusbar-toggle').title=collapsed?'Expandir faixa de estado':'Recolher faixa de estado';
+    if(!collapsed){statusbar.hidden=false;$('statusbar-content').hidden=false;}
+    placeStatusbarToggle();
+    if(!smooth||!statusbar.animate||matchMedia('(prefers-reduced-motion: reduce)').matches){
+      statusbar.style.overflow='';
+      statusbar.hidden=collapsed;
+      $('statusbar-content').hidden=collapsed;
+      return;
+    }
+    const toHeight=collapsed?0:statusbar.scrollHeight;
+    statusbar.style.overflow='hidden';
+    const animation=statusbar.animate([{height:fromHeight+'px',opacity:collapsed?1:0},{height:toHeight+'px',opacity:collapsed?0:1}],{duration:220,easing:'ease-in-out'});
+    statusbarAnimation=animation;
+    animation.onfinish=()=>{
+      if(statusbarAnimation!==animation)return;
+      statusbarAnimation=null;
+      statusbar.style.overflow='';
+      if(collapsed){statusbar.hidden=true;$('statusbar-content').hidden=true;}
+    };
+  }
+  try {setStatusbarCollapsed(localStorage.getItem('nexus-statusbar-collapsed')==='1');} catch (_) {setStatusbarCollapsed(false);}
+  $('statusbar-toggle').addEventListener('click',()=>{
+    const collapsed=!statusbar.classList.contains('is-collapsed');
+    setStatusbarCollapsed(collapsed,true);
+    try {localStorage.setItem('nexus-statusbar-collapsed',collapsed?'1':'0');} catch (_) { /* O controle continua funcional nesta sessão. */ }
+  });
   const marchas = ['Estacionado','Neutro','Frente','Ré'];
 
   function showTab(tab, historyMode = 'replace') {
-    if (!['telemetria','comandos','mestre','equipe','visitantes','sobre'].includes(tab)) tab = 'telemetria';
+    if (!['telemetria','comandos','controle','mestre','equipe','visitantes','sobre'].includes(tab)) tab = 'telemetria';
     state.tab = tab;
     document.querySelectorAll('.page').forEach(el => el.classList.toggle('active', el.id === tab));
     document.querySelectorAll('.tab').forEach(el => { const active = el.dataset.tab === tab; el.classList.toggle('active', active); el.setAttribute('aria-selected', String(active)); el.tabIndex = active ? 0 : -1; });
@@ -52,10 +100,24 @@
     else if (tab === 'comandos') {pollWifiClients('equipe',true);pollWifiClients('visitantes',true);}
   }
   document.querySelectorAll('.tab').forEach(el => el.addEventListener('click', () => showTab(el.dataset.tab, 'push')));
+  // Os cartões de acompanhamento conservam seus IDs e lógica de atualização.
+  function foldCard(id,label){
+    const content=$(id),panel=document.createElement('details'),heading=document.createElement('summary');
+    panel.className='card fold-panel';heading.textContent=label;
+    content.before(panel);panel.append(heading,content);
+  }
+  $('master-query').closest('details').id='master-queries';
+  [['command-overview','Última ação'],['sync-card','Sincronização com Google'],['simulator-card','Telemetria simulada']].forEach(([id,label])=>foldCard(id,label));
+  const localNetworks=$('wifi-local'),localHeading=localNetworks.previousElementSibling;
+  foldCard('wifi-local','Redes locais · Equipe e Visitantes');
+  localHeading.remove();
+  const historyCard=document.querySelector('.command-history-card');historyCard.id='command-history-card';
+  foldCard('command-history-card','Histórico de ações');
   function revealSection(target){
     if(target.matches('details'))target.open=true;
     for(let parent=target.parentElement;parent;parent=parent.parentElement)if(parent.matches('details'))parent.open=true;
-    target.scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'start'});
+    const destination=target.closest('.fold-panel')||target;
+    destination.scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'start'});
     target.setAttribute('tabindex','-1');target.focus({preventScroll:true});
   }
   document.querySelectorAll('[data-scroll-to]').forEach(button=>button.addEventListener('click',()=>{
@@ -74,23 +136,74 @@
   document.querySelectorAll('.range').forEach(el => el.addEventListener('click', () => { state.range = Number(el.dataset.range); document.querySelectorAll('.range').forEach(b => b.classList.toggle('active', b === el)); drawCharts(); }));
   $('electric-signal').addEventListener('change', e => { const previous=state.signal;state.signal=e.target.value;if(state.signal===state.signalSecondary){state.signalSecondary=previous;$('electric-signal-2').value=previous;}drawCharts(); });
   $('electric-signal-2').addEventListener('change', e => { const previous=state.signalSecondary;state.signalSecondary=e.target.value;if(state.signalSecondary===state.signal){state.signal=previous;$('electric-signal').value=previous;}drawCharts(); });
-  function updateArc() {
+  const speedPeak={last:null,lastAt:0,sequence:null,source:null,candidate:0,candidateAt:0,trough:0,armed:true,cooldownUntil:0,value:null,until:0,timer:null};
+  const PEAK_HOLD_MS=1400;
+  const speedScale={max:30,belowSince:null};
+  function scaleForSpeed(speed,heldPeak,now){
+    const required=Math.max(0,speed||0,heldPeak||0);
+    if(required>speedScale.max+0.15){
+      speedScale.max=Math.max(30,Math.ceil(required/5)*5);
+      speedScale.belowSince=null;
+    }else if(speedScale.max>30&&required<=speedScale.max-7){
+      if(speedScale.belowSince===null)speedScale.belowSince=now;
+      else if(now-speedScale.belowSince>=4000){
+        speedScale.max=Math.max(30,Math.ceil((required+1.5)/5)*5);
+        speedScale.belowSince=null;
+      }
+    }else speedScale.belowSince=null;
+    return speedScale.max;
+  }
+  function trackSpeedPeak(speed,source,sequence){
+    const now=performance.now();
+    if(speed===null||speedPeak.last===null||now-speedPeak.lastAt>2500||speedPeak.source!==source){
+      clearTimeout(speedPeak.timer);
+      Object.assign(speedPeak,{last:speed,lastAt:now,sequence,source,candidate:speed||0,candidateAt:now,trough:speed||0,armed:true,cooldownUntil:0,value:null,until:0,timer:null});
+      return;
+    }
+    if(sequence!==null&&sequence!==undefined&&sequence===speedPeak.sequence)return;
+    const elapsed=now-speedPeak.lastAt,dropRate=(speedPeak.last-speed)*1000/Math.max(100,elapsed);
+    if(speedPeak.armed){
+      if(now-speedPeak.candidateAt>3000){speedPeak.candidate=speedPeak.last;speedPeak.candidateAt=speedPeak.lastAt;}
+      if(speed>speedPeak.candidate){speedPeak.candidate=speed;speedPeak.candidateAt=now;}
+      else if(speedPeak.candidate>=5&&speedPeak.candidate-speed>=1.5&&dropRate>=3.5&&now>=speedPeak.cooldownUntil){
+        speedPeak.value=speedPeak.candidate;
+        speedPeak.until=now+PEAK_HOLD_MS;
+        speedPeak.cooldownUntil=now+4000;
+        speedPeak.armed=false;
+        speedPeak.trough=speed;
+        clearTimeout(speedPeak.timer);
+        speedPeak.timer=setTimeout(()=>{speedPeak.until=0;updateArc(false);},PEAK_HOLD_MS);
+      }
+    }else{
+      speedPeak.trough=Math.min(speedPeak.trough,speed);
+      if(now>=speedPeak.cooldownUntil&&speed-speedPeak.trough>=2){speedPeak.armed=true;speedPeak.candidate=speed;speedPeak.candidateAt=now;}
+    }
+    if(speedPeak.until&&speed>=speedPeak.value){speedPeak.until=0;clearTimeout(speedPeak.timer);}
+    speedPeak.last=speed;speedPeak.lastAt=now;speedPeak.sequence=sequence;
+  }
+  function updateArc(recordSample=true) {
     const d=state.telemetry&&state.telemetry.valido?state.telemetry:null;
     const speed=d?value(d,'velocidade_centesimos_kmh',100):null;
-    const scale=Math.max(30,Math.ceil(Math.max(0,speed||0)*1.08/5)*5);
+    if(recordSample)trackSpeedPeak(speed,d?.simulado,d?.sequencia);
+    const peakVisible=speedPeak.value!==null&&speedPeak.until>performance.now()&&speed!==null;
+    const scale=scaleForSpeed(speed,peakVisible?speedPeak.value:null,performance.now());
     $('speed-fill').style.strokeDasharray=(Math.max(0,Math.min(100,(speed||0)/scale*100)))+' 100';
-    const fraction=Math.max(0,Math.min(1,(speed||0)/scale));
-    $('speed-fill').style.stroke='hsl('+(160*(1-fraction))+',76%,67%)';
     set('speed-scale-max',String(scale));
+    const marker=$('speed-peak-marker');marker.classList.toggle('is-visible',peakVisible);
+    if(peakVisible){
+      const angle=Math.PI*(1-Math.min(1,speedPeak.value/scale));
+      // Um risco radial curto, contido na espessura do arco, registra o pico antes da queda.
+      const point=radius=>[(160+radius*Math.cos(angle)).toFixed(2),(158-radius*Math.sin(angle)).toFixed(2)];
+      const from=point(117),to=point(125);
+      marker.querySelectorAll('line').forEach(line=>{line.setAttribute('x1',from[0]);line.setAttribute('y1',from[1]);line.setAttribute('x2',to[0]);line.setAttribute('y2',to[1]);});
+    }
     const throttle=d?.simulado?value(d,'acelerador_decimos_percentual',10):null;
     const brake=d?.simulado?value(d,'freio_decimos_percentual',10):null;
-    $('throttle-fill').style.width=(Math.max(0,Math.min(100,throttle||0)))+'%';
-    $('brake-fill').style.width=(Math.max(0,Math.min(100,brake||0)))+'%';
-    $('throttle-fill').style.background='linear-gradient(to right,#66daba,hsl('+(160-Math.max(0,Math.min(100,throttle||0))*1.15)+',80%,68%))';
-    $('brake-fill').style.background='linear-gradient(to left,#f2cd8a,hsl('+(40-Math.max(0,Math.min(100,brake||0))*.4)+',85%,69%))';
+    $('throttle-fill').style.setProperty('--fill-level',Math.max(0,Math.min(100,throttle||0))+'%');
+    $('brake-fill').style.setProperty('--fill-level',Math.max(0,Math.min(100,brake||0))+'%');
     set('throttle-arc-value',throttle===null?'—':number(throttle,0)+'%');
     set('brake-arc-value',brake===null?'—':number(brake,0)+'%');
-    $('speed-fill').closest('svg').setAttribute('aria-label','Velocidade em escala de 0 a '+scale+' km/h');
+    $('speed-fill').closest('svg').setAttribute('aria-label','Velocidade em escala de 0 a '+scale+' km/h'+(peakVisible?'. Velocidade antes da desaceleração: '+number(speedPeak.value,1)+' km/h.':''));
   }
 
   function event(text, kind = 'info', command = false) {
@@ -110,30 +223,42 @@
     tone('browser-dot', !state.browserChecked ? 'neutral' : state.browserOnline ? 'good' : 'bad'); set('browser-status', !state.browserChecked ? 'Conectando' : state.browserOnline ? 'Conectado' : 'Sem resposta');
     tone('master-dot', !state.masterChecked ? 'neutral' : state.masterOnline ? 'good' : 'bad'); set('master-status', !state.masterChecked ? 'Não consultado' : state.masterOnline ? 'Respondendo' : 'Sem resposta');
     tone('esp-dot', !state.visitorsChecked ? 'neutral' : state.visitorsOnline ? 'good' : 'bad'); set('esp-status', !state.visitorsChecked ? 'Não consultado' : state.visitorsOnline ? 'Respondendo' : 'Sem resposta');
-    const elapsed = state.lastSample ? Date.now() - state.lastSample : null;
-    set('updated-status', elapsed === null ? 'Não disponível' : 'há ' + age(elapsed));
+    const elapsed = state.lastSample ? Math.max(0,Date.now()-state.lastSample)+state.lastSampleAgeMs : null;
+    set('updated-status', elapsed === null ? 'Sem leitura' : elapsed < 1000 ? 'Atual' : 'há ' + Math.floor(elapsed / 1000) + ' s');
     set('record-status', state.samples.length ? 'Histórico local' : 'Sem histórico');
-    const stale = !state.telemetry || !state.telemetry.valido || state.telemetry.idade_ms >= 2000 || elapsed === null || elapsed > 4000;
+    const stale = !state.telemetry || !state.telemetry.valido || elapsed === null || elapsed >= 2000;
     document.querySelectorAll('.speed-card,.metric-card,.quick-strip,.chart-card,.detail-card').forEach(el => el.classList.toggle('stale', stale));
     if (state.telemetry) badge('data-badge', stale ? 'Dados desatualizados' : state.telemetry.simulado ? 'Dados simulados' : 'Dados do mestre', stale || state.telemetry.simulado ? 'warn' : 'good');
+    renderCriticalTelemetry(stale);
     renderHealth();
+  }
+  function renderCriticalTelemetry(stale){
+    const d=stale?null:state.telemetry,sim=!!d?.simulado;
+    badge('critical-freshness',!state.telemetry?'Aguardando telemetria':stale?'Leitura desatualizada':sim?'Leitura simulada':'Leitura do mestre',stale?'warn':sim?'warn':'good');
+    set('critical-speed',d?format(value(d,'velocidade_centesimos_kmh',100),'',1).trim():'—');
+    set('critical-throttle',sim?format(value(d,'acelerador_decimos_percentual',10),'%',1):'Não disponível');
+    set('critical-brake',sim?format(value(d,'freio_decimos_percentual',10),'%',1):'Não disponível');
+    set('critical-current',sim?format(value(d,'corrente_centesimos_a',100),'A',2):'Não disponível');
+    set('critical-voltage',sim?format(value(d,'tensao_pacote_mv',1000),'V',1):'Não disponível');
+    set('critical-power',sim?format(value(d,'potencia_w'),'W',0):'Não disponível');
   }
   const healthCauses=['Memória crítica','Pilha de tarefa baixa','Sensor','I²C','UART','Supervisão de tarefas','Equipe sem resposta','Visitantes sem resposta','Wi-Fi fraco','Falha OTA recente','Persistência no SD','Memória baixa'];
   function renderHealth(){
     const health=state.master.saude,fresh=state.masterOnline&&health&&Date.now()-(state.lastHealthAt||0)<30000;
     const notice=$('health-notice');
-    if(!fresh){tone('health-dot',state.masterChecked&&!state.masterOnline?'bad':'neutral');set('health-status',state.masterChecked&&!state.masterOnline?'Mestre sem resposta':'Aguardando consulta');notice.hidden=true;return;}
+    if(!fresh){tone('health-dot',state.masterChecked&&!state.masterOnline?'bad':'neutral');set('health-status',state.masterChecked&&!state.masterOnline?'Mestre sem resposta':'Aguardando consulta');notice.hidden=true;placeStatusbarToggle();return;}
     const level=Number(health.estado)||0;
     const labels=['Normal','Recuperando','Operação degradada','Falha detectada'];
     tone('health-dot',level===0?'good':level===3?'bad':'warn');
     set('health-status',labels[level]||'Estado desconhecido');
     notice.hidden=level===0;
-    if(level===0)return;
+    if(level===0){placeStatusbarToggle();return;}
     notice.className='health-notice '+(level===3?'bad':'warn');
     set('health-notice-title',level===3?'Falha detectada no mestre':level===1?'Mestre em recuperação':'Operação degradada');
     const mask=Number(health.causas_ativas)||0;
     const causes=healthCauses.filter((_,index)=>(mask&(1<<index))!==0);
     set('health-notice-detail',causes.length?'Causas informadas: '+causes.slice(0,3).join(', ')+(causes.length>3?' e mais '+(causes.length-3)+'.':'.'):'O mestre informou um estado de atenção. Consulte o diagnóstico para detalhes.');
+    placeStatusbarToggle();
   }
   $('refresh-remote-control').addEventListener('click',async()=>{if(!await masterQuery('controle_remoto'))set('remote-state','Sem resposta · estado solicitado não confirmado');});
   $('health-details').addEventListener('click',()=>showTab('mestre','push'));
@@ -155,7 +280,7 @@
       if (previous.power !== null && sample.power !== null) state.energyWh += (previous.power + sample.power) / 2 * hours;
     }
     state.samples.push(sample); state.samples = state.samples.filter(s => now - s.time <= 610000);
-    state.lastSequence = d.sequencia; state.lastSample = now;
+    state.lastSequence = d.sequencia; state.lastSample = now; state.lastSampleAgeMs = Number.isFinite(d.idade_ms) ? Math.max(0,d.idade_ms) : 0;
     if (state.distanceStart === null && Number.isFinite(d.percurso_metros)) state.distanceStart = d.percurso_metros;
     $('export-csv').disabled = false;
     drawCharts();
@@ -165,8 +290,8 @@
     const available = !!(d && d.valido);
     if (!available) return;
     const speed = value(d,'velocidade_centesimos_kmh',100), accel = d.simulado || (d.estado_mpu & 1) ? value(d,'aceleracao_milesimos_ms2',1000) : null, soc = d.simulado ? value(d,'carga_decimos_percentual',10) : null, power = d.simulado ? value(d,'potencia_w') : null;
-    set('speed', speed === null ? '—' : number(speed,1)); set('speed-state', d.idade_ms >= 2000 ? 'Última leitura desatualizada' : 'Leitura atual');
-    set('accel', accel === null ? '—' : number(accel,2)); set('accel-origin', d.simulado ? 'Dados simulados' : (d.estado_mpu & 1) ? 'Sensor MPU6050' : 'Sensor sem leitura');
+    set('speed', speed === null ? '—' : number(speed,1));
+    set('accel', accel === null ? '—' : number(accel,2));
     set('soc', soc === null ? '—' : number(soc,1)); $('soc-bar').style.width = Math.max(0,Math.min(100,soc || 0)) + '%';
     set('power', power === null ? '—' : number(Math.abs(power) >= 1000 ? power/1000 : power, Math.abs(power) >= 1000 ? 2 : 0)); set('power-unit', Math.abs(power || 0) >= 1000 ? 'kW' : 'W');
     set('gear', d.simulado ? marchas[d.marcha] || 'Não disponível' : 'Não disponível'); set('distance', format(value(d,'percurso_metros',1000),'km',2)); set('master-time', age(value(d,'tempo_mestre_ms'))); set('source', d.simulado ? 'Dados simulados' : 'Mestre');
@@ -271,7 +396,7 @@
       });
       root.querySelector('.device-title').after(glance);
       const selector=$('device-chart-select-'+group),selector2=$('device-chart-select2-'+group);
-      deviceChartOptions[id].forEach(option=>{[selector,selector2].forEach(select=>{const item=document.createElement('option');item.value=option.key;item.textContent=option.label;select.append(item);});});
+      deviceChartOptions[id].forEach(option=>{[selector,selector2].forEach(select=>{const item=document.createElement('option');item.value=option.key;item.textContent=option.key==='heap'?'Memória livre':option.key==='temp'?'Temperatura':option.label;item.title=option.label;select.append(item);});});
       selector.value=state.deviceSignal[id];selector2.value=state.deviceSignalSecondary[id];
       selector.addEventListener('change',()=>{const previous=state.deviceSignal[id];state.deviceSignal[id]=selector.value;if(state.deviceSignal[id]===state.deviceSignalSecondary[id]){state.deviceSignalSecondary[id]=previous;selector2.value=previous;}renderDevice(group,id);});
       selector2.addEventListener('change',()=>{const previous=state.deviceSignalSecondary[id];state.deviceSignalSecondary[id]=selector2.value;if(state.deviceSignalSecondary[id]===state.deviceSignal[id]){state.deviceSignal[id]=previous;selector.value=previous;}renderDevice(group,id);});
@@ -322,7 +447,7 @@
   }
   function availability(){
     const capabilities=state.master.versao?.capacidades;
-    document.querySelectorAll('[data-master-action]').forEach(button=>{const mask=Number(button.dataset.cap);button.disabled=state.busy||!state.masterOnline||!Number.isFinite(capabilities)||(capabilities&mask)!==mask;});
+    document.querySelectorAll('[data-master-action]').forEach(button=>{const mask=Number(button.dataset.cap);button.disabled=button.dataset.masterAction==='parada_remota'?(!state.browserOnline||!!state.stopInFlight):state.busy||!state.masterOnline||!Number.isFinite(capabilities)||(capabilities&mask)!==mask;});
     const sync=state.master.sincronizacao,syncButton=document.querySelector('[data-master-action="sincronizar_google"]');
     if(syncButton){
       if(sync&&(sync.em_andamento||!sync.iniciado||!sync.cartao_disponivel))syncButton.disabled=true;
@@ -441,8 +566,8 @@
       set('remote-gear-current',['Neutro','Frente','Ré'][data.marcha_solicitada]||'Desconhecida');
       set('remote-speed-current',format(value(data,'velocidade_maxima_centesimos_kmh',100),'km/h',2));
       set('remote-accel-current',format(value(data,'aceleracao_maxima_milesimos_ms2',1000),'m/s²',3));
-      set('remote-stop-current',data.parada_solicitada?'Solicitada · não aplicada fisicamente':'Pedido liberado · sem atuação');
-      set('remote-checked','Consultado às '+timeOf(Date.now())+' · revisão '+data.revisao+'. Valores solicitados; nenhuma atuação confirmada.');
+      set('remote-stop-current',data.parada_solicitada?'Solicitada (sem atuação)':'Liberado (sem atuação)');
+      set('remote-checked','Estado consultado às '+timeOf(Date.now())+' · revisão '+data.revisao);
     }
     if(consult==='simulador'){
       if(document.activeElement!==$('simulator-toggle'))$('simulator-toggle').value=data.ativo?'1':'0';
@@ -547,6 +672,30 @@
   function updateRun(run,status,text,tone='muted'){
     run.status=status;run.text=text;run.tone=tone;renderMasterCommandHistory();
   }
+  async function sendStopNow(){
+    if(state.stopInFlight)return;
+    state.stopInFlight=true;availability();
+    const run={name:'Solicitar parada remota',action:'parada_remota',time:Date.now(),requests:[],responses:[],step:1,status:'Enviando',text:'Pedido enviado ao mestre; aguardando resposta.',tone:'warn',checkedAt:0,hasRefresh:true,refreshQueries:['controle_remoto'],followUntil:Date.now()+30000};
+    state.commandRuns.unshift(run);state.commandRuns.length=Math.min(state.commandRuns.length,12);renderMasterCommandHistory();
+    message('Enviando pedido de parada ao mestre. Ainda não há confirmação.');
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),20000);
+    try{
+      const response=await fetch('/api/mestre?consulta=parada_remota',{method:'POST',headers:{'Content-Type':'text/plain; charset=utf-8'},body:'1',cache:'no-store',signal:controller.signal});
+      const result=await response.json();
+      if(!response.ok||!result.ok)throw Error(result.erro||'Pedido recusado');
+      if(Number.isFinite(result.solicitacao))run.requests.push(result.solicitacao);
+      run.responses.push({duracao_ms:result.duracao_ms,tentativas:result.tentativas});
+      updateRun(run,'Resposta recebida','Mestre aceitou o pedido; consultando o estado. Sem atuação física nesta versão.','warn');
+      message('Pedido recebido pelo mestre. Consultando o estado registrado.','success');
+      try{
+        const current=await getJSON('/api/mestre?consulta=controle_remoto',7000);
+        state.master.controle_remoto=current;updateMasterUI('controle_remoto',current);run.checkedAt=Date.now();
+        updateRun(run,current.parada_solicitada?'Pedido confirmado':'Estado divergente',current.parada_solicitada?'Parada solicitada no mestre. Sem atuação física.':'O mestre não informa parada solicitada; confira a comunicação.',current.parada_solicitada?'good':'warn');
+        message(current.parada_solicitada?'Pedido de parada registrado no mestre; sem atuação física.':'O estado consultado difere do pedido.',current.parada_solicitada?'success':'error');
+      }catch(_){updateRun(run,'Estado não confirmado','O mestre respondeu, mas a consulta posterior não confirmou o estado.','warn');message('Pedido recebido; estado posterior sem resposta.','error');}
+    }catch(error){updateRun(run,error.name==='AbortError'?'Sem resposta':'Falhou',error.name==='AbortError'?'Prazo de resposta esgotado. Estado do pedido desconhecido.':error.message,'bad');message('Pedido de parada sem confirmação: '+(error.name==='AbortError'?'tempo esgotado':error.message),'error');}
+    finally{clearTimeout(timer);state.stopInFlight=false;availability();}
+  }
   async function postMaster(code,body,run){
     commandEvent('MESTRE',code,'Enviando');
     const timeout=['wifi_conectar_preparada','wifi_conectar_salva','wifi_alterar_principal'].includes(code)?200000:20000;
@@ -592,6 +741,7 @@
     finally{state.busy=false;availability();}
   }
   document.querySelectorAll('[data-master-action]').forEach(button=>button.addEventListener('click',()=>{
+    if(button.dataset.masterAction==='parada_remota'){sendStopNow();return;}
     if(state.busy||button.disabled)return;
     const wifiAction=button.dataset.masterAction.startsWith('wifi_');
     if(wifiAction)$('wifi-form-error').hidden=true;
@@ -649,7 +799,7 @@
     if(canvas.width!==width||canvas.height!==height){canvas.width=width;canvas.height=height;}
     const ctx=canvas.getContext('2d');ctx.setTransform(ratio,0,0,ratio,0,0);ctx.clearRect(0,0,rect.width,rect.height);return {ctx,w:rect.width,h:rect.height};
   }
-  const chartInfo={speed:{label:'Velocidade',unit:'km/h',color:'#8BC4DF'},accel:{label:'Aceleração',unit:'m/s²',color:'#EBC17F'},power:{label:'Potência',unit:'W',color:'#8BC4DF'},current:{label:'Corrente',unit:'A',color:'#EBC17F'},voltage:{label:'Tensão',unit:'V',color:'#8BD0AF'}};
+  const chartInfo={speed:{label:'Velocidade',unit:'km/h',color:'#59D9F7'},accel:{label:'Aceleração',unit:'m/s²',color:'#FFCA64'},power:{label:'Potência',unit:'W',color:'#59D9F7'},current:{label:'Corrente',unit:'A',color:'#FFCA64'},voltage:{label:'Tensão',unit:'V',color:'#4CE0A2'}};
   function chartRange(key,values){
     if(key==='speed')return [0,Math.max(30,Math.ceil(Math.max(0,...values)*1.08/5)*5)];
     if(key==='accel'){const limit=Math.max(2,Math.ceil(Math.max(0,...values.map(Math.abs))*1.15*2)/2);return [-limit,limit];}
@@ -701,7 +851,7 @@
   function drawCharts(){
     plot('motion-chart',['speed','accel']);plot('electric-chart',[state.signal,state.signalSecondary]);
     const primary=chartInfo[state.signal],secondary=chartInfo[state.signalSecondary];
-    set('electric-caption','Esquerda: '+primary.unit+' · direita: '+secondary.unit);
+    set('electric-caption','À esquerda, '+primary.label.toLowerCase()+' ('+primary.unit+'); à direita, '+secondary.label.toLowerCase()+' ('+secondary.unit+').');
     [["electric-legend-primary",primary],["electric-legend-secondary",secondary]].forEach(([id,info])=>{
       const legend=$(id),mark=legend.querySelector('.legend-key');mark.style.backgroundColor=info.color;
       if(legend.lastChild?.textContent!==info.label)legend.replaceChildren(mark,document.createTextNode(info.label));

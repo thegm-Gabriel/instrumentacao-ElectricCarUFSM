@@ -7,6 +7,7 @@
 #include <cmath>
 
 #include "esp_log.h"
+#include "esp_random.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 
@@ -21,6 +22,7 @@ struct EstadoSimuladorTelemetria {
     bool ativo = false;
     uint32_t amostras_geradas = 0;
     uint16_t dinamica_percentual = 100;
+    uint32_t semente = 0;
     float tempo_simulado_s = 0.0f;
     float percurso_km = 0.0f;
 };
@@ -37,56 +39,83 @@ struct MovimentoSimulado {
     float freio_percentual;
 };
 
-MovimentoSimulado gerar_movimento(float segundos) {
-    const float ciclo = std::fmod(segundos, 80.0f);
-    MovimentoSimulado movimento{MarchaVeiculo::Estacionado, 0, 0, 0, 0};
+uint32_t misturar(uint32_t valor) {
+    valor ^= valor >> 16;
+    valor *= 0x7feb352dU;
+    valor ^= valor >> 15;
+    valor *= 0x846ca68bU;
+    return valor ^ (valor >> 16);
+}
 
-    if (ciclo < 6.0f) {
-        movimento.marcha = MarchaVeiculo::Estacionado;
-    } else if (ciclo < 10.0f) {
-        movimento.marcha = MarchaVeiculo::Neutro;
-    } else if (ciclo < 25.0f) {
-        const float fase = (ciclo - 10.0f) / 15.0f;
-        movimento.marcha = MarchaVeiculo::Frente;
-        movimento.velocidade_kmh = 27.5f * (1.0f - std::cos(PI * fase));
-        movimento.aceleracao_ms2 =
-            (27.5f * PI / 15.0f) * std::sin(PI * fase) / 3.6f;
-        movimento.acelerador_percentual = 32.0f + 58.0f * std::sin(PI * fase);
-    } else if (ciclo < 42.0f) {
-        const float fase = (ciclo - 25.0f) * 2.0f * PI / 17.0f;
-        movimento.marcha = MarchaVeiculo::Frente;
-        movimento.velocidade_kmh = 55.0f + 4.0f * std::sin(fase);
-        movimento.aceleracao_ms2 =
-            (4.0f * 2.0f * PI / 17.0f) * std::cos(fase) / 3.6f;
-        movimento.acelerador_percentual = 28.0f + 4.0f * std::sin(fase);
-    } else if (ciclo < 52.0f) {
-        const float fase = (ciclo - 42.0f) / 10.0f;
-        movimento.marcha = MarchaVeiculo::Frente;
-        movimento.velocidade_kmh = 27.5f * (1.0f + std::cos(PI * fase));
-        movimento.aceleracao_ms2 =
-            -(27.5f * PI / 10.0f) * std::sin(PI * fase) / 3.6f;
-        movimento.freio_percentual = 30.0f + 60.0f * std::sin(PI * fase);
-    } else if (ciclo < 65.0f) {
-        movimento.marcha = ciclo < 58.0f ? MarchaVeiculo::Neutro
-                                         : MarchaVeiculo::Estacionado;
-    } else if (ciclo < 72.0f) {
-        const float fase = (ciclo - 65.0f) / 7.0f;
-        movimento.marcha = MarchaVeiculo::Re;
-        movimento.velocidade_kmh = 6.0f * (1.0f - std::cos(PI * fase));
-        movimento.aceleracao_ms2 =
-            (6.0f * PI / 7.0f) * std::sin(PI * fase) / 3.6f;
-        movimento.acelerador_percentual = 24.0f + 34.0f * std::sin(PI * fase);
-    } else if (ciclo < 78.0f) {
-        const float fase = (ciclo - 72.0f) / 6.0f;
-        movimento.marcha = MarchaVeiculo::Re;
-        movimento.velocidade_kmh = 6.0f * (1.0f + std::cos(PI * fase));
-        movimento.aceleracao_ms2 =
-            -(6.0f * PI / 6.0f) * std::sin(PI * fase) / 3.6f;
-        movimento.freio_percentual = 28.0f + 52.0f * std::sin(PI * fase);
-    } else {
-        movimento.marcha = MarchaVeiculo::Neutro;
+float sortear(uint32_t semente, uint32_t episodio, uint32_t canal) {
+    const uint32_t bits = misturar(semente ^ (episodio * 0x9e3779b9U) ^
+                                   (canal * 0x85ebca6bU));
+    return static_cast<float>(bits & 0xffffffU) / 16777216.0f;
+}
+
+MovimentoSimulado gerar_movimento(float segundos, uint32_t semente) {
+    constexpr float CICLO_S = 45.0f;
+    constexpr size_t TRECHOS = 6;
+    const uint32_t episodio = static_cast<uint32_t>(segundos / CICLO_S);
+    const float ciclo = std::fmod(segundos, CICLO_S);
+    const bool re = episodio != 0 && sortear(semente, episodio, 7) < 0.14f;
+    const float limite = re ? 9.0f : 38.0f;
+    const float minimo = re ? 2.0f : 5.0f;
+    const float pausa = 1.0f + 2.0f * sortear(semente, episodio, 2);
+    const float pausa_final = 1.0f + 3.0f * sortear(semente, episodio, 4);
+    const float duracao_ativa = CICLO_S - pausa - pausa_final;
+    float alvos[TRECHOS + 1] = {};
+    float pesos[TRECHOS] = {};
+    float soma_pesos = 0.0f;
+    alvos[1] = re ? 3.0f + 5.0f * sortear(semente, episodio, 1)
+                  : 9.0f + 19.0f * sortear(semente, episodio, 1);
+    for (size_t i = 2; i < TRECHOS; ++i) {
+        const float amplitude = re ? 7.0f : (i == 2 ? 16.0f : 23.0f);
+        alvos[i] = std::clamp(alvos[i - 1] +
+                                  (sortear(semente, episodio, 10 + i) - 0.5f) * amplitude,
+                              minimo, limite);
     }
-    return movimento;
+    if (episodio == 0 && !re) alvos[5] = std::max(alvos[5], 20.0f);
+    for (size_t i = 0; i < TRECHOS; ++i) {
+        // Pesos distintos criam subidas, descidas e trechos quase constantes.
+        pesos[i] = i == TRECHOS - 1 && episodio == 0
+                       ? 0.45f + 0.2f * sortear(semente, episodio, 20 + i)
+                       : 0.6f + sortear(semente, episodio, 20 + i);
+        soma_pesos += pesos[i];
+    }
+    const MarchaVeiculo marcha = re ? MarchaVeiculo::Re : MarchaVeiculo::Frente;
+    MovimentoSimulado movimento{MarchaVeiculo::Estacionado, 0, 0, 0, 0};
+    if (ciclo < pausa) return movimento;
+    float decorrido = ciclo - pausa;
+    for (size_t i = 0; i < TRECHOS; ++i) {
+        const float duracao = duracao_ativa * pesos[i] / soma_pesos;
+        if (decorrido < duracao) {
+            const float fase = std::clamp(decorrido / duracao, 0.0f, 1.0f);
+            const float variacao = alvos[i + 1] - alvos[i];
+            const float suavizacao = fase * fase * (3.0f - 2.0f * fase);
+            movimento.marcha = marcha;
+            movimento.velocidade_kmh = alvos[i] + variacao * suavizacao;
+            movimento.aceleracao_ms2 = variacao * 6.0f * fase * (1.0f - fase) /
+                                       duracao / 3.6f;
+            return movimento;
+        }
+        decorrido -= duracao;
+    }
+    return {MarchaVeiculo::Estacionado, 0, 0, 0, 0};
+}
+
+void atualizar_pedais(MovimentoSimulado* movimento) {
+    if (movimento->aceleracao_ms2 > 0.03f) {
+        movimento->acelerador_percentual = std::clamp(
+            11.0f + movimento->velocidade_kmh * 0.25f +
+                movimento->aceleracao_ms2 * 28.0f,
+            0.0f, 100.0f);
+    } else if (movimento->aceleracao_ms2 < -0.16f) {
+        movimento->freio_percentual = std::clamp(
+            8.0f - movimento->aceleracao_ms2 * 30.0f, 0.0f, 100.0f);
+    } else if (movimento->aceleracao_ms2 >= -0.03f && movimento->velocidade_kmh > 1.0f) {
+        movimento->acelerador_percentual = 8.0f + movimento->velocidade_kmh * 0.42f;
+    }
 }
 
 int16_t limitar_inteiro(float valor) {
@@ -102,15 +131,18 @@ esp_err_t servico_simulador_telemetria_iniciar(uint16_t dinamica_percentual) {
                  static_cast<unsigned>(DINAMICA_MAXIMA));
         return ESP_ERR_INVALID_ARG;
     }
+    const uint32_t semente = esp_random();
     portENTER_CRITICAL(&trava_estado);
     estado = {};
     estado.iniciado = true;
     estado.ativo = configuracao::USAR_TELEMETRIA_SIMULADA;
     estado.dinamica_percentual = dinamica_percentual;
+    estado.semente = semente;
     instante_anterior_us = esp_timer_get_time();
     portEXIT_CRITICAL(&trava_estado);
-    ESP_LOGW(ETIQUETA, "Gerador de telemetria simulada pronto; estado inicial: %s",
-             configuracao::USAR_TELEMETRIA_SIMULADA ? "ativo" : "inativo");
+    ESP_LOGW(ETIQUETA, "Gerador simulado pronto; estado inicial: %s; semente: %lu",
+             configuracao::USAR_TELEMETRIA_SIMULADA ? "ativo" : "inativo",
+             static_cast<unsigned long>(semente));
     return ESP_OK;
 }
 
@@ -168,16 +200,12 @@ esp_err_t servico_simulador_telemetria_gerar(DadosTelemetriaVeiculo* dados) {
     const float fator_dinamica = estado.dinamica_percentual / 100.0f;
     estado.tempo_simulado_s += delta_s * fator_dinamica;
     const float tempo_s = estado.tempo_simulado_s;
+    const uint32_t semente = estado.semente;
     portEXIT_CRITICAL(&trava_estado);
 
-    MovimentoSimulado movimento = gerar_movimento(tempo_s);
+    MovimentoSimulado movimento = gerar_movimento(tempo_s, semente);
     movimento.aceleracao_ms2 *= fator_dinamica;
-    movimento.acelerador_percentual =
-        std::clamp(movimento.acelerador_percentual * (0.75f + 0.25f * fator_dinamica),
-                   0.0f, 100.0f);
-    movimento.freio_percentual =
-        std::clamp(movimento.freio_percentual * (0.75f + 0.25f * fator_dinamica),
-                   0.0f, 100.0f);
+    atualizar_pedais(&movimento);
 
     portENTER_CRITICAL(&trava_estado);
     estado.percurso_km += movimento.velocidade_kmh * delta_s / 3600.0f;
@@ -195,7 +223,8 @@ esp_err_t servico_simulador_telemetria_gerar(DadosTelemetriaVeiculo* dados) {
     dados->freio_percentual = movimento.freio_percentual;
     dados->carga_percentual = std::max(35.0f, 88.0f - percurso_km * 0.40f);
     dados->corrente_a = movimento.freio_percentual > 0.0f
-                           ? -movimento.freio_percentual * 0.08f
+                           ? -movimento.freio_percentual * 0.12f *
+                                 std::min(1.0f, movimento.velocidade_kmh / 10.0f)
                            : (movimento.acelerador_percentual > 0.0f
                                   ? 2.0f + movimento.acelerador_percentual * 0.28f
                                   : 0.8f);

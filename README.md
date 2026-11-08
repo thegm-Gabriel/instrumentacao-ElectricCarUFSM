@@ -47,9 +47,10 @@ tanto ao desenvolvimento técnico quanto às demonstrações do projeto.
 | **Código compartilhado** | Define os protocolos UART, modelos de dados e serviços comuns aos firmwares. |
 
 Os três firmwares são projetos independentes **PlatformIO/ESP-IDF** em
-[`firmware/`](firmware/). A página da Equipe separa telemetria, comandos e
-diagnóstico dos ESPs; a de Visitantes apresenta as leituras sem controles do
-mestre. Os detalhes de formatos, limites e recuperação estão na documentação.
+[`firmware/`](firmware/). A página da Equipe separa telemetria, comandos,
+controle preparatório e diagnóstico dos ESPs. A de Visitantes mostra movimento,
+energia disponível e o histórico da sessão sem controles do mestre. Os detalhes
+de formatos, limites e recuperação estão na documentação.
 
 ## Por onde começar
 
