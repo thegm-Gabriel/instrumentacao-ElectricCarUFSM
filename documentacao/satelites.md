@@ -99,9 +99,13 @@ de intervalo e é preciso voltar a acelerar pelo menos 2 km/h antes de outro
 marcador. A escala do arco mantém a posição do pico até o segmento desaparecer.
 É uma indicação visual de desaceleração percebida no navegador, não o limite de
 velocidade configurado nem um detector de frenagem.
-O arco usa apenas tons frios para manter o marcador distinto; o segmento é
-desenhado uma vez ao surgir e fica estático quando o navegador pede movimento
-reduzido.
+O arco usa um gradiente espacial de verde para âmbar e coral: cada posição tem
+uma cor fixa, de modo que o trecho já preenchido não muda de cor quando a
+velocidade sobe. Marcas menores indicam passos de 5 km/h e marcas maiores,
+10 km/h. O pico também aparece brevemente no título do cartão. O número ganha
+tom âmbar durante uma queda perceptível de velocidade; isso representa apenas
+a tendência entre leituras. O segmento de pico fica estático quando o navegador
+pede movimento reduzido.
 
 O arco começa em 0–30 km/h. A escala só sobe em passos de 5 km/h quando a
 velocidade ultrapassa o máximo atual em mais de 0,15 km/h; ela não aumenta
@@ -110,6 +114,25 @@ visível) deve ficar pelo menos 7 km/h abaixo do máximo por 4 s contínuos.
 Então a escala escolhe de uma vez o menor passo de 5 km/h com 1,5 km/h de
 folga, nunca menos de 30. Isso evita alternância perto do limite e preserva a
 posição do marcador enquanto aparece.
+
+Os indicadores principais suavizam a passagem entre amostras novas, inclusive
+velocidade, aceleração, carga, potência, acelerador e freio. O navegador estima
+o intervalo real de chegada das sequências (inicialmente 250 ms) e usa uma
+transição curta com desaceleração no fim, limitada a 230–730 ms. Respostas
+repetidas não reiniciam a animação; numa aba oculta ou com preferência por
+movimento reduzido, o valor é aplicado diretamente. A escala do arco e a
+detecção de pico usam a leitura recebida, enquanto desenho e número acompanham
+o valor interpolado. Isso evita que a animação invente eventos de pico.
+
+Os cartões de aceleração e potência distinguem desaceleração e regeneração com
+cor e texto. Quando há potência, uma faixa bipolar põe zero no centro, consumo
+à direita e regeneração à esquerda; começa em ±500 W e cresce em passos de
+250 W se necessário. Um risco discreto marca por 1,6 s um pico de magnitude
+de pelo menos 120 W seguido de redução de pelo menos 55 W ou 25%, com 3,5 s
+entre marcas. O cartão mantém “Medição indisponível” quando o modo real não
+fornece potência. Os cartões e o fundo usam cores suaves para separar movimento,
+energia e diagnósticos. A navegação usa uma linha de seleção e permanece
+rolável horizontalmente em telas estreitas.
 
 A página Sobre explica o projeto Carro Elétrico UFSM-CS, identifica orientação e equipe discente
 e apresenta o símbolo do carro. O painel público de Visitantes também traz essa
@@ -136,8 +159,20 @@ do DHCP nem impede que um dispositivo com a senha salva se reconecte.
 | `GET /api/wifi/clientes` | Clientes conectados ao AP Equipe, tempo de sessão e limite configurado. |
 | `POST /api/wifi/limite` | Define o limite de sessão do AP Equipe em minutos. |
 | `POST /api/wifi/desconectar` | Desconecta um cliente do AP Equipe pelo endereço MAC. |
+| `GET /api/comandos/acesso` | Confere a chave administrativa sem enviar comando. |
 | `GET /api/mestre?consulta=...` | Consulta o mestre pela UART e transforma a resposta em JSON. |
 | `POST /api/mestre?consulta=...` | Solicita uma ação ao mestre; a resposta confirma o recebimento/aceitação, e ações assíncronas exigem consulta posterior do estado. |
+
+As três rotas `POST` acima exigem `Authorization: Basic` com usuário `equipe` e
+a chave administrativa como senha. A chave é aleatória, gerada na primeira
+partida, guardada na NVS e mostrada no terminal serial em cada partida. A
+senha dos APs Wi-Fi permanece a mesma. No painel, use **Preparar acesso** antes
+de precisar enviar um comando urgente; o navegador guarda a chave apenas na
+sessão da aba. Se a NVS for apagada, uma nova chave é gerada e deve ser lida
+novamente no serial. As consultas `GET` de telemetria e estado permanecem
+acessíveis sem ela. Até duas consultas simultâneas ao mestre e uma ação
+simultânea podem ocupar tarefas de resposta; uma nova chamada recebe HTTP 503
+quando a respectiva capacidade está ocupada.
 
 Consultas GET aceitas: `ping`, `versao`, `saude`, `telemetria`,
 `uart`, `ota`, `sincronizacao`, `wifi`, `diagnostico_mestre`, `configuracao`,

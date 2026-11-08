@@ -16,6 +16,9 @@ enum class GrupoRelatorio : uint8_t {
 
 // Mantém a formatação e a coleta de diagnósticos fora da tarefa de telemetria.
 esp_err_t servico_relatorios_iniciar();
+// Restaura um retrato do SD apenas antes de iniciar a tarefa de relatórios.
+esp_err_t servico_relatorios_restaurar_configuracao_antes_de_iniciar(
+    const uint32_t intervalos_ms[4], bool pausados);
 void servico_relatorios_atualizar_dados(const DadosTelemetriaVeiculo& dados);
 
 // A periodicidade pertence ao serviço de relatórios; o terminal apenas a edita.

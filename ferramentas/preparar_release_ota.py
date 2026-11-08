@@ -19,6 +19,7 @@ VERSAO_INICIAL = "0.1.0"
 ARQUIVOS_IGNORADOS = {"sdkconfig.old"}
 PASTAS_IGNORADAS = {".pio", ".git", "__pycache__"}
 EXTENSOES_FIRMWARE = {".c", ".cc", ".cpp", ".h", ".hpp", ".ini", ".csv", ".cmake"}
+EXTENSOES_WEB = {".html", ".css", ".js", ".py"}
 
 PROJETOS = {
     "mestre-s3": {
@@ -58,6 +59,31 @@ def incrementar_versao(versao: str, incremento: str) -> str:
     if incremento == "patch":
         return f"{maior}.{menor}.{correcao + 1}"
     raise ValueError(f"incremento inválido: {incremento}")
+
+
+def escolher_incremento(ler=input, escrever=print) -> str | None:
+    """Pede a escolha no terminal; None cancela antes de alterar arquivos."""
+    escrever("\nQual tipo de release deseja preparar?")
+    escrever("  1) Patch — correções e refinamentos compatíveis")
+    escrever("  2) Minor — nova funcionalidade compatível")
+    escrever("  3) Major — mudança incompatível")
+    escrever("  0) Cancelar")
+    opcoes = {"1": "patch", "2": "minor", "3": "major",
+              "patch": "patch", "minor": "minor", "major": "major"}
+    while True:
+        try:
+            resposta = ler("Escolha [1/2/3/0]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            escrever("\nPreparação cancelada.")
+            return None
+        if resposta in opcoes:
+            incremento = opcoes[resposta]
+            escrever(f"Incremento selecionado: {incremento}.")
+            return incremento
+        if resposta in ("0", "sair", "cancelar"):
+            escrever("Preparação cancelada.")
+            return None
+        escrever("Opção inválida. Digite 1, 2, 3 ou 0.")
 
 
 def calcular_novas_versoes(estado: dict, alterados: set[str],
@@ -133,7 +159,14 @@ def arquivos_para_impressao_digital(pastas: list[Path]) -> list[Path]:
 def calcular_impressao_digital(raiz: Path, projeto: Path) -> str:
     resumo = hashlib.sha256()
     compartilhado = raiz / "firmware" / "compartilhado"
-    for arquivo in arquivos_para_impressao_digital([projeto, compartilhado]):
+    arquivos = arquivos_para_impressao_digital([projeto, compartilhado])
+    if projeto.name in ("equipe-s3", "visitantes-s3"):
+        arquivos.extend(
+            arquivo for arquivo in (projeto / "web").rglob("*")
+            if arquivo.is_file() and arquivo.suffix.lower() in EXTENSOES_WEB
+        )
+        arquivos.append(compartilhado / "web" / "logo_carro_eletrico.png")
+    for arquivo in sorted(set(arquivos), key=lambda item: item.as_posix().lower()):
         relativo = arquivo.relative_to(raiz).as_posix().encode("utf-8")
         resumo.update(len(relativo).to_bytes(4, "little"))
         resumo.update(relativo)
@@ -222,6 +255,16 @@ def preparar_release(repositorio: str, forcar: set[str],
     diretorio_temporario = diretorio_versoes / ".preparacao"
     diretorio_historico = diretorio_versoes / "historico"
     gerador = raiz / "ferramentas" / "criar_manifesto_ota.py"
+
+    # O .c incorporado é parte do firmware: atualize-o antes de calcular os
+    # hashes, mesmo quando não haverá incremento de versão.
+    ambiente_geracao = os.environ.copy()
+    for alvo in ("equipe-s3", "visitantes-s3"):
+        executar(
+            [sys.executable, str(raiz / "firmware" / alvo / "web" / "gerar_painel.py")],
+            raiz,
+            ambiente_geracao,
+        )
 
     alterados: set[str] = set(forcar)
     for alvo, dados in PROJETOS.items():
@@ -389,16 +432,22 @@ def main() -> int:
     parser.add_argument(
         "--bump", "--incremento",
         choices=("major", "minor", "patch"),
-        default="patch",
         help="Parte SemVer a incrementar nos firmwares alterados e no release "
-             "(padrão: patch)",
+             "(dispensa o menu interativo)",
     )
     argumentos = parser.parse_args()
     try:
         if not re.fullmatch(r"[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+", argumentos.repositorio):
             raise ValueError("repositório inválido; use proprietário/repositório")
+        incremento = argumentos.bump
+        if incremento is None:
+            if not sys.stdin.isatty():
+                raise ValueError("sem terminal interativo; informe --bump patch, minor ou major")
+            incremento = escolher_incremento()
+            if incremento is None:
+                return 0
         forcar = set(PROJETOS) if "todos" in argumentos.forcar else set(argumentos.forcar)
-        preparar_release(argumentos.repositorio, forcar, argumentos.bump)
+        preparar_release(argumentos.repositorio, forcar, incremento)
         return 0
     except (FileNotFoundError, OSError, ValueError, subprocess.CalledProcessError) as erro:
         print(f"\nERRO: {erro}", file=sys.stderr)

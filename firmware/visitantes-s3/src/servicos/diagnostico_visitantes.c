@@ -64,11 +64,15 @@ esp_err_t diagnostico_visitantes_obter(resposta_diagnostico_satelite_t *saida)
 #if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
     TaskStatus_t tarefas[MAXIMO_TAREFAS];
     configRUN_TIME_COUNTER_TYPE total = 0;
+    const UBaseType_t total_tarefas = uxTaskGetNumberOfTasks();
     const UBaseType_t quantidade = uxTaskGetSystemState(tarefas, MAXIMO_TAREFAS, &total);
+    const bool tarefas_truncadas = total_tarefas > MAXIMO_TAREFAS ||
+                                    (quantidade == 0 && total_tarefas != 0);
+    if (tarefas_truncadas) saida->indicadores |= 4U;
     const int64_t agora_us = esp_timer_get_time();
     uint64_t idle_atual[2] = {0, 0};
     saida->menor_pilha_livre_bytes = UINT32_MAX;
-    saida->tarefas_ativas = quantidade > UINT8_MAX ? UINT8_MAX : (uint8_t)quantidade;
+    saida->tarefas_ativas = total_tarefas > UINT8_MAX ? UINT8_MAX : (uint8_t)total_tarefas;
     for (UBaseType_t i = 0; i < quantidade; ++i) {
         if (strcmp(tarefas[i].pcTaskName, "IDLE0") == 0)
             idle_atual[0] = tarefas[i].ulRunTimeCounter;
@@ -78,7 +82,7 @@ esp_err_t diagnostico_visitantes_obter(resposta_diagnostico_satelite_t *saida)
             saida->menor_pilha_livre_bytes = tarefas[i].usStackHighWaterMark;
     }
     if (quantidade == 0) saida->menor_pilha_livre_bytes = 0;
-    if (instante_anterior_us > 0 && agora_us > instante_anterior_us &&
+    if (!tarefas_truncadas && instante_anterior_us > 0 && agora_us > instante_anterior_us &&
         idle_atual[0] >= tempo_idle_anterior[0] &&
         idle_atual[1] >= tempo_idle_anterior[1]) {
         const uint64_t janela = (uint64_t)(agora_us - instante_anterior_us);
@@ -93,7 +97,7 @@ esp_err_t diagnostico_visitantes_obter(resposta_diagnostico_satelite_t *saida)
     }
     tempo_idle_anterior[0] = idle_atual[0];
     tempo_idle_anterior[1] = idle_atual[1];
-    instante_anterior_us = agora_us;
+    instante_anterior_us = tarefas_truncadas ? 0 : agora_us;
 #endif
     return ESP_OK;
 }

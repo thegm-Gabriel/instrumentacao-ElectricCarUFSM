@@ -339,7 +339,17 @@ esp_err_t servico_ota_satelite_processar_quadro(const uint8_t *quadro,
             return gravar_dados(&cabecalho, carga);
         case OTA_SATELITE_TIPO_FINALIZAR:
             return finalizar_transferencia(&cabecalho);
-        case OTA_SATELITE_TIPO_CANCELAR:
+        case OTA_SATELITE_TIPO_CANCELAR: {
+            situacao_servico_ota_satelite_t atual;
+            copiar_situacao(&atual);
+            if (atual.recebendo && cabecalho.sessao != atual.sessao) {
+                (void)responder(&cabecalho, OTA_SATELITE_RESPOSTA_SESSAO_INVALIDA,
+                                OTA_SATELITE_FASE_FALHA, ESP_ERR_INVALID_STATE,
+                                atual.bytes_recebidos);
+                ESP_LOGW(TAG, "%s: cancelamento OTA ignorado (sessão inválida)",
+                         configuracao_atual.nome_satelite);
+                return ESP_ERR_INVALID_STATE;
+            }
             if (manipulador_ota != 0) (void)esp_ota_abort(manipulador_ota);
             (void)responder(&cabecalho, OTA_SATELITE_RESPOSTA_OK,
                             OTA_SATELITE_FASE_CANCELADO, ESP_OK, 0);
@@ -347,6 +357,7 @@ esp_err_t servico_ota_satelite_processar_quadro(const uint8_t *quadro,
             ESP_LOGW(TAG, "%s: transferência OTA cancelada pelo mestre",
                      configuracao_atual.nome_satelite);
             return ESP_OK;
+        }
         case OTA_SATELITE_TIPO_RESPOSTA:
         default:
             return ESP_ERR_INVALID_ARG;

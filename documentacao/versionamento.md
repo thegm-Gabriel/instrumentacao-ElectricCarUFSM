@@ -35,15 +35,15 @@ um release pode, corretamente, conter mestre `2.3.0` e satélites `1.7.2` se só
 os satélites mudaram. O mestre não recebe uma versão nova só para igualar os
 números.
 
-O preparador calcula SHA-256 das fontes relevantes de cada projeto e do código
-compartilhado. Se apenas Equipe mudou, incrementa Equipe e a etiqueta do
-release; copia as imagens anteriores dos demais alvos quando continuam válidas.
-Uma mudança em código compartilhado é detectada para os três projetos. As
-fontes web devem gerar `src/servicos/painel_web.c` **antes** da preparação:
-HTML/CSS/JS, PNG e o script Python gerador não são o critério direto da
-impressão digital, enquanto o C incorporado é. Confira o diff do `.c` gerado
-para não publicar uma página antiga. Arquivos de build `.pio`, saídas e caches
-não entram no cálculo.
+O preparador regenera os painéis da Equipe e de Visitantes antes de calcular
+SHA-256 das fontes. HTML, CSS, JavaScript, o gerador Python, o logo e o C
+incorporado entram na impressão digital do respectivo satélite. Se apenas
+Equipe mudou, incrementa Equipe e a etiqueta do release; copia as imagens
+anteriores dos demais alvos quando continuam válidas. Uma mudança em código
+compartilhado usado pelos três projetos é detectada nos três; o logo afeta
+somente os satélites. Arquivos de build `.pio`, saídas e caches não entram no
+cálculo. Revise e inclua no commit o `.c` regenerado: a publicação automática
+recusa uma tag quando ele diverge das fontes web.
 
 O preparador passa `VERSAO_FIRMWARE` ao CMake/PlatformIO, força a reconfiguração
 necessária e lê a versão interna do `.bin` antes de aceitá-lo. Os binários e o
@@ -55,17 +55,21 @@ outras versões.
 
 ## Preparar e publicar
 
-1. Conclua código, documentação e geração das duas páginas quando alteradas.
+1. Conclua código e documentação. O preparador gera as duas páginas antes da
+   comparação; confira o diff dos arquivos incorporados.
    Rode os testes pertinentes e compile os alvos afetados. Consulte
    [ferramentas](ferramentas.md) para os comandos.
-2. Escolha `major`, `minor` ou `patch` pela tabela acima. O padrão é `patch`:
+2. Escolha `major`, `minor` ou `patch` pela tabela acima. Em um terminal,
+   execute sem `--bump` para abrir o menu (1: patch, 2: minor, 3: major,
+   0: cancelar):
 
    ```powershell
-   python ferramentas\preparar_release_ota.py --bump patch
+   python ferramentas\preparar_release_ota.py
    ```
 
-   Para uma funcionalidade compatível, troque por `--bump minor`. Para uma
-   migração incompatível, use `--bump major` e coordene a instalação dos três
+   Para automação ou execução sem terminal interativo, informe o incremento
+   com `--bump patch`, `--bump minor` ou `--bump major`; isso ignora o menu.
+   Uma migração incompatível exige coordenação da instalação dos três
    dispositivos. `--forcar equipe-s3` ou `--forcar todos` incrementa mesmo sem
    mudança detectada; use somente quando a reconstrução de fato precisa de
    uma nova versão. `--repositorio proprietario/repositorio` altera o destino
@@ -78,8 +82,9 @@ outras versões.
 4. Revise `versoes/estado_versoes.json`, registre a alteração no Git e crie uma
    tag exatamente igual à etiqueta anunciada (`vX.Y.Z`). Publique os quatro
    arquivos juntos no GitHub Release. O fluxo
-   `.github/workflows/publicar-firmware-mestre.yml` também aceita essa tag e
-   recompila/publica os três firmwares com as versões registradas.
+   `.github/workflows/publicar-firmware-mestre.yml` também aceita essa tag,
+   executa os testes, verifica a geração das páginas e recompila/publica os
+   três firmwares com as versões registradas.
 5. Na primeira instalação, grave por cabo as tabelas de partição OTA. Depois,
    faça o mestre consultar o manifesto, autorize o alvo e acompanhe o estado
    até a confirmação. Veja [OTA](ota.md) para timeout e rollback.

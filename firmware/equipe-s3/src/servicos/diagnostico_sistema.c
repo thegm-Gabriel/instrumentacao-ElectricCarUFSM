@@ -110,10 +110,13 @@ diagnostico_sistema_t diagnostico_sistema_obter(void)
 
 #if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
     configRUN_TIME_COUNTER_TYPE total = 0;
+    const UBaseType_t total_tarefas = uxTaskGetNumberOfTasks();
     const UBaseType_t quantidade = uxTaskGetSystemState(
         tarefas, MAXIMO_TAREFAS_DIAGNOSTICO, &total);
     const int64_t agora_us = esp_timer_get_time();
-    resultado.tarefas_ativas = quantidade;
+    resultado.tarefas_ativas = total_tarefas;
+    resultado.tarefas_truncadas = total_tarefas > MAXIMO_TAREFAS_DIAGNOSTICO ||
+                                  (quantidade == 0 && total_tarefas != 0);
     resultado.menor_pilha_livre_bytes = UINT32_MAX;
     uint64_t uso_nucleo_0 = 0;
     uint64_t uso_nucleo_1 = 0;
@@ -149,7 +152,7 @@ diagnostico_sistema_t diagnostico_sistema_obter(void)
                      tarefa->pcTaskName);
         }
     }
-    if (quantidade != 0 && janela_us != 0) {
+    if (quantidade != 0 && janela_us != 0 && !resultado.tarefas_truncadas) {
         resultado.cpu_valida = true;
         resultado.cpu_nucleo_0_decimos_percentual =
             limitar_decimos_percentual(uso_nucleo_0);
@@ -168,7 +171,7 @@ diagnostico_sistema_t diagnostico_sistema_obter(void)
         tempos_anteriores[i] = tarefas[i].ulRunTimeCounter;
     }
     quantidade_anterior = quantidade;
-    coleta_anterior_us = agora_us;
+    coleta_anterior_us = resultado.tarefas_truncadas ? 0 : agora_us;
     if (resultado.menor_pilha_livre_bytes == UINT32_MAX) {
         resultado.menor_pilha_livre_bytes = 0;
     }

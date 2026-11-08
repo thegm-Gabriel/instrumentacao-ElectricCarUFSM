@@ -101,10 +101,13 @@ python ferramentas\preparar_release_ota.py --bump patch
 ```
 
 O preparador detecta fontes alteradas, incrementa somente as versões internas
-afetadas e a etiqueta do conjunto, compila, confere a versão de cada imagem e
+afetadas e a etiqueta do conjunto, regenera os painéis web, compila, confere a versão de cada imagem e
 gera `versoes/saida/manifesto-firmwares.json`. A publicação precisa conter esse
 manifesto e os três `.bin` da mesma preparação. O repositório precisa ser
 público enquanto o download HTTPS do firmware não tiver autenticação para
 releases privados. O fluxo
-`.github/workflows/publicar-firmware-mestre.yml` pode recompilar e publicar os
-quatro anexos quando uma tag compatível com o estado versionado é enviada.
+`.github/workflows/publicar-firmware-mestre.yml` executa testes, verifica que
+os painéis gerados correspondem às fontes versionadas e pode recompilar e
+publicar os quatro anexos quando uma tag compatível com o estado versionado é
+enviada. O manifesto OTA atual usa `versao_formato` 2 e reúne os três alvos;
+o exemplo antigo de manifesto exclusivo do mestre não deve ser publicado.

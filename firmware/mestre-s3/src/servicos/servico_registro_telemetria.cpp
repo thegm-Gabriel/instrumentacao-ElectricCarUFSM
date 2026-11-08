@@ -7,6 +7,7 @@
 #include <cinttypes>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <dirent.h>
@@ -163,6 +164,8 @@ uint64_t ordem_historico_tentativa = 0;
 bool historico_parcial_possivel = false;
 SemaphoreHandle_t mutex_historico = nullptr;
 uint32_t ultimo_backup_ms = 0;
+uint32_t ultima_tentativa_backup_falha_ms = 0;
+bool aguarda_nova_tentativa_backup = false;
 uint32_t sequencia_backup = 0;
 uint64_t ultimo_odometro_backup_mm = UINT64_MAX;
 esp_err_t criar_diretorio(const char* caminho);
@@ -241,7 +244,35 @@ uint32_t checksum_backup(const char* dados, size_t tamanho) {
     return hash;
 }
 
-bool ler_backup(const char* caminho, uint32_t* sequencia, uint64_t* odometro_mm) {
+struct BackupConfiguracao {
+    uint32_t sequencia = 0;
+    uint64_t odometro_mm = 0;
+    PoliticaConexaoWifi politica_wifi{};
+    uint32_t intervalo_ota_min = 0;
+    uint32_t intervalos_relatorios_ms[4]{};
+    bool relatorios_pausados = false;
+};
+
+bool ler_campo_backup(const char* conteudo, const char* chave, uint32_t* destino) {
+    char busca[48]{};
+    if (std::snprintf(busca, sizeof(busca), "\n%s=", chave) >=
+        static_cast<int>(sizeof(busca))) return false;
+    const char* campo = std::strstr(conteudo, busca);
+    if (campo == nullptr) return false;
+    campo += std::strlen(busca);
+    if (*campo < '0' || *campo > '9') return false;
+    char* fim = nullptr;
+    errno = 0;
+    const unsigned long long valor = std::strtoull(campo, &fim, 10);
+    if (errno != 0 || fim == campo || *fim != '\n' || valor > UINT32_MAX) {
+        return false;
+    }
+    *destino = static_cast<uint32_t>(valor);
+    return true;
+}
+
+bool ler_backup(const char* caminho, BackupConfiguracao* backup) {
+    if (backup == nullptr) return false;
     FILE* arquivo = std::fopen(caminho, "rb");
     if (arquivo == nullptr) return false;
     char conteudo[1024]{};
@@ -262,33 +293,80 @@ bool ler_backup(const char* caminho, uint32_t* sequencia, uint64_t* odometro_mm)
         checksum_backup(conteudo, static_cast<size_t>(checksum - conteudo)) != esperado) {
         return false;
     }
-    *sequencia = numero;
-    *odometro_mm = static_cast<uint64_t>(total);
+    uint32_t tentativas = 0;
+    uint32_t pausados = 0;
+    if (!ler_campo_backup(conteudo, "wifi_tentativas", &tentativas) ||
+        tentativas > UINT8_MAX ||
+        !ler_campo_backup(conteudo, "wifi_tempo_tentativa_ms",
+                          &backup->politica_wifi.tempo_por_tentativa_ms) ||
+        !ler_campo_backup(conteudo, "wifi_intervalo_ms",
+                          &backup->politica_wifi.intervalo_entre_tentativas_ms) ||
+        !ler_campo_backup(conteudo, "wifi_limite_sessao_ms",
+                          &backup->politica_wifi.tempo_limite_sessao_ms) ||
+        !ler_campo_backup(conteudo, "ota_intervalo_min",
+                          &backup->intervalo_ota_min) ||
+        !ler_campo_backup(conteudo, "relatorio_telemetria_ms",
+                          &backup->intervalos_relatorios_ms[0]) ||
+        !ler_campo_backup(conteudo, "relatorio_uart_ms",
+                          &backup->intervalos_relatorios_ms[1]) ||
+        !ler_campo_backup(conteudo, "relatorio_sistema_ms",
+                          &backup->intervalos_relatorios_ms[2]) ||
+        !ler_campo_backup(conteudo, "relatorio_ota_ms",
+                          &backup->intervalos_relatorios_ms[3]) ||
+        !ler_campo_backup(conteudo, "relatorios_pausados", &pausados) ||
+        pausados > 1) return false;
+    backup->sequencia = numero;
+    backup->odometro_mm = static_cast<uint64_t>(total);
+    backup->politica_wifi.tentativas_por_rede = static_cast<uint8_t>(tentativas);
+    backup->relatorios_pausados = pausados != 0;
     return true;
 }
 
 void recuperar_backup_configuracao() {
-    uint32_t numero_principal = 0;
-    uint32_t numero_temporario = 0;
-    uint64_t odometro_principal = 0;
-    uint64_t odometro_temporario = 0;
+    BackupConfiguracao principal_backup{};
+    BackupConfiguracao temporario_backup{};
     const bool principal = ler_backup(configuracao::ARQUIVO_BACKUP_CONFIGURACAO,
-                                      &numero_principal, &odometro_principal);
+                                      &principal_backup);
     char temporario[96]{};
     std::snprintf(temporario, sizeof(temporario), "%s.tmp",
                   configuracao::ARQUIVO_BACKUP_CONFIGURACAO);
-    const bool pendente = ler_backup(temporario, &numero_temporario,
-                                     &odometro_temporario);
+    const bool pendente = ler_backup(temporario, &temporario_backup);
     if (!principal && !pendente) return;
     const bool usar_temporario = pendente &&
-        (!principal || static_cast<int32_t>(numero_temporario - numero_principal) > 0);
-    sequencia_backup = usar_temporario ? numero_temporario : numero_principal;
-    const uint64_t total_mm = usar_temporario ? odometro_temporario : odometro_principal;
-    ultimo_odometro_backup_mm = total_mm;
-    const esp_err_t erro = servico_odometro_restaurar_se_ausente(total_mm);
+        (!principal || static_cast<int32_t>(temporario_backup.sequencia -
+                                           principal_backup.sequencia) > 0);
+    const BackupConfiguracao& escolhido = usar_temporario
+        ? temporario_backup : principal_backup;
+    sequencia_backup = escolhido.sequencia;
+    ultimo_odometro_backup_mm = escolhido.odometro_mm;
+    const esp_err_t erro = servico_odometro_restaurar_se_ausente(
+        escolhido.odometro_mm);
     if (erro != ESP_OK && erro != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(ETIQUETA, "Backup SD encontrado, mas restauração do odômetro falhou: %s",
                  esp_err_to_name(erro));
+    }
+    const esp_err_t wifi = servico_wifi_restaurar_politica_se_ausente(
+        escolhido.politica_wifi);
+    if (wifi == ESP_OK) {
+        ESP_LOGI(ETIQUETA, "Política Wi-Fi restaurada do SD; redes exigem credenciais");
+    } else if (wifi != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(ETIQUETA, "Política Wi-Fi do SD não restaurada: %s",
+                 esp_err_to_name(wifi));
+    }
+    const esp_err_t ota = servico_ota_restaurar_intervalo_se_ausente(
+        escolhido.intervalo_ota_min);
+    if (ota == ESP_OK) {
+        ESP_LOGI(ETIQUETA, "Intervalo OTA restaurado do SD");
+    } else if (ota != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(ETIQUETA, "Intervalo OTA do SD não restaurado: %s",
+                 esp_err_to_name(ota));
+    }
+    const esp_err_t relatorios =
+        servico_relatorios_restaurar_configuracao_antes_de_iniciar(
+            escolhido.intervalos_relatorios_ms, escolhido.relatorios_pausados);
+    if (relatorios != ESP_OK && relatorios != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(ETIQUETA, "Relatórios do SD não restaurados: %s",
+                 esp_err_to_name(relatorios));
     }
     if (usar_temporario) {
         (void)std::remove(configuracao::ARQUIVO_BACKUP_CONFIGURACAO);
@@ -301,6 +379,9 @@ void recuperar_backup_configuracao() {
 void atualizar_backup_configuracao(uint32_t instante) {
     if (ultimo_backup_ms != 0 && instante - ultimo_backup_ms <
             configuracao::INTERVALO_BACKUP_CONFIGURACAO_MS) return;
+    // Falhas no SD devem ser repetidas em breve, sem tentar e registrar erro a cada amostra.
+    if (aguarda_nova_tentativa_backup &&
+        instante - ultima_tentativa_backup_falha_ms < 5000) return;
     const EstadoOdometro odometro = servico_odometro_obter_estado();
     if (!odometro.iniciado || !std::isfinite(odometro.odometro_m) ||
         odometro.odometro_m < 0) return;
@@ -309,7 +390,9 @@ void atualizar_backup_configuracao(uint32_t instante) {
     const ResumoWifi wifi = servico_wifi_obter_resumo();
     const SituacaoOta ota = servico_ota_obter_situacao();
     if (ota.intervalo_verificacao_minutos == 0) return;
-    ultimo_backup_ms = instante;
+    aguarda_nova_tentativa_backup = true;
+    ultima_tentativa_backup_falha_ms = instante;
+    const uint32_t proxima_sequencia_backup = sequencia_backup + 1;
     // Um minuto limita desgaste do SD; o retrato guarda configuração sem senhas.
     char conteudo[1024]{};
     const int tamanho = std::snprintf(conteudo, sizeof(conteudo),
@@ -322,7 +405,8 @@ void atualizar_backup_configuracao(uint32_t instante) {
         "relatorio_sistema_ms=%" PRIu32 "\nrelatorio_ota_ms=%" PRIu32 "\n"
         "relatorios_pausados=%u\n"
         "registro_intervalo_ms=%" PRIu32 "\nregistro_duracao_arquivo_ms=%" PRIu32 "\n",
-        ++sequencia_backup, total_mm, static_cast<unsigned>(wifi.quantidade_redes_usuario),
+        proxima_sequencia_backup, total_mm,
+        static_cast<unsigned>(wifi.quantidade_redes_usuario),
         static_cast<unsigned>(wifi.conectar_secundarias_automaticamente),
         static_cast<unsigned>(wifi.politica.tentativas_por_rede),
         wifi.politica.tempo_por_tentativa_ms,
@@ -381,6 +465,9 @@ void atualizar_backup_configuracao(uint32_t instante) {
         ESP_LOGW(ETIQUETA, "Backup temporário preservado: errno=%d", errno);
         return;
     }
+    sequencia_backup = proxima_sequencia_backup;
+    aguarda_nova_tentativa_backup = false;
+    ultimo_backup_ms = instante;
     if (total_mm != ultimo_odometro_backup_mm) {
         ESP_LOGI(ETIQUETA, "Backup de configuração atualizado: sequência %" PRIu32
                  ", odômetro %.3f km", sequencia_backup, odometro.odometro_m / 1000.0);

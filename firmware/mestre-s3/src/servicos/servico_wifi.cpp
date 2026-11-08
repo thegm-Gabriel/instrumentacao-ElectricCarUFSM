@@ -407,6 +407,31 @@ bool servico_wifi_politica_valida(const PoliticaConexaoWifi& politica) {
            politica.tempo_limite_sessao_ms >= politica.tempo_por_tentativa_ms;
 }
 
+esp_err_t servico_wifi_restaurar_politica_se_ausente(
+    const PoliticaConexaoWifi& politica) {
+    if (!servico_wifi_politica_valida(politica)) return ESP_ERR_INVALID_ARG;
+    // Uma namespace existente pode conter credenciais ou uma configuração
+    // parcial. Nunca alterá-la a partir de um retrato sem senhas.
+    nvs_handle_t existente = 0;
+    const esp_err_t consulta = nvs_open(ESPACO_NVS, NVS_READONLY, &existente);
+    if (consulta == ESP_OK) {
+        nvs_close(existente);
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (consulta != ESP_ERR_NVS_NOT_FOUND) return consulta;
+
+    nvs_handle_t armazenamento = 0;
+    esp_err_t erro = nvs_open(ESPACO_NVS, NVS_READWRITE, &armazenamento);
+    if (erro == ESP_OK) erro = nvs_set_u8(armazenamento, "versao", VERSAO_ARMAZENAMENTO);
+    if (erro == ESP_OK) erro = nvs_set_u8(armazenamento, "tentativas", politica.tentativas_por_rede);
+    if (erro == ESP_OK) erro = nvs_set_u32(armazenamento, "tent_ms", politica.tempo_por_tentativa_ms);
+    if (erro == ESP_OK) erro = nvs_set_u32(armazenamento, "intervalo_ms", politica.intervalo_entre_tentativas_ms);
+    if (erro == ESP_OK) erro = nvs_set_u32(armazenamento, "sessao_ms", politica.tempo_limite_sessao_ms);
+    if (erro == ESP_OK) erro = nvs_commit(armazenamento);
+    if (armazenamento != 0) nvs_close(armazenamento);
+    return erro;
+}
+
 esp_err_t servico_wifi_iniciar() {
     if (copiar_estado_servico().iniciado) return ESP_OK;
     if (mutex_alteracoes == nullptr) mutex_alteracoes = xSemaphoreCreateMutex();

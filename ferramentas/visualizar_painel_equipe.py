@@ -1,6 +1,7 @@
 """Prévia do painel da equipe no PC ou na rede local, com APIs simuladas."""
 
 import argparse
+import base64
 import importlib.util
 import json
 import math
@@ -13,6 +14,9 @@ from urllib.parse import parse_qs, urlsplit
 from visualizar_painel_visitantes import telemetria_simulada
 
 ROOT = Path(__file__).resolve().parents[1]
+CHAVE_PREVIA = "0" * 32
+AUTORIZACAO_PREVIA = "Basic " + base64.b64encode(
+    f"equipe:{CHAVE_PREVIA}".encode("ascii")).decode("ascii")
 SPEC = importlib.util.spec_from_file_location(
     "gerador_equipe", ROOT / "firmware/equipe-s3/web/gerar_painel.py")
 GERADOR = importlib.util.module_from_spec(SPEC)
@@ -20,7 +24,7 @@ SPEC.loader.exec_module(GERADOR)
 
 PREVIA = """
 <aside class="preview-toolbar" aria-label="Controles da prévia local">
-  <div><strong>Prévia local da equipe</strong><span>Todos os dados e comandos são simulados. Nenhum ESP é acessado.</span></div>
+  <div><strong>Prévia local da equipe</strong><span>Dados e comandos simulados · chave de teste: 00000000000000000000000000000000</span></div>
   <label>Cenário <select id="preview-scenario">
     <option value="normal">Funcionamento normal</option>
     <option value="degradado">Operação degradada</option>
@@ -346,6 +350,12 @@ def criar_servidor(endereco, porta, simulador):
             url = urlsplit(self.path)
             query = parse_qs(url.query)
             try:
+                protegido = (url.path == "/api/comandos/acesso" or
+                             (post and url.path in ("/api/mestre", "/api/wifi/limite",
+                                                   "/api/wifi/desconectar")))
+                if protegido and self.headers.get("Authorization") != AUTORIZACAO_PREVIA:
+                    self.responder(401, dict(ok=False, erro="chave administrativa necessaria"))
+                    return
                 size = int(self.headers.get("Content-Length", "0"))
                 if size < 0 or size > 4096:
                     raise ValueError("Corpo de requisição inválido.")
@@ -366,6 +376,8 @@ def criar_servidor(endereco, porta, simulador):
                         result = simulador.diagnostico("equipe")
                     elif not post and url.path == "/api/wifi/clientes":
                         result = simulador.wifi_clientes("equipe")
+                    elif not post and url.path == "/api/comandos/acesso":
+                        result = {}
                     elif post and url.path in ("/api/wifi/limite", "/api/wifi/desconectar"):
                         data = json.loads(body)
                         action = "limite" if url.path.endswith("limite") else "kick"
@@ -409,6 +421,7 @@ def main():
         if args.rede:
             print(f"No celular: http://<IP_IPV4_DO_PC>:{args.porta}/", flush=True)
         print("Prévia simulada. Ctrl+C encerra.", flush=True)
+        print(f"Chave de teste para comandos: {CHAVE_PREVIA}", flush=True)
         try:
             servidor.serve_forever()
         except KeyboardInterrupt:

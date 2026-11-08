@@ -11,6 +11,46 @@
   const badge = (id, text, name) => { const el = $(id); if (el) { el.textContent = text; el.className = 'badge ' + name; } };
   const message = (text, kind = '') => { const el = $(state.tab==='controle'?'critical-notice':'notice'); el.hidden = false; el.textContent = text; el.className = 'notice ' + kind; };
   const state = { tab: 'telemetria', range: 30, signal: 'power', signalSecondary: 'current', telemetry: null, local: null, localAt: 0, master: {}, visitors: {}, browserOnline: false, browserChecked: false, localChecked: false, lastHttp: 0, masterOnline: false, masterChecked: false, visitorsOnline: false, visitorsChecked: false, lastSample: 0, lastSampleAgeMs: 0, lastSequence: null, samples: [], deviceSamples: {mestre:[],equipe:[],visitantes:[]}, deviceSignal:{mestre:'cpu',equipe:'cpu',visitantes:'rtt'}, deviceSignalSecondary:{mestre:'heap',equipe:'heap',visitantes:'availability'}, events: [], commandEvents: [], commandRuns: [], selected: {mestre:'mestre',equipe:'equipe', visitantes:'visitantes'}, busy: false, energyWh: 0, distanceStart: null, pending: null, polls: {}, telemetryRefreshMs: 250, commandRefreshMs: 2000 };
+  let adminKey = '';
+  try { adminKey = sessionStorage.getItem('nexus_admin_key') || ''; } catch (_) { /* Navegador sem armazenamento de sessão. */ }
+  function forgetAdminKey(){adminKey='';try{sessionStorage.removeItem('nexus_admin_key');}catch(_){}}
+  function commandHeaders(contentType){
+    if(!adminKey){
+      const entered=prompt('Chave administrativa do ESP da equipe (mostrada no terminal serial):');
+      if(!entered)throw Error('Comando não enviado: informe a chave administrativa.');
+      adminKey=entered.trim().toLowerCase();
+      if(!/^[0-9a-f]{32}$/.test(adminKey)){forgetAdminKey();throw Error('Chave administrativa inválida: são 32 caracteres hexadecimais.');}
+      try{sessionStorage.setItem('nexus_admin_key',adminKey);}catch(_){/* Mantém apenas nesta página. */}
+    }
+    return {'Content-Type':contentType,Authorization:'Basic '+btoa('equipe:'+adminKey)};
+  }
+  const nativeFetch=globalThis.fetch.bind(globalThis);
+  const fetch=async (url,options={})=>{
+    const action=options.method?.toUpperCase()==='POST'&&
+      /^\/api\/(mestre(?:\?|$)|wifi\/)/.test(String(url));
+    if(action){
+      const type=options.headers?.['Content-Type']||'text/plain; charset=utf-8';
+      options={...options,headers:{...options.headers,...commandHeaders(type)}};
+    }
+    const response=await nativeFetch(url,options);
+    if(action&&response.status===401)forgetAdminKey();
+    return response;
+  };
+  async function prepareCommandAccess(){
+    try{
+      const authorization=commandHeaders('text/plain')['Authorization'];
+      const response=await nativeFetch('/api/comandos/acesso',
+        {headers:{Authorization:authorization},cache:'no-store'});
+      if(!response.ok){
+        if(response.status===401)forgetAdminKey();
+        throw Error(response.status===401?'Chave incorreta. Confira o terminal serial do ESP da equipe.':'Não foi possível verificar a chave agora.');
+      }
+      document.querySelectorAll('[data-admin-access]').forEach(button=>button.textContent='Acesso preparado');
+      message('Acesso aos comandos preparado nesta sessão.','success');
+    }catch(error){message(error.message,'error');}
+  }
+  document.querySelectorAll('[data-admin-access]').forEach(button=>
+    button.addEventListener('click',prepareCommandAccess));
   const devices = {
     mestre: {group:'mestre', name:'ESP32 mestre', id:'MESTRE', role:'Mestre', function:'Aquisição e telemetria do veículo'},
     equipe: {group:'equipe', name:'ESP32 da equipe', id:'EQUIPE', role:'Satélite / gateway', function:'Recepção UART, Wi-Fi e painel web'},
@@ -139,6 +179,41 @@
   const speedPeak={last:null,lastAt:0,sequence:null,source:null,candidate:0,candidateAt:0,trough:0,armed:true,cooldownUntil:0,value:null,until:0,timer:null};
   const PEAK_HOLD_MS=1400;
   const speedScale={max:30,belowSince:null};
+  const telemetryMotion={items:{},period:250,arrivedAt:0,tickScale:null,slowingUntil:0};
+  const reducedMotion=()=>matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function animateTelemetry(id,target,digits=1,onFrame=()=>{},suffix=''){
+    const old=telemetryMotion.items[id];
+    if(old&&old.target===target&&old.suffix===suffix)return;
+    if(old?.frame)cancelAnimationFrame(old.frame);
+    if(target===null){delete telemetryMotion.items[id];set(id,'—');onFrame(null);return;}
+    const start=old&&Number.isFinite(old.current)?old.current:target;
+    const item={current:start,target,frame:0,suffix};telemetryMotion.items[id]=item;
+    const duration=Math.max(230,Math.min(730,telemetryMotion.period*1.55));
+    const began=performance.now();
+    const paint=now=>{
+      const progress=document.hidden||reducedMotion()?1:Math.min(1,(now-began)/duration);
+      item.current=start+(target-start)*Math.sin(progress*Math.PI/2);
+      set(id,number(item.current,digits)+suffix);onFrame(item.current);
+      if(progress<1)item.frame=requestAnimationFrame(paint);
+      else item.frame=0;
+    };
+    paint(began);
+  }
+  function renderSpeedTicks(scale){
+    const group=$('speed-ticks');
+    if(!group||telemetryMotion.tickScale===scale)return;
+    telemetryMotion.tickScale=scale;group.replaceChildren();
+    const svgNS='http://www.w3.org/2000/svg';
+    for(let speed=5;speed<scale;speed+=5){
+      const major=speed%10===0,angle=Math.PI*(1-speed/scale);
+      const point=radius=>[160+radius*Math.cos(angle),158-radius*Math.sin(angle)];
+      const inner=point(134),outer=point(major?145:141),label=point(154);
+      const mark=document.createElementNS(svgNS,'line');
+      mark.setAttribute('x1',inner[0].toFixed(2));mark.setAttribute('y1',inner[1].toFixed(2));mark.setAttribute('x2',outer[0].toFixed(2));mark.setAttribute('y2',outer[1].toFixed(2));
+      mark.setAttribute('class',major?'speed-tick major':'speed-tick');group.append(mark);
+      const text=document.createElementNS(svgNS,'text');text.setAttribute('x',label[0].toFixed(2));text.setAttribute('y',label[1].toFixed(2));text.setAttribute('class',major?'speed-tick-label major':'speed-tick-label');text.textContent=String(speed);group.append(text);
+    }
+  }
   function scaleForSpeed(speed,heldPeak,now){
     const required=Math.max(0,speed||0,heldPeak||0);
     if(required>speedScale.max+0.15){
@@ -187,9 +262,16 @@
     if(recordSample)trackSpeedPeak(speed,d?.simulado,d?.sequencia);
     const peakVisible=speedPeak.value!==null&&speedPeak.until>performance.now()&&speed!==null;
     const scale=scaleForSpeed(speed,peakVisible?speedPeak.value:null,performance.now());
-    $('speed-fill').style.strokeDasharray=(Math.max(0,Math.min(100,(speed||0)/scale*100)))+' 100';
+    renderSpeedTicks(scale);
+    const displayedSpeed=telemetryMotion.items.speed?.current??speed;
+    $('speed-fill').style.strokeDasharray=(Math.max(0,Math.min(100,(displayedSpeed||0)/scale*100)))+' 100';
     set('speed-scale-max',String(scale));
     const marker=$('speed-peak-marker');marker.classList.toggle('is-visible',peakVisible);
+    const peakLabel=$('speed-peak-label');
+    if(peakLabel){
+      if(peakVisible){clearTimeout(telemetryMotion.peakLabelTimer);peakLabel.textContent='Pico '+number(speedPeak.value,1)+' km/h';peakLabel.classList.add('is-visible');}
+      else if(peakLabel.classList.contains('is-visible')){peakLabel.classList.remove('is-visible');telemetryMotion.peakLabelTimer=setTimeout(()=>{if(!peakLabel.classList.contains('is-visible'))peakLabel.textContent='';},300);}
+    }
     if(peakVisible){
       const angle=Math.PI*(1-Math.min(1,speedPeak.value/scale));
       // Um risco radial curto, contido na espessura do arco, registra o pico antes da queda.
@@ -197,13 +279,39 @@
       const from=point(117),to=point(125);
       marker.querySelectorAll('line').forEach(line=>{line.setAttribute('x1',from[0]);line.setAttribute('y1',from[1]);line.setAttribute('x2',to[0]);line.setAttribute('y2',to[1]);});
     }
-    const throttle=d?.simulado?value(d,'acelerador_decimos_percentual',10):null;
-    const brake=d?.simulado?value(d,'freio_decimos_percentual',10):null;
-    $('throttle-fill').style.setProperty('--fill-level',Math.max(0,Math.min(100,throttle||0))+'%');
-    $('brake-fill').style.setProperty('--fill-level',Math.max(0,Math.min(100,brake||0))+'%');
-    set('throttle-arc-value',throttle===null?'—':number(throttle,0)+'%');
-    set('brake-arc-value',brake===null?'—':number(brake,0)+'%');
     $('speed-fill').closest('svg').setAttribute('aria-label','Velocidade em escala de 0 a '+scale+' km/h'+(peakVisible?'. Velocidade antes da desaceleração: '+number(speedPeak.value,1)+' km/h.':''));
+  }
+  const powerPeak={last:null,candidate:0,value:null,until:0,cooldownUntil:0,timer:null};
+  let powerRange=500;
+  function recordPowerPeak(power){
+    const now=performance.now();
+    if(power===null){clearTimeout(powerPeak.timer);Object.assign(powerPeak,{last:null,candidate:0,value:null,until:0,cooldownUntil:0,timer:null});return;}
+    if(powerPeak.last===null){powerPeak.last=power;powerPeak.candidate=power;return;}
+    if(Math.sign(power)===Math.sign(powerPeak.candidate)&&Math.abs(power)>Math.abs(powerPeak.candidate))powerPeak.candidate=power;
+    const fall=Math.abs(powerPeak.candidate)-Math.abs(power);
+    if(Math.abs(powerPeak.candidate)>=120&&fall>=Math.max(55,Math.abs(powerPeak.candidate)*.25)&&now>=powerPeak.cooldownUntil){
+      powerPeak.value=powerPeak.candidate;powerPeak.until=now+1600;powerPeak.cooldownUntil=now+3500;
+      powerPeak.candidate=power;clearTimeout(powerPeak.timer);
+      powerPeak.timer=setTimeout(()=>{powerPeak.until=0;const displayed=telemetryMotion.items.power?.current;renderPowerRail(displayed===undefined?power:telemetryMotion.powerUnit?displayed*1000:displayed);},1600);
+    }
+    if(Math.sign(power)!==Math.sign(powerPeak.candidate))powerPeak.candidate=power;
+    powerPeak.last=power;
+  }
+  function renderPowerRail(power){
+    const rail=$('power-rail');if(!rail)return;
+    rail.hidden=power===null;
+    if(power===null)return;
+    powerRange=Math.max(powerRange,Math.ceil(Math.abs(power)/250)*250,Math.ceil(Math.abs(powerPeak.value||0)/250)*250);
+    const fraction=Math.min(1,Math.abs(power)/powerRange);
+    $('power-rail-regen').style.width=(power<0?fraction*50:0)+'%';
+    $('power-rail-consume').style.width=(power>0?fraction*50:0)+'%';
+    const peak=$('power-peak-marker'),visible=powerPeak.value!==null&&powerPeak.until>performance.now();
+    peak.classList.toggle('is-visible',visible);
+    if(visible)peak.style.left=(50+Math.max(-1,Math.min(1,powerPeak.value/powerRange))*50)+'%';
+    set('power-negative-limit','−'+powerRange+' W');set('power-positive-limit',powerRange+' W');
+    rail.setAttribute('aria-label','Potência elétrica: '+number(power,0)+' W; escala de menos '+powerRange+' a mais '+powerRange+' W');
+    $('power-card').classList.toggle('is-regen',power<0);
+    set('power-context',power<0?'Regeneração':power>0?'Consumo':'Sem fluxo elétrico');
   }
 
   function event(text, kind = 'info', command = false) {
@@ -272,8 +380,20 @@
   function appendSample(d) {
     const now = Date.now();
     if (state.lastSequence === d.sequencia) return;
+    if(telemetryMotion.arrivedAt){const elapsed=now-telemetryMotion.arrivedAt;if(elapsed>=120&&elapsed<=2500)telemetryMotion.period=Math.round(telemetryMotion.period*.7+elapsed*.3);}
+    telemetryMotion.arrivedAt=now;
     if (state.samples.length && now - state.samples[state.samples.length - 1].time > 3000) state.samples.push({time:now - 1, gap:true});
     const sample = {time:now, simulated:d.simulado, speed:value(d,'velocidade_centesimos_kmh',100), accel:d.simulado || (d.estado_mpu & 1) ? value(d,'aceleracao_milesimos_ms2',1000) : null, power:d.simulado ? value(d,'potencia_w') : null, current:d.simulado ? value(d,'corrente_centesimos_a',100) : null, voltage:d.simulado ? value(d,'tensao_pacote_mv',1000) : null};
+    const previousMotion=state.samples.length?state.samples[state.samples.length-1]:null;
+    if(previousMotion&&!previousMotion.gap&&Number.isFinite(previousMotion.speed)&&Number.isFinite(sample.speed)){
+      const drop=previousMotion.speed-sample.speed;
+      if(drop>=.25&&drop/Math.max(.12,(now-previousMotion.time)/1000)>=.9)telemetryMotion.slowingUntil=now+850;
+      else if(sample.speed>previousMotion.speed+.2)telemetryMotion.slowingUntil=0;
+    }
+    clearTimeout(telemetryMotion.slowingTimer);
+    $('speed-card').classList.toggle('is-slowing',telemetryMotion.slowingUntil>now);
+    if(telemetryMotion.slowingUntil>now)telemetryMotion.slowingTimer=setTimeout(()=>$('speed-card').classList.remove('is-slowing'),telemetryMotion.slowingUntil-now);
+    recordPowerPeak(sample.power);
     if (state.samples.length && !state.samples[state.samples.length-1].gap) {
       const previous = state.samples[state.samples.length-1];
       const hours = Math.min((now - previous.time) / 3600000, 2 / 3600);
@@ -290,10 +410,15 @@
     const available = !!(d && d.valido);
     if (!available) return;
     const speed = value(d,'velocidade_centesimos_kmh',100), accel = d.simulado || (d.estado_mpu & 1) ? value(d,'aceleracao_milesimos_ms2',1000) : null, soc = d.simulado ? value(d,'carga_decimos_percentual',10) : null, power = d.simulado ? value(d,'potencia_w') : null;
-    set('speed', speed === null ? '—' : number(speed,1));
-    set('accel', accel === null ? '—' : number(accel,2));
-    set('soc', soc === null ? '—' : number(soc,1)); $('soc-bar').style.width = Math.max(0,Math.min(100,soc || 0)) + '%';
-    set('power', power === null ? '—' : number(Math.abs(power) >= 1000 ? power/1000 : power, Math.abs(power) >= 1000 ? 2 : 0)); set('power-unit', Math.abs(power || 0) >= 1000 ? 'kW' : 'W');
+    animateTelemetry('speed',speed,1,()=>updateArc(false));
+    animateTelemetry('accel',accel,2,current=>{$('accel-card').classList.toggle('is-negative',current!==null&&current<-.015);set('accel-context',current===null?'Sensor indisponível':current<-.04?'Desaceleração':current>.04?'Aceleração':'Movimento estável');});
+    animateTelemetry('soc',soc,1,current=>{$('soc-bar').style.width=Math.max(0,Math.min(100,current||0))+'%';set('soc-context',current===null?'Carga indisponível':current<20?'Carga baixa':current<80?'Carga disponível':'Carga elevada');});
+    const powerKw=power!==null&&Math.abs(power)>=1000;
+    if(telemetryMotion.powerUnit!==undefined&&telemetryMotion.powerUnit!==powerKw){const oldPower=telemetryMotion.items.power;if(oldPower?.frame)cancelAnimationFrame(oldPower.frame);delete telemetryMotion.items.power;}
+    telemetryMotion.powerUnit=powerKw;
+    set('power-unit',powerKw?'kW':'W');
+    animateTelemetry('power',powerKw?power/1000:power,powerKw?2:0,current=>renderPowerRail(current===null?null:powerKw?current*1000:current));
+    if(power===null){$('power-card').classList.remove('is-regen');set('power-context','Medição indisponível');}
     set('gear', d.simulado ? marchas[d.marcha] || 'Não disponível' : 'Não disponível'); set('distance', format(value(d,'percurso_metros',1000),'km',2)); set('master-time', age(value(d,'tempo_mestre_ms'))); set('source', d.simulado ? 'Dados simulados' : 'Mestre');
     set('voltage', format(d.simulado ? value(d,'tensao_pacote_mv',1000) : null,'V',1)); set('current', format(d.simulado ? value(d,'corrente_centesimos_a',100) : null,'A',2)); set('soc-detail', format(soc,'%',1));
     set('range-estimate',format(d.simulado?value(d,'autonomia_decimos_km',10):null,'km',1));
@@ -301,6 +426,8 @@
     const distanceKm = state.distanceStart === null ? null : (d.percurso_metros - state.distanceStart)/1000;
     set('consumption', d.simulado && distanceKm !== null && distanceKm >= 0.1 && state.energyWh >= 0 ? format(state.energyWh/distanceKm,'Wh/km',1) : 'Não disponível');
     const throttle = d.simulado ? value(d,'acelerador_decimos_percentual',10) : null, brake = d.simulado ? value(d,'freio_decimos_percentual',10) : null;
+    animateTelemetry('throttle-arc-value',throttle,0,current=>{$('throttle-fill').style.setProperty('--fill-level',Math.max(0,Math.min(100,current||0))+'%');},'%');
+    animateTelemetry('brake-arc-value',brake,0,current=>{$('brake-fill').style.setProperty('--fill-level',Math.max(0,Math.min(100,current||0))+'%');},'%');
     set('throttle', format(throttle,'%',1)); set('brake',format(brake,'%',1)); $('throttle-bar').style.width = Math.max(0,Math.min(100,throttle || 0))+'%'; $('brake-bar').style.width = Math.max(0,Math.min(100,brake || 0))+'%';
     const mpu = d.estado_mpu || 0; set('mpu', d.simulado ? 'Dados simulados' : mpu & 1 ? (mpu & 2 ? 'Ativo · calibrado' : 'Ativo · sem calibração') : 'Inativo'); set('mpu-temp', mpu & 1 ? format(value(d,'temperatura_mpu_centesimos_c',100),'°C',1) : 'Não disponível');
     set('packet-rate',format(value(d,'taxa_pacotes_centesimos_hz',100),'Hz',2)); set('sample-age',age(value(d,'idade_ms'))); set('packet-loss',format(value(d,'taxa_perda_centesimos_percentual',100),'%',2)); set('crc-fails',Number.isFinite(d.falhas_crc) ? String(d.falhas_crc) : 'Não disponível');
@@ -674,6 +801,8 @@
   }
   async function sendStopNow(){
     if(state.stopInFlight)return;
+    try{commandHeaders('text/plain; charset=utf-8');}
+    catch(error){message(error.message,'error');return;}
     state.stopInFlight=true;availability();
     const run={name:'Solicitar parada remota',action:'parada_remota',time:Date.now(),requests:[],responses:[],step:1,status:'Enviando',text:'Pedido enviado ao mestre; aguardando resposta.',tone:'warn',checkedAt:0,hasRefresh:true,refreshQueries:['controle_remoto'],followUntil:Date.now()+30000};
     state.commandRuns.unshift(run);state.commandRuns.length=Math.min(state.commandRuns.length,12);renderMasterCommandHistory();

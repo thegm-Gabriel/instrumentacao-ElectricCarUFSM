@@ -152,6 +152,17 @@ static int criar_soquete_dns(void)
     return soquete;
 }
 
+static esp_err_t redirecionar_portal_cativo(httpd_req_t *requisicao,
+                                           httpd_err_code_t codigo)
+{
+    (void)codigo;
+    httpd_resp_set_status(requisicao, "302 Found");
+    httpd_resp_set_hdr(requisicao, "Location", "http://" IP_PAINEL "/");
+    httpd_resp_set_hdr(requisicao, "Cache-Control", "no-store, max-age=0");
+    return httpd_resp_send(requisicao, "Abrindo o painel...",
+                           HTTPD_RESP_USE_STRLEN);
+}
+
 esp_err_t servidor_web_iniciar(void)
 {
     httpd_handle_t servidor = NULL;
@@ -170,7 +181,9 @@ esp_err_t servidor_web_iniciar(void)
         .method = HTTP_GET,
         .handler = responder_telemetria,
     };
-    erro = httpd_register_uri_handler(servidor, &rota_painel);
+    erro = httpd_register_err_handler(servidor, HTTPD_404_NOT_FOUND,
+                                      redirecionar_portal_cativo);
+    if (erro == ESP_OK) erro = httpd_register_uri_handler(servidor, &rota_painel);
     if (erro == ESP_OK) {
         erro = httpd_register_uri_handler(servidor, &rota_api);
     }

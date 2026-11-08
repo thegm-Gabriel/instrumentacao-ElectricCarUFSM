@@ -81,6 +81,8 @@ esp_err_t servico_ota_autorizar_atualizacao_todos();
 esp_err_t servico_ota_autorizar_atualizacao_satelite(AlvoOta alvo);
 esp_err_t servico_ota_cancelar_atualizacao();
 esp_err_t servico_ota_definir_intervalo_verificacao(uint32_t minutos);
+// Repõe o intervalo do backup SD somente se a chave NVS estiver ausente.
+esp_err_t servico_ota_restaurar_intervalo_se_ausente(uint32_t minutos);
 SituacaoOta servico_ota_obter_situacao();
 const char* servico_ota_nome_estado(EstadoServicoOta estado);
 const char* servico_ota_nome_estado_satelite(EstadoOtaSatelite estado);

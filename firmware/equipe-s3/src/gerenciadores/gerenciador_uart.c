@@ -214,19 +214,6 @@ int gerenciador_uart_receber(void *buffer, size_t capacidade, TickType_t tempo_l
     return recebidos;
 }
 
-esp_err_t gerenciador_uart_limpar_recepcao(void)
-{
-    if (!estado.inicializado) return ESP_ERR_INVALID_STATE;
-    esp_err_t erro = uart_flush_input(UART_TELEMETRIA);
-    if (erro != ESP_OK) {
-        ESP_LOGE(TAG, "Falha ao limpar recepcao: %s", esp_err_to_name(erro));
-        registrar_erro(erro, false);
-    } else {
-        ESP_LOGW(TAG, "Buffer de recepcao descartado");
-    }
-    return erro;
-}
-
 void gerenciador_uart_obter_estatisticas(estatisticas_gerenciador_uart_t *estatisticas)
 {
     if (estatisticas == NULL) return;

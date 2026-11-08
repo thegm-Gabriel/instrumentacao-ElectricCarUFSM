@@ -301,9 +301,12 @@ tentativa em 30 s. Falha do cartão ou queda brusca de energia ainda pode impedi
 a persistência do último evento. Credenciais não são incluídas.
 
 O retrato `/sdcard/configuracao_atual.txt` usa checksum, sequência e arquivo
-temporário recuperável. O odômetro é restaurado automaticamente desse retrato
-somente se a chave correspondente estiver ausente na NVS. Política Wi-Fi,
-intervalos OTA e de relatórios e parâmetros do CSV ficam documentados para
-recuperação manual; senhas não são copiadas ao SD. O retrato é regravado em
-intervalos de 60 s durante a operação normal, portanto um corte de energia pode deixar uma diferença
-de aproximadamente 1 min em relação ao valor mais recente.
+temporário recuperável. Após validar o arquivo, a partida restaura o odômetro,
+a política de conexão Wi-Fi e o intervalo OTA somente quando os dados NVS
+respectivos estiverem ausentes. Intervalos e pausa dos relatórios são aplicados
+antes de iniciar a tarefa de relatórios, que não usa NVS para esses ajustes.
+Nomes das redes e parâmetros fixos do CSV permanecem informativos; senhas não
+são copiadas ao SD, portanto perfis de rede não podem ser recriados a partir
+dele. A regravação ocorre no mínimo 60 s após a última gravação concluída;
+uma falha de escrita permite nova tentativa no ciclo seguinte. Um corte de
+energia pode deixar cerca de 1 min de diferença em relação ao valor mais recente.

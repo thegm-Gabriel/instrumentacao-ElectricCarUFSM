@@ -21,6 +21,17 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Verificar ferramentas e páginas web
+        shell: bash
+        run: |
+          python -m unittest discover -s ferramentas/testes -p 'test_*.py' -v
+          for teste in ferramentas/testes/test_*.js; do node "$teste"; done
+          python firmware/equipe-s3/web/gerar_painel.py
+          python firmware/visitantes-s3/web/gerar_painel.py
+          git diff --exit-code -- \
+            firmware/equipe-s3/src/servicos/painel_web.c \
+            firmware/visitantes-s3/src/servicos/painel_web.c
+
       - name: Ler versões preparadas
         shell: bash
         run: |

@@ -109,8 +109,11 @@ compartilham esse estado.
 
 Use nomes e senhas fictícios nos formulários. A ferramenta não acessa ESPs,
 Google ou redes Wi-Fi, não atualiza firmware e descarta as senhas recebidas.
-A permissão administrativa da prévia aceita um texto fictício não vazio;
-isso permite testar o formulário, sem reproduzir a autenticação do firmware.
+A permissão administrativa do **mestre** na prévia aceita um texto fictício não
+vazio. Para preparar o acesso aos comandos HTTP da Equipe, use a chave de teste
+`00000000000000000000000000000000`, mostrada na barra da prévia e no terminal.
+Ela só vale no simulador; no ESP, a chave real aparece no terminal serial do
+satélite da equipe e permanece guardada na NVS.
 O simulador serve para avaliar a interface e seus estados; UART, SD, tempos
 reais de transmissão e reconexões físicas ainda precisam de teste em bancada.
 
@@ -198,23 +201,36 @@ e validação em bancada têm escopos próprios em [protocolos](protocolos.md).
 
 ## Preparar um release OTA
 
+Para escolher o incremento em um menu no terminal:
+
 ```powershell
-python ferramentas\preparar_release_ota.py --bump patch
+python ferramentas\preparar_release_ota.py
 ```
 
-`--bump` aceita `major`, `minor` ou `patch` (padrão). `--forcar` aceita
+Digite `1` para **patch**, `2` para **minor**, `3` para **major** ou `0` para
+cancelar antes de compilar e modificar arquivos. Uma opção inválida pede nova
+escolha. O menu só aparece em um terminal interativo; para scripts e CI,
+informe `--bump patch`, `--bump minor` ou `--bump major` explicitamente. Esse
+argumento dispensa o menu. `--forcar` aceita
 `mestre-s3`, `equipe-s3`, `visitantes-s3` ou `todos`; `--repositorio` troca o
 destino GitHub no manifesto. Exemplos:
 
 ```powershell
 python ferramentas\preparar_release_ota.py --bump minor
 python ferramentas\preparar_release_ota.py --bump patch --forcar equipe-s3
-python ferramentas\preparar_release_ota.py --repositorio usuario/repositorio
+python ferramentas\preparar_release_ota.py --bump patch --repositorio usuario/repositorio
 ```
 
 O script compara impressões digitais, incrementa a etiqueta e apenas os
 firmwares alterados, compila incrementalmente, confere a versão dentro de cada
 imagem, gera o manifesto e arquiva a saída anterior em `versoes/historico`.
+Antes da comparação, ele regenera os dois painéis web; HTML, CSS, JavaScript,
+geradores Python e o logo compartilhado entram na impressão digital dos
+respectivos satélites. Uma mudança visual só incrementa o firmware afetado.
+Revise e inclua no commit o `painel_web.c` regenerado: o fluxo de publicação
+executa os geradores e recusa a tag se o resultado divergir do arquivo no Git.
+O fluxo também executa os testes Python e JavaScript disponíveis antes de
+compilar os três ESPs.
 O conjunto novo fica em `versoes/saida`. Não apague `versoes/estado_versoes.json`:
 ele informa o último conjunto preparado e pertence ao Git. Para escolher o
 incremento e publicar os quatro anexos, siga [versionamento](versionamento.md).

@@ -345,7 +345,7 @@ typedef struct __attribute__((packed)) {
 
 typedef struct __attribute__((packed)) {
     uint8_t versao_formato;
-    uint8_t indicadores; // bit 0: CPU válida; bit 1: temperatura válida
+    uint8_t indicadores; // bit 0: CPU válida; bit 1: temperatura válida; bit 2: lista de tarefas truncada
     uint8_t clientes_wifi;
     uint8_t tarefas_ativas;
     uint16_t cpu_total_decimos_percentual;

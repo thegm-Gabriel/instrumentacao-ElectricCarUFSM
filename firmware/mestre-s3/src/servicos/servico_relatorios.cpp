@@ -429,6 +429,28 @@ esp_err_t servico_relatorios_iniciar() {
     return ESP_OK;
 }
 
+esp_err_t servico_relatorios_restaurar_configuracao_antes_de_iniciar(
+    const uint32_t intervalos_ms[4], bool pausados) {
+    if (intervalos_ms == nullptr) return ESP_ERR_INVALID_ARG;
+    if (iniciado) return ESP_ERR_INVALID_STATE;
+    for (size_t i = 0; i < configuracoes.size(); ++i) {
+        // Zero desabilita o grupo; um retrato corrompido não deve provocar
+        // relatórios em laço ou um prazo maior que um dia.
+        if (intervalos_ms[i] != 0 &&
+            (intervalos_ms[i] < 100 || intervalos_ms[i] > 86400000)) {
+            return ESP_ERR_INVALID_ARG;
+        }
+    }
+    portENTER_CRITICAL(&trava_configuracao);
+    for (size_t i = 0; i < configuracoes.size(); ++i) {
+        configuracoes[i].intervalo_ms = intervalos_ms[i];
+        configuracoes[i].ultima_exibicao_us = 0;
+    }
+    relatorios_pausados = pausados;
+    portEXIT_CRITICAL(&trava_configuracao);
+    return ESP_OK;
+}
+
 void servico_relatorios_atualizar_dados(
     const DadosTelemetriaVeiculo& dados) {
     portENTER_CRITICAL(&trava_dados);

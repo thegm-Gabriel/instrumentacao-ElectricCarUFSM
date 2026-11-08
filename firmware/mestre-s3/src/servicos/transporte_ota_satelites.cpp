@@ -498,9 +498,9 @@ esp_err_t transporte_ota_satelites_encerrar() {
                        pdMS_TO_TICKS(250)) != pdTRUE) {
             return ESP_ERR_TIMEOUT;
         }
-        const TickType_t limite = xTaskGetTickCount() + pdMS_TO_TICKS(1000);
+        const TickType_t inicio = xTaskGetTickCount();
         while (tarefa_pipeline_handle != nullptr &&
-               xTaskGetTickCount() < limite) {
+               xTaskGetTickCount() - inicio < pdMS_TO_TICKS(1000)) {
             vTaskDelay(pdMS_TO_TICKS(10));
         }
         if (tarefa_pipeline_handle != nullptr) return ESP_ERR_TIMEOUT;

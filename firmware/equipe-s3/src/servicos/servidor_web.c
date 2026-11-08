@@ -8,6 +8,7 @@
 
 #include "nucleo/configuracao.h"
 #include "servicos/diagnostico_sistema.h"
+#include "servicos/autenticacao_comandos.h"
 #include "esp_check.h"
 #include "esp_http_server.h"
 #include "esp_app_desc.h"
@@ -17,6 +18,7 @@
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "gerenciadores/gerenciador_wifi.h"
 #include "gerenciadores/gerenciador_uart.h"
@@ -27,6 +29,10 @@
 #include "servico_ota_satelite.h"
 
 static const char *TAG = "servidor_web";
+// Cada chamada usa uma tarefa de 8 KiB; uma vaga exclusiva preserva as acoes.
+static SemaphoreHandle_t vagas_api_mestre_consultas;
+static SemaphoreHandle_t vaga_api_mestre_acao;
+#define MAXIMO_CONSULTAS_MESTRE_SIMULTANEAS 2
 
 static esp_err_t responder_clientes_wifi(httpd_req_t *requisicao)
 {
@@ -72,6 +78,7 @@ static esp_err_t ler_corpo_wifi(httpd_req_t *requisicao, char corpo[128])
 
 static esp_err_t responder_limite_wifi(httpd_req_t *requisicao)
 {
+    if (!autenticacao_comandos_autorizar(requisicao)) return ESP_OK;
     char corpo[128];
     if (ler_corpo_wifi(requisicao, corpo) != ESP_OK)
         return httpd_resp_send_err(requisicao, HTTPD_400_BAD_REQUEST, "corpo invalido");
@@ -96,6 +103,7 @@ static esp_err_t responder_limite_wifi(httpd_req_t *requisicao)
 
 static esp_err_t responder_desconexao_wifi(httpd_req_t *requisicao)
 {
+    if (!autenticacao_comandos_autorizar(requisicao)) return ESP_OK;
     char corpo[128];
     if (ler_corpo_wifi(requisicao, corpo) != ESP_OK)
         return httpd_resp_send_err(requisicao, HTTPD_400_BAD_REQUEST, "corpo invalido");
@@ -116,6 +124,14 @@ static esp_err_t responder_desconexao_wifi(httpd_req_t *requisicao)
     const esp_err_t erro = gerenciador_wifi_desconectar_cliente(mac);
     if (erro != ESP_OK) return httpd_resp_send_err(requisicao,
         HTTPD_404_NOT_FOUND, "cliente nao esta conectado");
+    httpd_resp_set_type(requisicao, "application/json");
+    return httpd_resp_send(requisicao, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t responder_acesso_comandos(httpd_req_t *requisicao)
+{
+    if (!autenticacao_comandos_autorizar(requisicao)) return ESP_OK;
+    httpd_resp_set_hdr(requisicao, "Cache-Control", "no-store");
     httpd_resp_set_type(requisicao, "application/json");
     return httpd_resp_send(requisicao, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
 }
@@ -1026,7 +1042,7 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
             "\"temperatura_ultimo_erro\":%ld,\"tempo_ativo_ms\":%lu,"
             "\"heap_interno_livre\":%lu,\"heap_interno_minimo\":%lu,"
             "\"psram_total\":%lu,\"psram_livre\":%lu,\"clientes_wifi\":%u,"
-            "\"tarefas_ativas\":%u,\"menor_pilha_livre_bytes\":%lu,"
+            "\"tarefas_ativas\":%u,\"tarefas_truncadas\":%s,\"menor_pilha_livre_bytes\":%lu,"
             "\"motivo_reinicio\":%u}", consulta, (unsigned long)dados.rtt_ms,
             (d->indicadores & 1U) ? "true" : "false",
             (unsigned)d->cpu_total_decimos_percentual,
@@ -1039,6 +1055,7 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
             (unsigned long)d->heap_interno_minimo,
             (unsigned long)d->psram_total, (unsigned long)d->psram_livre,
             (unsigned)d->clientes_wifi, (unsigned)d->tarefas_ativas,
+            (d->indicadores & 4U) ? "true" : "false",
             (unsigned long)d->menor_pilha_livre_bytes,
             (unsigned)d->motivo_reinicio);
     } else if (comando == COMANDO_CONSULTAR_SATELITE &&
@@ -1177,23 +1194,39 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
 static void tarefa_responder_mestre_api(void *argumento)
 {
     httpd_req_t *requisicao = (httpd_req_t *)argumento;
+    SemaphoreHandle_t vagas = requisicao->method == HTTP_POST
+                                  ? vaga_api_mestre_acao
+                                  : vagas_api_mestre_consultas;
     (void)processar_mestre_api(requisicao);
     httpd_req_async_handler_complete(requisicao);
+    xSemaphoreGive(vagas);
     vTaskDelete(NULL);
 }
 
 static esp_err_t responder_mestre_api(httpd_req_t *requisicao)
 {
+    if (requisicao->method == HTTP_POST &&
+        !autenticacao_comandos_autorizar(requisicao)) return ESP_OK;
+    SemaphoreHandle_t vagas = requisicao->method == HTTP_POST
+                                  ? vaga_api_mestre_acao
+                                  : vagas_api_mestre_consultas;
+    if (xSemaphoreTake(vagas, 0) != pdTRUE)
+        return enviar_json_comando(requisicao, "503 Service Unavailable",
+            "{\"ok\":false,\"erro\":\"mestre ocupado; tente novamente\"}");
     httpd_req_t *requisicao_assincrona = NULL;
     esp_err_t erro = httpd_req_async_handler_begin(
         requisicao, &requisicao_assincrona);
-    if (erro != ESP_OK) return erro;
+    if (erro != ESP_OK) {
+        xSemaphoreGive(vagas);
+        return erro;
+    }
     if (xTaskCreate(tarefa_responder_mestre_api, "api_mestre", 8192,
                     requisicao_assincrona, 4, NULL) != pdPASS) {
         (void)enviar_json_comando(
             requisicao_assincrona, "503 Service Unavailable",
             "{\"ok\":false,\"erro\":\"sem recursos para processar comando\"}");
         httpd_req_async_handler_complete(requisicao_assincrona);
+        xSemaphoreGive(vagas);
         return ESP_OK;
     }
     return ESP_OK;
@@ -1313,7 +1346,7 @@ static esp_err_t responder_diagnostico_api(httpd_req_t *requisicao)
         "\"psram_total\":%lu,\"psram_livre\":%lu,\"psram_minima\":%lu,\"psram_maior_bloco\":%lu,"
         "\"dma_livre\":%lu,\"dma_maior_bloco\":%lu,\"cpu_valida\":%s,\"cpu_total_decimos_percentual\":%u,"
         "\"cpu_nucleo_0_decimos_percentual\":%u,\"cpu_nucleo_1_decimos_percentual\":%u,\"cpu_tarefa_pico_decimos_percentual\":%u,"
-        "\"cpu_tarefa_pico\":\"%s\",\"tarefas_ativas\":%lu,\"menor_pilha_livre_bytes\":%lu,\"tarefa_menor_pilha\":\"%s\","
+        "\"cpu_tarefa_pico\":\"%s\",\"tarefas_ativas\":%lu,\"tarefas_truncadas\":%s,\"menor_pilha_livre_bytes\":%lu,\"tarefa_menor_pilha\":\"%s\","
         "\"temperatura_valida\":%s,\"temperatura_centesimos_c\":%ld,\"temperatura_ultimo_erro\":%ld,"
         "\"nome_local\":\"%s\",\"wifi_ssid\":\"%s\",\"wifi_ip\":\"%s\",\"wifi_largura_mhz\":%u,"
         "\"wifi_canal\":%u,\"wifi_potencia_quartos_dbm\":%d,"
@@ -1353,6 +1386,7 @@ static esp_err_t responder_diagnostico_api(httpd_req_t *requisicao)
         (unsigned)sistema.cpu_nucleo_1_decimos_percentual,
         (unsigned)sistema.cpu_tarefa_pico_decimos_percentual,
         tarefa_cpu, (unsigned long)sistema.tarefas_ativas,
+        sistema.tarefas_truncadas ? "true" : "false",
         (unsigned long)sistema.menor_pilha_livre_bytes, tarefa_pilha,
         sistema.temperatura_valida ? "true" : "false",
         (long)sistema.temperatura_centesimos_c,
@@ -1416,10 +1450,24 @@ static esp_err_t responder_redirecionamento_cativo(
 
 esp_err_t servidor_web_iniciar(void)
 {
+    const esp_err_t erro_autenticacao = autenticacao_comandos_iniciar();
+    if (erro_autenticacao != ESP_OK) {
+        ESP_LOGE(TAG, "Autenticacao dos comandos indisponivel: %s",
+                 esp_err_to_name(erro_autenticacao));
+        return erro_autenticacao;
+    }
+    if (vagas_api_mestre_consultas == NULL)
+        vagas_api_mestre_consultas = xSemaphoreCreateCounting(
+            MAXIMO_CONSULTAS_MESTRE_SIMULTANEAS,
+            MAXIMO_CONSULTAS_MESTRE_SIMULTANEAS);
+    if (vaga_api_mestre_acao == NULL)
+        vaga_api_mestre_acao = xSemaphoreCreateCounting(1, 1);
+    if (vagas_api_mestre_consultas == NULL || vaga_api_mestre_acao == NULL)
+        return ESP_ERR_NO_MEM;
     httpd_handle_t servidor = NULL;
     httpd_config_t configuracao = HTTPD_DEFAULT_CONFIG();
     configuracao.server_port = PORTA_HTTP;
-    configuracao.max_uri_handlers = 11;
+    configuracao.max_uri_handlers = 12;
     // Reserva descritores para as demais tarefas de rede do ESP.
     configuracao.max_open_sockets = 10;
     configuracao.lru_purge_enable = true;
@@ -1444,6 +1492,7 @@ esp_err_t servidor_web_iniciar(void)
     const httpd_uri_t rota_clientes_wifi = { .uri = "/api/wifi/clientes", .method = HTTP_GET, .handler = responder_clientes_wifi };
     const httpd_uri_t rota_limite_wifi = { .uri = "/api/wifi/limite", .method = HTTP_POST, .handler = responder_limite_wifi };
     const httpd_uri_t rota_desconexao_wifi = { .uri = "/api/wifi/desconectar", .method = HTTP_POST, .handler = responder_desconexao_wifi };
+    const httpd_uri_t rota_acesso_comandos = { .uri = "/api/comandos/acesso", .method = HTTP_GET, .handler = responder_acesso_comandos };
     erro = httpd_register_err_handler(servidor, HTTPD_404_NOT_FOUND,
                                       responder_redirecionamento_cativo);
     if (erro == ESP_OK) erro = httpd_register_uri_handler(servidor, &rota_painel);
@@ -1457,6 +1506,7 @@ esp_err_t servidor_web_iniciar(void)
     if (erro == ESP_OK) erro = httpd_register_uri_handler(servidor, &rota_clientes_wifi);
     if (erro == ESP_OK) erro = httpd_register_uri_handler(servidor, &rota_limite_wifi);
     if (erro == ESP_OK) erro = httpd_register_uri_handler(servidor, &rota_desconexao_wifi);
+    if (erro == ESP_OK) erro = httpd_register_uri_handler(servidor, &rota_acesso_comandos);
     if (erro != ESP_OK) {
         httpd_stop(servidor);
         ESP_LOGE(TAG, "Inicialização web incompleta; servidor encerrado: %s",

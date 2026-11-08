@@ -1135,6 +1135,29 @@ esp_err_t servico_ota_definir_intervalo_verificacao(uint32_t minutos) {
     return ESP_OK;
 }
 
+esp_err_t servico_ota_restaurar_intervalo_se_ausente(uint32_t minutos) {
+    if (minutos < configuracao::INTERVALO_VERIFICACAO_OTA_MINIMO_MIN ||
+        minutos > configuracao::INTERVALO_VERIFICACAO_OTA_MAXIMO_MIN) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (iniciado) return ESP_ERR_INVALID_STATE;
+    nvs_handle_t armazenamento = 0;
+    const esp_err_t abertura = nvs_open(ESPACO_NVS_OTA, NVS_READONLY,
+                                        &armazenamento);
+    if (abertura == ESP_OK) {
+        uint32_t existente = 0;
+        const esp_err_t consulta = nvs_get_u32(armazenamento, CHAVE_INTERVALO,
+                                               &existente);
+        nvs_close(armazenamento);
+        if (consulta != ESP_ERR_NVS_NOT_FOUND) {
+            return consulta == ESP_OK ? ESP_ERR_INVALID_STATE : consulta;
+        }
+    } else if (abertura != ESP_ERR_NVS_NOT_FOUND) {
+        return abertura;
+    }
+    return salvar_intervalo_verificacao(minutos);
+}
+
 SituacaoOta servico_ota_obter_situacao() {
     if (mutex_estado == nullptr) {
         SituacaoOta inicial{};

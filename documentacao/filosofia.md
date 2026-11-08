@@ -96,10 +96,12 @@ como a UART ou o navegador funcionam.
    conclusão: o painel consulta o estado posterior e mostra etapas, progresso
    e último resultado. Sem resposta, a interface indica o prazo esgotado.
 
-O AP da Equipe não adiciona autenticação própria às rotas HTTP de comando.
-Quem está nessa rede consegue chamar a API; operações sensíveis ainda passam
-pelas validações e senhas previstas pelo serviço do mestre. Consulte a tabela
-de rotas e corpos em [satélites](satelites.md).
+O AP da Equipe mantém a senha Wi-Fi compartilhada com o AP dos visitantes, mas
+as ações HTTP exigem uma chave administrativa própria, gerada na primeira
+partida e guardada na NVS. A chave aparece no terminal serial do ESP da Equipe;
+o navegador a guarda apenas durante a sessão. Consultas e telemetria continuam
+legíveis sem essa chave. As validações do mestre seguem aplicáveis. Consulte a
+tabela de rotas e corpos em [satélites](satelites.md).
 
 ## Sequência: falha e observabilidade
 

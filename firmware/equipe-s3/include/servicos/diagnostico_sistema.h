@@ -15,6 +15,7 @@ typedef struct {
     uint16_t cpu_tarefa_pico_decimos_percentual;
     char cpu_tarefa_pico[configMAX_TASK_NAME_LEN];
     uint32_t tarefas_ativas;
+    bool tarefas_truncadas;
     uint32_t menor_pilha_livre_bytes;
     char tarefa_menor_pilha[configMAX_TASK_NAME_LEN];
     bool temperatura_valida;

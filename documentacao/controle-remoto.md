@@ -104,7 +104,8 @@ atuação separado e retorno de estado medido. Antes de habilitá-la será neces
 definir autenticação/autorização, exclusividade e validade temporal dos pedidos,
 comportamento na perda de enlace, intertravamentos por velocidade real para
 inversão de sentido, limites físicos e confirmação de parada. O AP da Equipe
-atualmente não autentica individualmente os operadores. Não basta mudar o campo
+exige uma chave administrativa para ações HTTP, mas não identifica
+individualmente os operadores. Não basta mudar o campo
 `atuacao_habilitada` para tornar este mecanismo adequado a dirigir o veículo.
 
 ## Prévia e validação

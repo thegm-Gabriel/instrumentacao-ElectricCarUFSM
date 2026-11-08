@@ -64,6 +64,22 @@ negado, erro interno e timeout. O destinatário valida cabeçalho, tamanho e CRC
 antes de interpretar a carga. O destinatário responde quando uma operação não
 é suportada.
 
+### Compatibilidade anunciada
+
+O protocolo v1 ainda transporta máscaras `capacidades` na resposta de versão,
+na consulta específica de capacidades e na confirmação do satélite. A Equipe
+usa a máscara do mestre para habilitar ações e decidir quais estados consultar.
+O mestre usa bits da confirmação de cada satélite para verificar OTA por UART
+e escolher blocos de 4096 ou 2048 bytes. Portanto, esses campos são parte do
+contrato **em uso**, mesmo que não sejam informação útil para quem lê o painel.
+Uma resposta `NAO_SUPORTADO` continua sendo a confirmação explícita de que um
+comando não existe no firmware consultado.
+
+Uma eventual retirada das máscaras exige uma nova versão do protocolo de
+comandos/ACK, atualização coordenada dos três firmwares e uma regra explícita
+para o tamanho de bloco OTA em pares de versões mistas. Até essa migração, os
+campos permanecem internos e não devem aparecer como métricas na interface.
+
 A resposta detalhada de estado OTA usa o formato 2 e informa separadamente o
 mestre, o satélite da equipe e o satélite de visitantes. A estrutura antiga foi
 mantida para permitir a atualização gradual dos dispositivos.

@@ -16,6 +16,7 @@ depois o guia do componente que pretende operar ou modificar.
 | Como o sistema se divide | [Arquitetura](arquitetura.md) | Fluxos, camadas, inicialização, tarefas, supervisão e recuperação. |
 | Por que o código foi dividido assim | [Filosofia e fluxos](filosofia.md) | Responsabilidade de cada camada, sequência de leitura/comando/falha e regras para modificar o sistema. |
 | Sensores e ligações | [Pinagem](pinagem.md) | Todos os GPIOs, alimentação, níveis lógicos e barramentos. |
+| Projetos de placa | [Hardware e revisões](hardware.md) | Inventário dos projetos KiCad e limite de identificação da revisão montada. |
 | Controlador principal | [Firmware mestre](mestre.md) | Aquisição, odômetro, telemetria, SD, terminal, Wi-Fi, diagnóstico, OLED e sinalização. |
 | Painéis locais | [Satélites e APIs](satelites.md) | Equipe, visitantes, rotas HTTP, comandos e comportamento sem enlace. |
 | Formato dos dados | [Protocolos](protocolos.md) | Pacotes UART de telemetria, ACK, comandos e OTA. |
@@ -68,8 +69,9 @@ operação concluída: o painel acompanha o estado posterior de OTA e Google.
 Cada pasta de `firmware` é um projeto PlatformIO com ESP-IDF. O mestre usa
 ESP32-S3-WROOM-1-N16R8, com 16 MB de flash e 8 MB de PSRAM; cada satélite usa
 4 MB de flash com duas partições OTA de aplicação.
-Os arquivos sob `hardware` registram referências físicas; confira o conteúdo
-disponível antes de tomar um esquema como revisão validada da montagem.
+Os arquivos sob `hardware` registram referências físicas; consulte o
+[inventário das revisões](hardware.md) antes de tomar um esquema como revisão
+validada da montagem.
 
 ## Compilar e gravar pela primeira vez
 
@@ -98,7 +100,7 @@ o cabeçalho local de credenciais.
 ## Acesso aos painéis
 
 - Na rede `UFSM-Carro-Equipe`, abra `http://192.168.4.1/` por HTTP. As rotas
-  `/painel`, `/diagnostico` e `/mestre` entregam a mesma interface com seis
+  `/painel`, `/diagnostico` e `/mestre` entregam a mesma interface com sete
   páginas: **Telemetria, Comandos, Controle, ESP32 — Mestre, ESP32 — Equipe,
   ESP32 — Visitantes e Sobre**. Comandos reúne Wi-Fi, OTA e Google; Controle
   apresenta os pedidos de marcha, limites e parada remota, ainda sem atuação

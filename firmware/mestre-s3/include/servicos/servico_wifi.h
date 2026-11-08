@@ -72,6 +72,10 @@ esp_err_t servico_wifi_definir_conexao_automatica(bool habilitar,
 esp_err_t servico_wifi_definir_politica(const PoliticaConexaoWifi& politica,
                                         const char* senha_permissao);
 bool servico_wifi_politica_valida(const PoliticaConexaoWifi& politica);
+// Usado na partida: repõe apenas a política quando não há perfil NVS.
+// SSIDs do backup SD não contêm senhas e não são recriados como perfis.
+esp_err_t servico_wifi_restaurar_politica_se_ausente(
+    const PoliticaConexaoWifi& politica);
 
 // Retorna um retrato sem aguardar uma conexão ou alteração em andamento.
 ResumoWifi servico_wifi_obter_resumo();

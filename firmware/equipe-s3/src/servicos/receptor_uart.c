@@ -160,6 +160,10 @@ static resultado_validacao_t validar_e_salvar_pacote(const pacote_telemetria_t *
                     true, dados_compartilhados.sequencia, pacote->sequencia, &perdidos);
             if (sequencia == SEQUENCIA_TELEMETRIA_DUPLICADA) {
                 dados_compartilhados.pacotes_duplicados++;
+                xSemaphoreGive(mutex_dados);
+                // Confirma a retransmissao sem renovar a idade da amostra.
+                enviar_confirmacao(pacote);
+                return PACOTE_CORRETO;
             } else if (sequencia == SEQUENCIA_TELEMETRIA_COM_PERDA) {
                 dados_compartilhados.pacotes_perdidos += perdidos;
             } else if (sequencia == SEQUENCIA_TELEMETRIA_FORA_DE_ORDEM) {
@@ -323,6 +327,7 @@ static void tarefa_recepcao_uart(void *argumento)
                     parser.quadro, parser.ultimo_tamanho);
             }
         }
+        servico_ota_satelite_verificar_timeout();
     }
 }
 

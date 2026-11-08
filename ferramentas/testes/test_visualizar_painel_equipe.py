@@ -10,7 +10,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, build_opener, ProxyHandler
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from visualizar_painel_equipe import SimuladorEquipe, criar_servidor, GERADOR
+from visualizar_painel_equipe import SimuladorEquipe, criar_servidor, GERADOR, AUTORIZACAO_PREVIA
 
 
 class SimuladorTests(unittest.TestCase):
@@ -186,8 +186,12 @@ class HttpTests(unittest.TestCase):
         self.server.server_close()
         self.worker.join(timeout=2)
 
-    def request(self, path, body=None):
+    def request(self, path, body=None, authorized=True):
         request = Request(self.base+path, data=body.encode() if body is not None else None)
+        if authorized and (path == "/api/comandos/acesso" or
+                           (body is not None and (path.startswith("/api/mestre?") or
+                                                  path.startswith("/api/wifi/")))):
+            request.add_header("Authorization", AUTORIZACAO_PREVIA)
         try:
             response = self.client.open(request, timeout=5)
         except HTTPError as error:
@@ -221,6 +225,9 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(self.request("/nao-existe")[0], 404)
 
     def test_comandos_http_e_cenarios(self):
+        self.assertEqual(self.request("/api/comandos/acesso", authorized=False)[0], 401)
+        self.assertEqual(self.request("/api/comandos/acesso")[0], 200)
+        self.assertEqual(self.request("/api/mestre?consulta=sincronizar_google", "", authorized=False)[0], 401)
         status, data = self.request("/api/mestre?consulta=sincronizar_google", "")
         self.assertEqual(status, 200)
         self.assertEqual(data["sincronizacao_id"], 1)

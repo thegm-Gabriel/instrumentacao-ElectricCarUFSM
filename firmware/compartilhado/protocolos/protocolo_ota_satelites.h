@@ -74,18 +74,6 @@ typedef struct __attribute__((packed)) {
     (OTA_SATELITE_TAMANHO_CABECALHO + OTA_SATELITE_TAMANHO_MAXIMO_CARGA + \
      OTA_SATELITE_TAMANHO_CRC)
 
-typedef enum {
-    OTA_SATELITE_PARSER_AGUARDANDO = 0,
-    OTA_SATELITE_PARSER_QUADRO_COMPLETO = 1,
-    OTA_SATELITE_PARSER_QUADRO_INVALIDO = 2,
-} resultado_parser_ota_satelite_t;
-
-typedef struct {
-    uint8_t quadro[OTA_SATELITE_TAMANHO_MAXIMO_QUADRO];
-    size_t quantidade;
-    size_t tamanho_esperado;
-} parser_ota_satelite_t;
-
 #ifdef __cplusplus
 static_assert(sizeof(cabecalho_quadro_ota_satelite_t) == 18,
               "O cabeçalho OTA deve ter 18 bytes");
@@ -163,53 +151,4 @@ static inline size_t protocolo_ota_satelites_montar_quadro(
         destino, tamanho - OTA_SATELITE_TAMANHO_CRC);
     memcpy(destino + tamanho - OTA_SATELITE_TAMANHO_CRC, &crc, sizeof(crc));
     return tamanho;
-}
-
-static inline resultado_parser_ota_satelite_t protocolo_ota_satelites_processar_byte(
-    parser_ota_satelite_t *parser, uint8_t byte)
-{
-    if (parser == NULL) return OTA_SATELITE_PARSER_QUADRO_INVALIDO;
-    if (parser->quantidade == 0) {
-        if (byte == OTA_SATELITE_INICIO_1) parser->quadro[parser->quantidade++] = byte;
-        return OTA_SATELITE_PARSER_AGUARDANDO;
-    }
-    if (parser->quantidade == 1) {
-        if (byte == OTA_SATELITE_INICIO_2) {
-            parser->quadro[parser->quantidade++] = byte;
-        } else if (byte == OTA_SATELITE_INICIO_1) {
-            parser->quadro[0] = byte;
-        } else {
-            parser->quantidade = 0;
-        }
-        return OTA_SATELITE_PARSER_AGUARDANDO;
-    }
-
-    if (parser->quantidade >= sizeof(parser->quadro)) {
-        parser->quantidade = 0;
-        parser->tamanho_esperado = 0;
-        return OTA_SATELITE_PARSER_QUADRO_INVALIDO;
-    }
-    parser->quadro[parser->quantidade++] = byte;
-    if (parser->quantidade == OTA_SATELITE_TAMANHO_CABECALHO) {
-        cabecalho_quadro_ota_satelite_t cabecalho;
-        memcpy(&cabecalho, parser->quadro, sizeof(cabecalho));
-        if (cabecalho.versao_protocolo != OTA_SATELITE_VERSAO_PROTOCOLO ||
-            !protocolo_ota_satelites_tipo_valido(cabecalho.tipo) ||
-            cabecalho.tamanho_carga > OTA_SATELITE_TAMANHO_MAXIMO_CARGA) {
-            parser->quantidade = 0;
-            parser->tamanho_esperado = 0;
-            return OTA_SATELITE_PARSER_QUADRO_INVALIDO;
-        }
-        parser->tamanho_esperado =
-            protocolo_ota_satelites_tamanho_quadro(cabecalho.tamanho_carga);
-    }
-    if (parser->tamanho_esperado == 0 || parser->quantidade < parser->tamanho_esperado)
-        return OTA_SATELITE_PARSER_AGUARDANDO;
-
-    const int valido = protocolo_ota_satelites_validar_quadro(
-        parser->quadro, parser->tamanho_esperado);
-    parser->quantidade = 0;
-    parser->tamanho_esperado = 0;
-    return valido ? OTA_SATELITE_PARSER_QUADRO_COMPLETO
-                  : OTA_SATELITE_PARSER_QUADRO_INVALIDO;
 }

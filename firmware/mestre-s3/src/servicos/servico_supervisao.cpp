@@ -26,7 +26,6 @@ struct RegistroModulo {
 std::array<RegistroModulo, static_cast<size_t>(ModuloSupervisionado::Quantidade)> modulos{};
 portMUX_TYPE trava = portMUX_INITIALIZER_UNLOCKED;
 TaskHandle_t tarefa_supervisao = nullptr;
-uint32_t menor_pilha_supervisao = 0;
 QueueHandle_t fila_recuperacao = nullptr;
 TaskHandle_t tarefa_recuperacao = nullptr;
 
@@ -65,14 +64,7 @@ RegistroModulo* localizar(ModuloSupervisionado modulo) {
 void tarefa(void*) {
     while (true) {
         vTaskDelay(pdMS_TO_TICKS(INTERVALO_VERIFICACAO_MS));
-        const uint32_t pilha_supervisao = uxTaskGetStackHighWaterMark(nullptr);
         const uint32_t agora_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
-        portENTER_CRITICAL(&trava);
-        if (menor_pilha_supervisao == 0 ||
-            pilha_supervisao < menor_pilha_supervisao) {
-            menor_pilha_supervisao = pilha_supervisao;
-        }
-        portEXIT_CRITICAL(&trava);
         for (auto& registro : modulos) {
             AcaoRecuperacaoModulo acao = nullptr;
             const char* nome = nullptr;
@@ -260,19 +252,4 @@ EstadoModuloSupervisionado servico_supervisao_obter_estado(
     copia.idade_ultimo_pulso_ms = agora_ms - registro->instante_ultimo_pulso_ms;
     portEXIT_CRITICAL(&trava);
     return copia;
-}
-
-uint32_t servico_supervisao_obter_menor_pilha_livre() {
-    uint32_t menor = 0;
-    portENTER_CRITICAL(&trava);
-    if (menor_pilha_supervisao != 0) menor = menor_pilha_supervisao;
-    for (const auto& registro : modulos) {
-        const uint32_t bytes = registro.estado.bytes_pilha_livres;
-        if (registro.estado.registrado && bytes != 0 &&
-            (menor == 0 || bytes < menor)) {
-            menor = bytes;
-        }
-    }
-    portEXIT_CRITICAL(&trava);
-    return menor;
 }
