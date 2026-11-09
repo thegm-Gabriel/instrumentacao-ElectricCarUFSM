@@ -2,8 +2,8 @@
 
 [Índice da documentação](README.md)
 
-Este guia explica **por que** o software foi dividido dessa forma e o caminho
-percorrido pelos dados. Os valores de GPIO, limites e campos binários devem ser
+Este guia explica **por que** o software do NEXUS foi dividido dessa forma e
+o caminho percorrido pelos dados. Os valores de GPIO, limites e campos binários devem ser
 conferidos nos cabeçalhos apontados em [pinagem](pinagem.md) e
 [protocolos](protocolos.md); esta página descreve as regras de integração.
 

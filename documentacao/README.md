@@ -1,9 +1,10 @@
-# Instrumentação do carro elétrico — documentação
+# NEXUS — documentação da instrumentação e telemetria
 
-Este é o ponto de entrada da documentação do sistema de instrumentação e
-telemetria do **Carro Elétrico UFSM-CS**. O projeto tem um
-ESP32-S3 mestre para aquisição, diagnóstico, registro e atualização, além de
-dois ESP32-S3 satélites que apresentam os dados à equipe e aos visitantes.
+O **Carro Elétrico UFSM-CS** é o veículo do projeto. **NEXUS** é seu sistema de
+instrumentação, telemetria e controle experimental. O sistema reúne os
+ESP32-S3 e os painéis que medem, registram e apresentam seu funcionamento.
+Um ESP32-S3 mestre cuida da aquisição, diagnóstico, registro e atualização;
+dois satélites apresentam os dados à equipe e aos visitantes.
 Os guias descrevem o comportamento implementado, o modo de operação e os
 limites conhecidos. O código e os cabeçalhos de configuração são a referência
 final para constantes e contratos binários. Leia primeiro a visão geral e

@@ -2,7 +2,8 @@
   <img src="firmware/compartilhado/web/logo_carro_eletrico.png" alt="Símbolo do Carro Elétrico UFSM-CS" width="210">
   <h1>Carro Elétrico UFSM-CS</h1>
   <p><strong>Um laboratório em movimento.</strong></p>
-  <p>Instrumentação, telemetria e controle experimental · Universidade Federal de Santa Maria — Campus Cachoeira do Sul</p>
+  <p><strong>NEXUS</strong> · sistema de instrumentação, telemetria e controle experimental do veículo</p>
+  <p>Universidade Federal de Santa Maria · Campus Cachoeira do Sul</p>
   <p>
     <a href="#o-projeto">O projeto</a> ·
     <a href="#o-sistema">O sistema</a> ·
@@ -20,15 +21,17 @@ acionamentos, programação, energia, medição e mecânica. Construí-lo e test
 permite que estudantes confrontem hipóteses com dados reais e entendam como as
 decisões de uma área afetam as demais.
 
-A instrumentação torna esse aprendizado observável e compartilhável. A equipe
-acompanha leituras e falhas durante os testes; visitantes podem conhecer o
-movimento do veículo por um painel de leitura simples. O projeto também busca
-aproximar a universidade da comunidade e despertar interesse pela engenharia e
-pela mobilidade elétrica.
+O **NEXUS** reúne a instrumentação, a telemetria e o controle experimental do
+carro. O nome vem do latim *nexus* (“ligação” ou “vínculo”) e expressa seu
+papel de integrar sensores, módulos e informações em uma visão acessível do
+veículo. A equipe observa leituras e falhas durante os testes; visitantes
+podem conhecer o movimento do carro por um painel de leitura simples. O
+projeto também busca aproximar a universidade da comunidade e despertar
+interesse pela engenharia e pela mobilidade elétrica.
 
 ## O sistema
 
-Três ESP32-S3 dividem aquisição, operação e apresentação dos dados:
+No NEXUS, três ESP32-S3 dividem aquisição, operação e apresentação dos dados:
 
 ```mermaid
 flowchart LR

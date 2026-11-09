@@ -2,7 +2,7 @@
 
 [Índice da documentação](README.md)
 
-Este guia descreve o código atual de `firmware/equipe-s3` e
+Este guia descreve os dois satélites do NEXUS, em `firmware/equipe-s3` e
 `firmware/visitantes-s3`. Ambos são projetos PlatformIO/ESP-IDF independentes,
 com partições OTA em flash de 4 MB. Os contratos de telemetria, comandos e OTA
 ficam em `firmware/compartilhado`.
