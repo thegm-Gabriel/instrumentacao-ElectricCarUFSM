@@ -10,13 +10,24 @@ O sistema possui um mestre responsável pelos sensores e dois satélites dedicad
 clientes Wi-Fi e permite atualizar ou reiniciar uma interface sem interromper as
 demais funções do veículo.
 
-```text
-                    ┌─ UART bidirecional ──► painel da equipe
-sensores ─► mestre ─┤
-                    ├─ UART bidirecional ──► painel de visitantes
-                    ├─ SPI ────────────────► cartão SD
-                    └─ Wi-Fi temporário ───► OTA e Google
+```mermaid
+flowchart LR
+    S["Sensores e encoders"] --> M["ESP32-S3 Mestre"]
+    M <-->|UART| E["ESP32-S3 Equipe"]
+    M <-->|UART| V["ESP32-S3 Visitantes"]
+    E <-->|Wi-Fi / HTTP| PE["Navegador · painel técnico"]
+    V <-->|Wi-Fi / HTTP| PV["Navegador · painel público"]
+    M <-->|SPI2| SD["microSD · histórico e logs"]
+    M <-->|I²C| IO["MPU6050 e OLED"]
+    M <-->|Wi-Fi / HTTPS| REDE["Releases OTA e Google"]
 ```
+
+As setas duplas representam troca de dados nos dois sentidos, não duas redes
+compartilhadas: o mestre tem uma UART independente para cada satélite. A
+telemetria segue do mestre para os satélites; ACK, respostas a comandos e
+confirmações de OTA voltam pelo respectivo enlace. O painel se comunica por
+Wi-Fi com seu próprio satélite, não diretamente com o mestre. Veja
+[conceitos e periféricos](conceitos.md) para os termos do diagrama.
 
 ## Responsabilidades
 
@@ -42,7 +53,9 @@ Nos satélites:
 
 ## Fluxos de dados
 
-A aquisição produz um modelo em unidades de engenharia. O serviço de telemetria
+A aquisição produz um conjunto de leituras, com valores físicos nas unidades
+usadas pelo painel quando disponíveis, além de indicar quais leituras são
+válidas. O serviço de telemetria
 o converte para o protocolo compacto e enfileira uma cópia para cada UART. Os
 satélites só substituem o retrato publicado depois de validar cabeçalho, tamanho,
 versão e CRC. Eles devolvem ACK de telemetria e respostas a comandos e OTA pelo
@@ -168,7 +181,7 @@ Os satélites devolvem uma confirmação curta para cada quadro válido. O servi
 telemetria mede, separadamente, RTT atual, médio e máximo e a idade da última
 resposta dos módulos da equipe e dos visitantes.
 
-Na OTA dos satélites, HTTPS e UART formam um pipeline produtor–consumidor. Três
+Na OTA dos satélites, download HTTPS e envio UART avançam em paralelo. Três
 buffers de 4 KiB são alocados uma única vez, preferencialmente na PSRAM, e
 reutilizados durante toda a execução. O callback HTTP somente preenche e enfileira
 blocos; uma tarefa persistente monta o quadro em RAM interna, transmite e aguarda
@@ -196,7 +209,8 @@ Os gerenciadores retornam `esp_err_t`. O código chamador deve sempre verificar 
 resultado antes de usar os dados ou avançar para a próxima etapa.
 
 `gerenciador_contador_pulsos` mantém duas instâncias genéricas do periférico PCNT
-e conta as quatro transições de cada par A/B. Os dispositivos
+e conta as quatro transições de cada par A/B, sem identificar o sentido de
+rotação na configuração atual. Os dispositivos
 `encoder_incremental` representam os encoders físicos esquerdo e direito e
 conhecem pinos, P/R e contagens por giro. `servico_odometro` aplica a geometria e
 a relação mecânica de cada roda, usa a média das duas distâncias para calcular

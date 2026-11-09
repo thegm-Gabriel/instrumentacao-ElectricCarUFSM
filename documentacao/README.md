@@ -14,6 +14,7 @@ depois o guia do componente que pretende operar ou modificar.
 | Assunto | Guia | O que contém |
 |---|---|---|
 | Como o sistema se divide | [Arquitetura](arquitetura.md) | Fluxos, camadas, inicialização, tarefas, supervisão e recuperação. |
+| Siglas e recursos do ESP32-S3 | [Conceitos e periféricos](conceitos.md) | Significado dos termos técnicos, uso dos periféricos e vantagens neste projeto. |
 | Por que o código foi dividido assim | [Filosofia e fluxos](filosofia.md) | Responsabilidade de cada camada, sequência de leitura/comando/falha e regras para modificar o sistema. |
 | Sensores e ligações | [Pinagem](pinagem.md) | Todos os GPIOs, alimentação, níveis lógicos e barramentos. |
 | Projetos de placa | [Hardware e revisões](hardware.md) | Inventário dos projetos KiCad e limite de identificação da revisão montada. |
@@ -21,20 +22,28 @@ depois o guia do componente que pretende operar ou modificar.
 | Painéis locais | [Satélites e APIs](satelites.md) | Equipe, visitantes, rotas HTTP, comandos e comportamento sem enlace. |
 | Formato dos dados | [Protocolos](protocolos.md) | Pacotes UART de telemetria, ACK, comandos e OTA. |
 | Pedidos de condução futuros | [Controle remoto](controle-remoto.md) | Marcha, limites e parada remota preparados no mestre, sem atuação física. |
-| Atualizações | [OTA e releases](ota.md) | Manifesto, primeira gravação, autorização, publicação e rollback. |
-| Números de versão | [Versionamento](versionamento.md) | Major, minor, patch, versões independentes e preparação/publicação. |
+| Versões, publicação e atualização | [OTA e releases](ota.md) | Major/minor/patch, versões independentes, preparador, tag, GitHub Release, autorização e rollback. |
 | Comandos de desenvolvimento | [Ferramentas](ferramentas.md) | Geradores das páginas e QR, segredos, compilação, testes e scripts de release. |
 | Histórico remoto | [Google Drive e Sheets](google.md) | CSV, Apps Script, credenciais, envio e recuperação. |
 
 ## Visão do sistema
 
-```text
-sensores, encoders ──► ESP32-S3 mestre ◄──UART──► satélite equipe ──Wi-Fi──► painel
-                           │          ◄──UART──► satélite visitantes ─Wi-Fi─► painel
-                           ├──SPI2──► microSD (CSV e logs)
-                           ├──I²C───► MPU6050 e OLED
-                           └──Wi-Fi temporário──► releases OTA e Google
+```mermaid
+flowchart LR
+    S["Sensores e encoders"] --> M["ESP32-S3 Mestre"]
+    M <-->|UART| E["ESP32-S3 Equipe"]
+    M <-->|UART| V["ESP32-S3 Visitantes"]
+    E <-->|Wi-Fi / HTTP| PE["Navegador · painel técnico"]
+    V <-->|Wi-Fi / HTTP| PV["Navegador · painel público"]
+    M <-->|SPI2| SD["microSD · CSV e logs"]
+    M <-->|I²C| IO["MPU6050 e OLED"]
+    M <-->|Wi-Fi / HTTPS| REDE["Releases OTA e Google"]
 ```
+
+As setas duplas indicam comunicação nos dois sentidos. Pela UART, o mestre
+envia telemetria e blocos de atualização; os satélites devolvem confirmações
+e respostas. O navegador também envia consultas HTTP ao ESP da rede à qual
+está conectado e recebe as páginas e os dados.
 
 O mestre publica telemetria normal a 4 Hz. Cada satélite valida o quadro,
 mantém o último retrato e devolve um ACK. A equipe também pode consultar e

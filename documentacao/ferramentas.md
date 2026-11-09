@@ -1,6 +1,6 @@
 # Ferramentas de desenvolvimento e publicação
 
-[Índice da documentação](README.md) · [Versionamento](versionamento.md)
+[Índice da documentação](README.md) · [Versionamento e OTA](ota.md)
 
 Execute os comandos abaixo **na raiz do repositório**. Os scripts de operação
 usam Python, os testes dos painéis usam Node.js e as compilações usam
@@ -233,7 +233,8 @@ O fluxo também executa os testes Python e JavaScript disponíveis antes de
 compilar os três ESPs.
 O conjunto novo fica em `versoes/saida`. Não apague `versoes/estado_versoes.json`:
 ele informa o último conjunto preparado e pertence ao Git. Para escolher o
-incremento e publicar os quatro anexos, siga [versionamento](versionamento.md).
+incremento, criar a tag, acompanhar o workflow e instalar os três alvos,
+siga o [procedimento de release e OTA](ota.md#escolher-a-versão).
 
 ## Gerar um manifesto manualmente
 

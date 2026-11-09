@@ -9,14 +9,14 @@ conferidos nos cabeçalhos apontados em [pinagem](pinagem.md) e
 
 ## Fronteiras e responsabilidades
 
-| Parte | Conhece | Não deve decidir |
+| Parte | Responsabilidade | Vantagem da separação |
 |---|---|---|
-| `nucleo` do mestre | Configuração da placa e políticas constantes | Estado de periféricos em execução. |
-| `gerenciadores` | ESP-IDF, drivers, filas e acesso físico | Significado de uma leitura do veículo. |
-| `dispositivos` | Componente físico, calibração e conversão local | HTTP, Google ou apresentação. |
-| `servicos` | Regras da aplicação, estados e recuperação | Detalhes de interface de um cliente web. |
-| `main.cpp` / `main.c` | Ordem de partida e composição dos serviços | Lógica duplicada de driver ou protocolo. |
-| `firmware/compartilhado` | Formatos UART e serviços comuns aos satélites | Política exclusiva de um painel. |
+| `nucleo` do mestre | Define pinos, limites e políticas estáticas. | Ajustes da placa ficam localizados, sem espalhar números pelo firmware. |
+| `gerenciadores` | Configuram e operam drivers, filas e periféricos do ESP-IDF. | Um serviço pode trocar o modo de acesso ao hardware sem reescrever as regras do veículo. |
+| `dispositivos` | Interpretam cada componente físico e sua conversão local. | Calibração ou substituição de sensor não precisa alterar HTTP, OTA ou os painéis. |
+| `servicos` | Combinam leituras, comandos, estados e recuperação. | O mesmo resultado atende terminal, logs e páginas, sem três implementações da regra. |
+| `main.cpp` / `main.c` | Inicializam componentes na ordem necessária e ligam os serviços. | A composição fica visível em um lugar e evita que módulos se inicializem mutuamente. |
+| `firmware/compartilhado` | Define formatos UART e serviços comuns. | Os três firmwares compilam contra o mesmo contrato, reduzindo divergências entre versões. |
 
 O mestre é dono da aquisição, do odômetro, dos registros no SD e da decisão de
 OTA. Cada satélite é dono do seu ponto de acesso, do servidor HTTP e do último
@@ -31,33 +31,55 @@ circulares para fazer um botão ou relatório funcionar. O serviço do simulador
 por exemplo, produz o mesmo modelo de telemetria dos sensores reais, sem saber
 como a UART ou o navegador funcionam.
 
+Essa direção de dependências facilita localizar falhas: uma leitura incoerente
+começa a ser investigada no dispositivo e na aquisição; um valor correto no
+terminal mas errado no navegador aponta para serialização, transporte ou
+apresentação. Também permite testar protocolos sem ligar sensores e mudar a
+interface sem tocar nos drivers. O callback é registrado por quem compõe os
+serviços, de modo que dois módulos não precisem incluir os cabeçalhos um do
+outro. Veja o significado dos termos no [glossário](conceitos.md).
+
 ## Regras usadas na implementação
 
 1. **Um responsável por recurso.** O serviço de registro é o único escritor dos
    CSVs e logs no SD; o serviço de enlace administra as UARTs do mestre; o
    serviço OTA coordena autorização, download e escolha de partições. Outros
-   módulos enviam pedidos ou retratos por filas e interfaces públicas.
+   módulos enviam pedidos ou conjuntos de leituras por filas e interfaces
+   públicas. Isso evita duas tarefas gravando no mesmo arquivo, disputando a
+   porta serial ou tentando iniciar duas atualizações ao mesmo tempo.
 2. **Aquisição não espera rede ou disco.** O retrato do veículo é publicado a
    cada 250 ms em operação normal. A cópia histórica é reduzida a 1 Hz e
    enfileirada. HTTPS, FAT, navegadores e apresentação têm seu próprio tempo de
    execução. Durante OTA a taxa UART pode ser reduzida conforme configuração.
+   Assim, um cartão lento ou uma conexão instável não prende a leitura dos
+   sensores; a fila absorve atrasos breves e seus limites tornam visível a
+   perda de dados quando o destino não acompanha a produção.
 3. **Falha é informação, não zero.** O protocolo contém campos que ainda não
    possuem sensor real. A interface usa validade, idade e origem simulada para
    não transformar ausência em uma medição aparente. O painel distingue comando
-   aceito, execução em andamento e resultado observado depois.
+   aceito, execução em andamento e resultado observado depois. Isso impede que
+   uma leitura ausente pareça zero ou que uma resposta de recebimento pareça
+   conclusão de OTA ou sincronização.
 4. **Estados explícitos e erros preservados.** Gerenciadores retornam o
    `esp_err_t` original. Serviços classificam recuperação ou degradação;
    apresentação lê o diagnóstico já agregado. Inicializações com várias etapas
    desfazem recursos criados se uma etapa falhar. Uma chamada concluída pode ser
-   repetida sem criar tarefas ou drivers duplicados.
+   repetida sem criar tarefas ou drivers duplicados. Preservar o erro permite
+   distinguir, por exemplo, uma falha do barramento de um sensor ausente;
+   desfazer uma partida incompleta evita deixar recursos ocupados na tentativa
+   seguinte.
 5. **Repetição segura.** Quadros UART têm versão, tamanho e integridade. Um
    comando com o mesmo identificador recebe a resposta memorizada quando
    reaparece, evitando executar duas vezes uma ação com efeito colateral. Blocos
    OTA usam sessão, sequência e deslocamento para rejeitar repetição indevida.
+   A comunicação pode tentar novamente após perda de resposta sem duplicar um
+   pedido de operação ou gravar o mesmo bloco no lugar errado.
 6. **Memória conforme o uso.** Buffers DMA e quadros UART permanecem em memória
    compatível com os drivers. A PSRAM pode guardar histórico de diagnóstico e
    buffers reutilizados de download OTA; há caminho reduzido em RAM interna
    quando ela não está disponível. Não se aloca um novo bloco a cada amostra.
+   Isso reduz fragmentação e mantém RAM interna disponível para tarefas e DMA,
+   inclusive durante HTTPS e gravação no SD.
 7. **Configuração e segredo têm destinos distintos.** Limites físicos ficam em
    cabeçalhos `configuracao_*.h`; preferências persistentes ficam na NVS.
    `segredos_ota.h` é local e ignorado pelo Git. O retrato de configuração no SD
@@ -65,13 +87,14 @@ como a UART ou o navegador funcionam.
    preferência de conexão automática e o intervalo OTA se os respectivos dados
    NVS estiverem ausentes. Também repõe os intervalos e a pausa dos relatórios
    antes de iniciar esse serviço. Nomes de redes são informativos e não recriam
-   perfis sem credenciais.
+   perfis sem credenciais. A divisão permite recuperar parâmetros após limpeza
+   da NVS sem copiar senhas para o cartão ou publicar credenciais no repositório.
 
 ## Sequência: leitura até as duas páginas
 
 1. Encoders, ADC e MPU6050 produzem leituras no mestre. O odômetro calcula
    velocidade e percurso; a origem simulada, quando ativada, preenche o mesmo
-   modelo em unidades de engenharia.
+   conjunto de leituras com as unidades usadas pelo painel.
 2. `servico_telemetria` compacta o modelo no quadro v4, identifica sequência e
    instante do mestre, aplica CRC-16 e entrega cópias às duas filas UART. O
    produtor não espera o TX físico ou a página web.
@@ -133,7 +156,7 @@ comportamento quando o SD falha.
 | Comando ou resposta | Preservar identificador, resultado e tamanho; revisar servidor HTTP, estado assíncrono e [satélites](satelites.md). |
 | Tela web | Editar HTML/CSS/JS em `web/`, executar o respectivo `gerar_painel.py` e revisar celular e computador. O `.c` gerado acompanha a fonte no Git. |
 | Tarefa ou buffer | Medir pilha, maior bloco interno, PSRAM e tempo sob Wi-Fi/OTA antes de mudar prioridades ou afinidade. |
-| Versão ou publicação | Seguir [versionamento](versionamento.md) e [OTA](ota.md); não alterar somente o número exibido na interface. |
+| Versão ou publicação | Seguir [versionamento, release e OTA](ota.md); não alterar somente o número exibido na interface. |
 
 Compilar valida integração e tamanho da imagem. Os testes automatizados cobrem
 contratos específicos; comportamento elétrico, cobertura Wi-Fi, queda de energia

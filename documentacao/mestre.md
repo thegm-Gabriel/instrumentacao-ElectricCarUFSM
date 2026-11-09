@@ -1,6 +1,6 @@
 # Guia técnico do firmware mestre
 
-[Índice da documentação](README.md)
+[Índice da documentação](README.md) · [Conceitos e periféricos](conceitos.md)
 
 Este guia descreve o comportamento implementado em `firmware/mestre-s3` no estado atual do código. A [arquitetura](arquitetura.md) explica a separação entre módulos e a [pinagem geral](pinagem.md) detalha as ligações elétricas. Os valores abaixo são **definições de firmware**; a montagem física e os níveis elétricos precisam ser conferidos na bancada.
 
@@ -77,7 +77,15 @@ log para reproduzir a sequência.
 A dinâmica configurada altera a rapidez do trajeto; nenhuma leitura simulada
 atua no veículo.
 
-Os dois encoders de 600 P/R são decodificados pelo PCNT em quatro transições por pulso (2.400 contagens/giro). [`servico_odometro.cpp`](../firmware/mestre-s3/src/servicos/servico_odometro.cpp) aplica diâmetro de 0,300 m e relação encoder/roda de 1,0 em cada lado, usa a média das distâncias para velocidade e distância, rejeita saltos acima do limite configurado de 200 km/h e acompanha divergência persistente entre rodas. `percurso_km` recomeça no boot; `odometro_km` é recuperado da NVS e persistido a cada 100 m. Ajuste esses valores à mecânica real em [`configuracao_placa.h`](../firmware/mestre-s3/include/nucleo/configuracao_placa.h).
+Os dois encoders de 600 P/R têm as quatro bordas de A e B contadas pelo PCNT
+(2.400 contagens/giro). A configuração atual não distingue o sentido de
+rotação: avanço e recuo aumentam o percurso. [`servico_odometro.cpp`](../firmware/mestre-s3/src/servicos/servico_odometro.cpp)
+aplica diâmetro de 0,300 m e relação encoder/roda de 1,0 em cada lado, usa a
+média das distâncias para velocidade e distância, rejeita saltos acima do
+limite configurado de 200 km/h e acompanha divergência persistente entre
+rodas. `percurso_km` recomeça no boot; `odometro_km` é recuperado da NVS e
+persistido a cada 100 m. Ajuste esses valores à mecânica real em
+[`configuracao_placa.h`](../firmware/mestre-s3/include/nucleo/configuracao_placa.h).
 
 [`servico_telemetria.cpp`](../firmware/mestre-s3/src/servicos/servico_telemetria.cpp) envia o mesmo retrato a equipe e visitantes, com fila de transmissão por UART. O [protocolo v4](../firmware/compartilhado/protocolos/protocolo_telemetria.h) define pacote de 105 bytes, carga de 98 bytes, CRC-16/CCITT-FALSE e confirmação de 20 bytes. Os retornos permitem medir RTT e idade da última resposta de cada satélite. [`servico_enlace_satelites.cpp`](../firmware/mestre-s3/src/servicos/servico_enlace_satelites.cpp) é o consumidor dos quadros de retorno e os encaminha para telemetria, comandos ou OTA. O [parser do enlace](../firmware/compartilhado/protocolos/protocolo_enlace_uart.h) distingue as três famílias de quadro.
 

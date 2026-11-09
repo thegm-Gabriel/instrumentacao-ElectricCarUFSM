@@ -1,4 +1,4 @@
-# Atualização OTA do mestre e dos satélites
+# Versionamento, releases e atualização OTA
 
 [Índice da documentação](README.md)
 
@@ -42,8 +42,8 @@ No mestre, o download dos firmwares dos satélites usa três buffers fixos de 4 
 na PSRAM. Enquanto uma tarefa transmite e confirma um bloco pela UART, o cliente
 HTTPS pode preencher o seguinte. Os buffers são criados uma vez ao iniciar o
 serviço e reutilizados, evitando fragmentação e mantendo o quadro entregue ao
-driver UART na RAM interna. Se a PSRAM não puder ser usada, há fallback para RAM
-interna.
+driver UART na RAM interna. Se a PSRAM não puder ser usada, o serviço tenta
+usar RAM interna.
 
 Durante a transferência, o terminal e a SSD1306 mostram o mesmo estado mantido
 pelo serviço OTA: alvo, versão, bytes confirmados, porcentagem, taxa em MB/s e tempo
@@ -72,17 +72,17 @@ SuperMini. O GND deve ser comum ao mestre.
 
 No terminal de 115200 baud, escolha `2 - Atualização OTA`. O submenu permite:
 
-```text
-1 - Atualizar o estado exibido
-2 - Verificar nova versão agora
-3 - Autorizar atualização do mestre
-4 - Autorizar atualização do satélite da equipe
-5 - Autorizar atualização do satélite de visitantes
-6 - Atualizar todos: satélites e depois mestre
-7 - Cancelar atualizações pendentes
-8 - Alterar intervalo das verificações
-9 - Alterar intervalo da telemetria durante OTA
-```
+| Opção | Ação |
+|---:|---|
+| 1 | Atualizar o estado exibido. |
+| 2 | Verificar nova versão agora. |
+| 3 | Autorizar atualização do mestre. |
+| 4 | Autorizar atualização do satélite da Equipe. |
+| 5 | Autorizar atualização do satélite de Visitantes. |
+| 6 | Atualizar todos: satélites e depois mestre. |
+| 7 | Cancelar atualizações pendentes. |
+| 8 | Alterar o intervalo das verificações. |
+| 9 | Alterar o intervalo da telemetria durante OTA. |
 
 O mestre só oferece OTA ao satélite que esteja respondendo, suporte OTA e tenha
 uma versão menor que a descrita no manifesto.
@@ -94,25 +94,143 @@ confirmação para ações que alteram estado e acompanha o resultado pela UART.
 O envio HTTP também exige a chave administrativa do ESP da Equipe, diferente
 da senha Wi-Fi; veja [satélites](satelites.md).
 
-## Preparar um release
+## Escolher a versão
 
-O processo completo de escolha entre **major, minor e patch**, versões
-independentes por ESP, conferência dos binários, tag e anexos está em
-[versionamento](versionamento.md). As opções e saídas de cada script estão no
-[manual de ferramentas](ferramentas.md). O caminho normal é:
+O projeto usa `MAJOR.MINOR.PATCH` tanto na etiqueta do release quanto na versão
+interna de cada firmware. A etiqueta identifica o **conjunto** publicado; mestre,
+Equipe e Visitantes têm versões próprias. Um release pode, por exemplo, conter
+um mestre sem alteração e um satélite novo. O preparador incrementa a etiqueta
+e apenas os alvos cujas fontes mudaram.
 
-```powershell
-python ferramentas\preparar_release_ota.py --bump patch
-```
+| Incremento | Use quando | Exemplo a partir de `2.4.6` |
+|---|---|---|
+| **Major** | Uma mudança deliberadamente incompatível exige migração, atualização coordenada ou nova instalação; por exemplo, trocar o formato UART sem suporte ao anterior. Zera minor e patch. | `3.0.0` |
+| **Minor** | Uma funcionalidade nova preserva a compatibilidade esperada; por exemplo, adicionar um campo versionado que os firmwares antigos conseguem ignorar. Zera patch. | `2.5.0` |
+| **Patch** | Uma correção ou refinamento mantém o contrato; por exemplo, ajustar uma falha, o desempenho ou o painel web. | `2.4.7` |
 
-O preparador detecta fontes alteradas, incrementa somente as versões internas
-afetadas e a etiqueta do conjunto, regenera os painéis web, compila, confere a versão de cada imagem e
-gera `versoes/saida/manifesto-firmwares.json`. A publicação precisa conter esse
-manifesto e os três `.bin` da mesma preparação. O repositório precisa ser
-público enquanto o download HTTPS do firmware não tiver autenticação para
-releases privados. O fluxo
-`.github/workflows/publicar-firmware-mestre.yml` executa testes, verifica que
-os painéis gerados correspondem às fontes versionadas e pode recompilar e
-publicar os quatro anexos quando uma tag compatível com o estado versionado é
-enviada. O manifesto OTA atual usa `versao_formato` 2 e reúne os três alvos;
-o exemplo antigo de manifesto exclusivo do mestre não deve ser publicado.
+`major` não significa apenas “mudança grande”, nem `patch` se limita a um
+arquivo pequeno. A escolha depende do efeito para outros ESPs e para os dados
+persistidos. Versões `0.Y.Z` indicam desenvolvimento inicial; mesmo nessa fase,
+este projeto reserva **major** para incompatibilidade intencional. Se uma mudança
+se encaixa em mais de uma categoria, use a mais alta e explique no release como
+atualizar os dispositivos envolvidos. Mudanças só na documentação não alteram
+o firmware e, por padrão, não geram uma nova versão OTA.
+
+O estado de referência é `versoes/estado_versoes.json`. Ele guarda a última
+etiqueta preparada, a versão de cada ESP e uma impressão digital de suas fontes.
+**Não edite versões manualmente** nos arquivos gerados ou no binário. O
+preparador considera código compartilhado nos alvos afetados; HTML, CSS,
+JavaScript, geradores das páginas e logo entram na comparação dos satélites.
+Arquivos `.pio` e caches não contam como mudança de fonte.
+
+## Preparar o conjunto no computador
+
+Faça esta etapa na raiz do repositório, com Python e PlatformIO disponíveis.
+Ela prepara arquivos **locais**; ainda não publica nada no GitHub.
+
+1. Termine as mudanças de código e documentação. Execute os testes pertinentes
+   e confira o diff. O [manual de ferramentas](ferramentas.md) lista os comandos
+   de teste, compilação e geração das páginas.
+2. Escolha o incremento pela tabela acima. O comando abaixo abre um menu no
+   terminal: `1` para patch, `2` para minor, `3` para major e `0` para cancelar.
+
+   ```powershell
+   python ferramentas\preparar_release_ota.py
+   ```
+
+   Para automação ou terminal sem entrada interativa, informe a escolha:
+
+   ```powershell
+   python ferramentas\preparar_release_ota.py --bump minor
+   ```
+
+   Troque `minor` por `patch` ou `major` conforme o caso. `--forcar equipe-s3`
+   (ou outro alvo, ou `todos`) cria nova versão mesmo sem alteração detectada;
+   use apenas quando realmente precisa reconstruir e publicar outra imagem.
+   `--repositorio proprietario/repositorio` muda o destino das URLs do manifesto.
+3. Aguarde a conclusão. O script regenera os painéis, detecta fontes alteradas,
+   incrementa as versões pertinentes, compila os alvos necessários e confere a
+   versão **dentro** de cada `.bin`. Imagens anteriores só são reutilizadas quando
+   correspondem à versão registrada. Ao final, imprime a etiqueta, as versões e
+   os caminhos dos quatro anexos. Se nenhuma fonte mudou e a saída anterior
+   está completa, ele informa isso e não aumenta a versão.
+4. Confira `versoes/estado_versoes.json` e os quatro arquivos em
+   `versoes/saida/`: `mestre-s3.bin`, `equipe-s3.bin`, `visitantes-s3.bin` e
+   `manifesto-firmwares.json`. No JSON, cada alvo deve apontar para a **mesma
+   etiqueta** e para o anexo correto, com tamanho e SHA-256. O manifesto atual
+   usa `versao_formato` 2. Não misture imagens de preparações diferentes.
+5. Execute `git status --short` e revise as fontes e os `painel_web.c` gerados.
+   Inclua no commit o código alterado, a documentação, os painéis gerados e
+   `versoes/estado_versoes.json`. `versoes/saida` e `versoes/historico` são
+   artefatos locais ignorados pelo Git; não precisam entrar no commit.
+
+Se a compilação ou a verificação da versão falhar, corrija o erro e execute o
+preparador novamente. Antes de publicar, confira se o estado e os quatro anexos
+formam o mesmo conjunto. `criar_manifesto_ota.py` só é necessário quando já
+existem três imagens verificadas e se deseja reconstruir manualmente o JSON;
+ele **não** compila nem confere a versão interna. Veja os parâmetros em
+[ferramentas](ferramentas.md).
+
+## Publicar o GitHub Release
+
+O caminho normal usa o workflow
+`.github/workflows/publicar-firmware-mestre.yml`. Ele começa quando uma tag
+`vX.Y.Z` é enviada e lê as versões do **commit apontado pela tag**. Portanto:
+
+1. Faça o commit do conjunto preparado e envie o commit ao GitHub. Confirme
+   que `versoes/estado_versoes.json` e os painéis gerados estão incluídos.
+2. Leia a etiqueta do estado, crie a tag **nesse commit** e envie-a. No
+   PowerShell, após o commit:
+
+   ```powershell
+   $versao = (Get-Content versoes/estado_versoes.json -Raw | ConvertFrom-Json).versao_release
+   $tag = "v$versao"
+   git push origin HEAD
+   git tag $tag
+   git push origin $tag
+   ```
+
+   Se a tag já existir, investigue antes de prosseguir; não reutilize o mesmo
+   nome para imagens diferentes. Um release novo precisa de uma etiqueta nova.
+3. Na aba **Actions** do GitHub, acompanhe **Publicar firmwares OTA** até a
+   conclusão. O fluxo testa ferramentas, regenera as páginas e rejeita fontes
+   web cujo `.c` versionado esteja desatualizado. Depois recompila os três
+   firmwares com as versões registradas, gera o manifesto e cria o release.
+4. Na aba **Releases**, confira título, notas e os **quatro anexos**. O arquivo
+   `manifesto-firmwares.json` deve indicar a tag publicada, as versões internas
+   esperadas e as URLs dos três `.bin`. Edite as notas da publicação para
+   descrever as mudanças e qualquer migração necessária. O script local não
+   publica por si; um commit ou tag sem release concluído também não fornece
+   os arquivos para OTA.
+
+O mestre consulta `releases/latest/download/manifesto-firmwares.json`, então o
+release destinado à atualização precisa ser o mais recente disponibilizado
+nesse caminho. O repositório e os anexos devem estar publicamente acessíveis:
+o download HTTPS atual não autentica releases privados. Se o workflow falhar,
+consulte a etapa com erro em **Actions**, corrija a fonte/estado e prepare uma
+nova etiqueta quando o conteúdo publicável mudar. Não instale um conjunto
+parcial.
+
+## Instalar e conferir nos ESPs
+
+Após a [primeira gravação por cabo](#primeira-gravação-por-cabo), conecte os três
+ESPs e confira no painel da Equipe se o mestre e os satélites respondem.
+No terminal do mestre, abra **2 - Atualização OTA** e escolha **2 - Verificar
+nova versão agora**, ou use a verificação na página **Comandos**. Consulte
+versões e disponibilidade **antes** de autorizar um alvo. Pela página web, as
+ações exigem a chave administrativa da Equipe.
+
+Autorize mestre, Equipe, Visitantes ou **todos** no terminal ou no painel.
+Em **todos**, os satélites são atualizados primeiro e o mestre por último.
+Observe porcentagem, bytes confirmados, resultado e versão que volta a
+responder; uma resposta de comando apenas confirma o pedido. Aguarde também a
+janela de observação da nova imagem e confira que não houve rollback. Se a
+oferta expirar após 5 min sem autorização, verifique novamente. Um satélite
+desligado ou sem resposta não é atualizado; restabeleça o enlace, consulte o
+diagnóstico e repita a verificação antes de tentar de novo.
+
+Se o mestre não encontrar uma atualização, confira: se o release com quatro
+anexos está disponível como o mais recente; se o manifesto usa as URLs e a
+etiqueta corretas; se a versão interna do alvo é realmente maior; e se Wi-Fi
+externo, HTTPS e o enlace UART do satélite estão funcionando. A indicação de
+erro no terminal e no painel ajuda a localizar a etapa interrompida.

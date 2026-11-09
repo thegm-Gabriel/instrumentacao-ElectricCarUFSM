@@ -62,8 +62,11 @@ Cada encoder E38S6G5-600B-G24N é alimentado por uma fonte externa compatível (
 
 Nunca faça o pull-up de A ou B para 12/24 V. O periférico PCNT conta todas as
 bordas dos dois canais de cada encoder (2400 contagens por giro para 600 P/R) sem
-polling da CPU e soma a distância nos dois sentidos. O odômetro usa a média das
-distâncias esquerda e direita. Diâmetros, relações de transmissão e intervalo de persistência ficam em
+consultar os pinos continuamente pela CPU. A configuração atual soma pulsos,
+mas não usa a defasagem entre A e B para identificar o sentido de rotação:
+deslocamentos para frente e para trás aumentam o percurso registrado. O
+odômetro usa a média das distâncias esquerda e direita. Diâmetros, relações
+de transmissão e intervalo de persistência ficam em
 `firmware/mestre-s3/include/nucleo/configuracao_placa.h`.
 
 ## Tela SSD1306 I²C do mestre
@@ -119,8 +122,11 @@ GPIOs 33 a 37 continuam reservados para a PSRAM Octal.
 | VCC | 3,3 V |
 | GND | GND |
 
-Esses pinos são uma definição de firmware e precisam ser conferidos com a placa
-e o módulo usados antes de fabricar o chicote.
+Esses pinos são definidos em
+[`configuracao_registro_telemetria.h`](../firmware/mestre-s3/include/nucleo/configuracao_registro_telemetria.h)
+e precisam ser conferidos com a placa e o módulo usados antes de fabricar o
+chicote. O comportamento dos arquivos e do envio está no
+[guia do histórico no Google](google.md).
 
 ## Microfone INMP441 temporário para treinamento
 

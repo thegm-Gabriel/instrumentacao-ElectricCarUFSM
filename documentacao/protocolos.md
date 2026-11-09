@@ -114,7 +114,8 @@ autorização e rollback.
 ## Modelo da aplicação e testes
 
 `firmware/compartilhado/telemetria/dados_telemetria_veiculo.h` descreve o
-retrato em unidades de engenharia antes da compactação. O serviço do mestre
+conjunto de leituras antes da compactação: alguns campos já usam unidades como
+km/h e m/s²; outros ainda são contagens brutas ou indicam validade. O serviço do mestre
 converte esse modelo para `pacote_telemetria_t`; os satélites usam o mesmo
 cabeçalho binário para reconstruir as amostras. Utilitários pequenos usados por
 mais de um firmware ficam em `firmware/compartilhado/comum`.

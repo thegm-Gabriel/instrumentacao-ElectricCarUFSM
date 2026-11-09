@@ -33,11 +33,11 @@ Três ESP32-S3 dividem aquisição, operação e apresentação dos dados:
 ```mermaid
 flowchart LR
     S["Sensores e encoders"] --> M["ESP32-S3 Mestre"]
-    M -->|UART| E["ESP32-S3 Equipe"]
-    M -->|UART| V["ESP32-S3 Visitantes"]
-    M --> SD["microSD · histórico e logs"]
-    E --> PE["Painel técnico"]
-    V --> PV["Painel público"]
+    M <-->|UART| E["ESP32-S3 Equipe"]
+    M <-->|UART| V["ESP32-S3 Visitantes"]
+    M <-->|SPI2| SD["microSD · histórico e logs"]
+    E <-->|Wi-Fi / HTTP| PE["Navegador · painel técnico"]
+    V <-->|Wi-Fi / HTTP| PV["Navegador · painel público"]
 ```
 
 | Componente | O que faz |
@@ -62,13 +62,13 @@ as leituras do veículo sem controles de operação.
 
 - **Conhecer o funcionamento:** [visão geral da documentação](documentacao/README.md),
   [arquitetura](documentacao/arquitetura.md) e
-  [filosofia do código](documentacao/filosofia.md).
+  [filosofia do código](documentacao/filosofia.md). Para siglas e recursos do
+  ESP32-S3, consulte o [glossário e guia de periféricos](documentacao/conceitos.md).
 - **Montar e testar:** [pinagem e níveis elétricos](documentacao/pinagem.md),
   [guia do mestre](documentacao/mestre.md) e
   [guia dos satélites](documentacao/satelites.md).
 - **Desenvolver e publicar:** [ferramentas](documentacao/ferramentas.md),
-  [versionamento](documentacao/versionamento.md) e
-  [atualização OTA](documentacao/ota.md).
+  [versionamento, releases e atualização OTA](documentacao/ota.md).
 
 ## Equipe
 
