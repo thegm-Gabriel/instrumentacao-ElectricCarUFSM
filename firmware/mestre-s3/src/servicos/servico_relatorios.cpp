@@ -204,7 +204,7 @@ void exibir_relatorios(const DadosTelemetriaVeiculo& dados) {
                  static_cast<unsigned long>(saude.bytes_pilha_livres),
                  saude.tarefa_menor_pilha);
         ESP_LOGI(ETIQUETA,
-                 "[SENSORES] I2C operações=%lu sondagens=%lu ausentes=%lu erros=%lu último=%s | ADC erros=%lu último=%s | MPU6050 erros=%lu último=%s",
+                 "[SENSORES] I2C operações=%lu sondagens=%lu ausentes=%lu erros=%lu último=%s | ADC erros=%lu último=%s | MPU6050 erros=%lu último=%s | INA228 erros=%lu último=%s",
                  static_cast<unsigned long>(i2c.operacoes_ok),
                  static_cast<unsigned long>(i2c.sondagens_ok),
                  static_cast<unsigned long>(i2c.enderecos_ausentes),
@@ -212,7 +212,9 @@ void exibir_relatorios(const DadosTelemetriaVeiculo& dados) {
                   static_cast<unsigned long>(sensores.adc.total),
                   esp_err_to_name(sensores.adc.ultimo_erro),
                   static_cast<unsigned long>(sensores.mpu6050.total),
-                  esp_err_to_name(sensores.mpu6050.ultimo_erro));
+                  esp_err_to_name(sensores.mpu6050.ultimo_erro),
+                  static_cast<unsigned long>(sensores.ina228.total),
+                  esp_err_to_name(sensores.ina228.ultimo_erro));
         const int64_t agora_tarefas = esp_timer_get_time();
         if (tarefas_relatorio != nullptr &&
             (resumo_completo || ultimo_relatorio_tarefas_us == 0 ||

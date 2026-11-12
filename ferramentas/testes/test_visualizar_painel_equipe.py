@@ -10,7 +10,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, build_opener, ProxyHandler
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from visualizar_painel_equipe import SimuladorEquipe, criar_servidor, GERADOR, AUTORIZACAO_PREVIA
+from visualizar_painel_equipe import SimuladorEquipe, criar_servidor, GERADOR
 
 
 class SimuladorTests(unittest.TestCase):
@@ -78,6 +78,12 @@ class SimuladorTests(unittest.TestCase):
         self.sim.comando("wifi_excluir_salva", "3")
         self.assertEqual(len(self.sim.redes), 2)
         self.assertNotIn("senha-ficticia", repr(vars(self.sim)))
+
+    def test_rede_aberta_pode_ser_preparada_e_salva(self):
+        self.sim.comando("wifi_preparar", "Rede aberta\n")
+        self.sim.comando("wifi_conectar_preparada", "")
+        self.sim.comando("wifi_salvar_preparada", "")
+        self.assertIn("Rede aberta", self.sim.redes)
 
     def test_configuracao_protegida_validada_antes_de_alterar(self):
         original = dict(self.sim.config)
@@ -186,12 +192,8 @@ class HttpTests(unittest.TestCase):
         self.server.server_close()
         self.worker.join(timeout=2)
 
-    def request(self, path, body=None, authorized=True):
+    def request(self, path, body=None):
         request = Request(self.base+path, data=body.encode() if body is not None else None)
-        if authorized and (path == "/api/comandos/acesso" or
-                           (body is not None and (path.startswith("/api/mestre?") or
-                                                  path.startswith("/api/wifi/")))):
-            request.add_header("Authorization", AUTORIZACAO_PREVIA)
         try:
             response = self.client.open(request, timeout=5)
         except HTTPError as error:
@@ -209,6 +211,18 @@ class HttpTests(unittest.TestCase):
         self.assertNotIn("preview-scenario", GERADOR.montar_html())
         self.assertEqual(self.request("/painel")[0], 200)
 
+    def test_ina_aparece_na_telemetria_real_da_previa(self):
+        status, html = self.request("/")
+        self.assertEqual(status, 200)
+        self.assertIn('id="ina-energy"', html)
+        self.sim.simulado = False
+        status, dados = self.request("/api/telemetria")
+        self.assertEqual(status, 200)
+        self.assertTrue(dados["estado_mpu"] & 0x80)
+        self.assertEqual(dados["estado_ina"], 7)
+        self.assertIn("ina_temperatura_centesimos_c", dados)
+        self.assertIn("ina_energia_mwh", dados)
+
     def test_consultas_do_painel_e_erros_de_entrada(self):
         for query in ("ping", "versao", "telemetria", "uart", "ota", "saude", "wifi",
                       "sincronizacao", "simulador", "configuracao", "diagnostico_mestre",
@@ -225,9 +239,7 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(self.request("/nao-existe")[0], 404)
 
     def test_comandos_http_e_cenarios(self):
-        self.assertEqual(self.request("/api/comandos/acesso", authorized=False)[0], 401)
-        self.assertEqual(self.request("/api/comandos/acesso")[0], 200)
-        self.assertEqual(self.request("/api/mestre?consulta=sincronizar_google", "", authorized=False)[0], 401)
+        self.assertEqual(self.request("/api/comandos/acesso")[0], 404)
         status, data = self.request("/api/mestre?consulta=sincronizar_google", "")
         self.assertEqual(status, 200)
         self.assertEqual(data["sincronizacao_id"], 1)

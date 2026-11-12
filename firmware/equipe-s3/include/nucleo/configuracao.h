@@ -5,7 +5,7 @@
 #include "driver/uart.h"
 #include "configuracao_enlace_uart.h"
 
-#define WIFI_SSID "UFSM-Carro-Equipe"
+#define WIFI_SSID "NEXUS-Equipe"
 #define WIFI_SENHA "telemetria2026"
 #define WIFI_IP_AP_TEXTO "192.168.4.1"
 #define URL_IP_LOCAL_BASE "http://" WIFI_IP_AP_TEXTO

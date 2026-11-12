@@ -214,12 +214,13 @@
 
   function updateReadings(data) {
     const simulated = data.simulado === true;
+    const electrical = data.eletrica_disponivel === true;
     const speed = readNumber(data, 'velocidade_centesimos_kmh', 100);
-    const power = simulated ? readNumber(data, 'potencia_w') : null;
+    const power = electrical ? readNumber(data, 'potencia_w') : null;
     const accel = data.aceleracao_disponivel ? readNumber(data, 'aceleracao_milesimos_ms2', 1000) : null;
     const charge = simulated ? readNumber(data, 'carga_decimos_percentual', 10) : null;
-    const voltage = simulated ? readNumber(data, 'tensao_pacote_mv', 1000) : null;
-    const current = simulated ? readNumber(data, 'corrente_centesimos_a', 100) : null;
+    const voltage = electrical ? readNumber(data, 'tensao_pacote_mv', 1000) : null;
+    const current = electrical ? readNumber(data, 'corrente_centesimos_a', 100) : null;
     const range = readNumber(data, 'autonomia_decimos_km', 10);
 
     const previousSpeed=state.previousSpeedForTone;
@@ -252,7 +253,7 @@
     const powerUnit = power === null ? '' : Math.abs(power) >= 1000 ? 'kW' : 'W';
     animateValue('power-value', power === null ? null : powerUnit === 'kW' ? power / 1000 : power, powerUnit === 'kW' ? 2 : 0, powerUnit,'',current=>{
       const watts=current===null?null:powerUnit==='kW'?current*1000:current;
-      $('power-hint').textContent=watts===null?'Potência elétrica sem leitura no modo real.':watts<-.5?'Simulação · devolução de energia ao sistema.':watts>.5?'Simulação · consumo elétrico, não potência nas rodas.':'Simulação · potência próxima de zero.';
+      $('power-hint').textContent=watts===null?'Medição elétrica indisponível.':watts<-.5?(simulated?'Simulação · ':'')+'Devolução de energia ao sistema.':watts>.5?(simulated?'Simulação · ':'')+'Consumo elétrico, não potência nas rodas.':(simulated?'Simulação · ':'')+'Potência próxima de zero.';
     });
     const rail=$('power-rail');
     $('power-motion-card').hidden=power===null;
@@ -300,12 +301,12 @@
     document.querySelector('#details-title').closest('.section').querySelector('.detail-grid').classList.toggle('compact',!hasElectricData);
     $('electric-chart-card').hidden = !hasElectricData;
     $('visitor-chart-grid').classList.toggle('single', !hasElectricData);
-    if (!hasElectricData) $('energy-unavailable').textContent = 'O veículo ainda não envia leituras de bateria e potência.';
+    if (!hasElectricData) $('energy-unavailable').textContent = 'Medição elétrica indisponível no momento.';
 
-    animateValue('voltage-value', voltage === null || voltage <= 0 ? null : voltage, 2, '', ' V');
-    $('voltage-hint').textContent = simulated ? 'Valor simulado.' : 'Sem medição no modo real.';
+    animateValue('voltage-value', voltage, 2, '', ' V');
+    $('voltage-hint').textContent = simulated ? 'Valor simulado.' : electrical ? 'Leitura do INA228.' : 'Medição indisponível.';
     animateValue('current-value', current, 2, '', ' A');
-    $('current-hint').textContent = simulated ? 'Valor simulado.' : 'Sem medição no modo real.';
+    $('current-hint').textContent = simulated ? 'Valor simulado.' : electrical ? 'Leitura do INA228.' : 'Medição indisponível.';
     animateValue('energy-value', state.energyWh, 1, '', ' Wh');
     if (distance !== null) {
       if (state.firstDistance === null || distance < state.firstDistance) state.firstDistance = distance;
@@ -347,9 +348,9 @@
     }
     state.lastArrivalAt = now;
     if (!state.firstSampleAt) state.firstSampleAt = now;
-    const power = data.simulado ? readNumber(data, 'potencia_w') : null;
+    const power = data.eletrica_disponivel ? readNumber(data, 'potencia_w') : null;
     accumulateEnergy(power, distance, now);
-    state.samples.push({time:now, speed:readNumber(data, 'velocidade_centesimos_kmh', 100), power,accel:data.aceleracao_disponivel?readNumber(data,'aceleracao_milesimos_ms2',1000):null,battery:data.simulado?readNumber(data,'carga_decimos_percentual',10):null,current:data.simulado?readNumber(data,'corrente_centesimos_a',100):null,voltage:data.simulado?readNumber(data,'tensao_pacote_mv',1000):null});
+    state.samples.push({time:now, speed:readNumber(data, 'velocidade_centesimos_kmh', 100), power,accel:data.aceleracao_disponivel?readNumber(data,'aceleracao_milesimos_ms2',1000):null,battery:data.simulado?readNumber(data,'carga_decimos_percentual',10):null,current:data.eletrica_disponivel?readNumber(data,'corrente_centesimos_a',100):null,voltage:data.eletrica_disponivel?readNumber(data,'tensao_pacote_mv',1000):null});
     state.samples = state.samples.filter(sample => now - sample.time <= 610000);
     state.gapOpen = false;
     state.lastData = data;

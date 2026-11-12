@@ -1,0 +1,79 @@
+\chapter{Instalação, operação, testes e manutenção}\label{cap:operacao}
+\section{Preparação do ambiente e primeira partida}
+Instalar Python e PlatformIO com suporte a ESP-IDF, obter a revisão correta do repositório e registrar o commit. Conferir \texttt{platformio.ini} de cada alvo e as partições OTA. Os painéis web são gerados a partir das fontes HTML/CSS/JavaScript por \texttt{gerar\_painel.py}; o arquivo C incorporado deve corresponder a elas. Credenciais Wi-Fi, URL e token do Google pertencem à configuração local ignorada pelo Git. Não colocar segredos no ZIP do Overleaf nem no histórico público.
+
+Na primeira instalação, gravar cada placa por cabo para criar a tabela de partições. Os comandos e ambientes corretos estão no capítulo~\ref{cap:ota}; selecionar a porta e identificar fisicamente cada placa antes da gravação.
+O ambiente exato do mestre fixa \texttt{espressif32@6.13.0}; os satélites devem ser compilados com dependências registradas no ensaio, pois seus arquivos não fixam essa versão. O terminal serial do mestre e a chave inicial da equipe usam 115\,200 baud. A gravação por cabo não dispensa conferir GPIO, alimentação e conexão física antes de ligar o conjunto.
+
+\subsection{Montagem e partida}
+\begin{enumerate}
+\item Identificar a revisão física de cada PCB e o esquema correspondente; verificar polaridade, tensão dos conversores, proteções, continuidade de GND e ausência de curto com a alimentação desligada.
+\item Confirmar 3,3\,V nos domínios lógicos. Conferir pull-ups dos quatro canais de encoder para 3,3\,V, nunca para a alimentação externa. Conferir TX cruzado com RX em cada UART.
+\item Confirmar geometria das rodas e relação encoder/roda; conferir orientação X/Y do MPU; registrar valores efetivos antes de análise quantitativa.
+\item Energizar, observar serial, LEDs e OLED. Verificar se o mestre inicia, se o sensor inercial calibra em repouso, se os encoders não contam com rodas paradas e se o cartão monta quando instalado.
+\item Acessar o AP da Equipe em \url{http://192.168.4.1/}; conferir versão e idade da telemetria dos dois satélites, sequência e ACK. Verificar se a origem indicada é real ou simulada.
+\item Iniciar um registro curto, conferir o contador de amostras no SD e preservar o CSV original. Para ensaio do painel público, verificar que Visitantes mostra somente leitura.
+\end{enumerate}
+
+\subsection{Conferência elétrica antes da primeira energização}\label{sec:conferencia-eletrica}
+Trabalhar com a alimentação de tração isolada e descarregada segundo o procedimento elétrico da equipe. Identificar a revisão efetivamente montada; não usar apenas os nomes dos conectores da folha v4. Com multímetro, confirmar polaridade dos trilhos, continuidade dos retornos, ausência de curto entre 48 V, 5 V, 3,3 V e GND, e orientação do diodo de roda livre. Energizar a eletrônica por fonte limitada em corrente antes de conectá-la ao veículo. Medir 5 V e 3,3 V em cada módulo durante partida, Wi-Fi e escrita no cartão, além da temperatura do buck e do regulador. Registrar queda de tensão e ruído com osciloscópio quando possível. O capítulo \ref{cap:eletronica} explica as razões elétricas e os pontos não comprovados do esquema.
+
+Para o I\textsuperscript{2}C, contar todos os resistores de pull-up soldados na placa e nos módulos. Medir SDA--3,3 V e SCL--3,3 V com o conjunto desligado, comparar a resistência equivalente com capacitância e tempo de subida, e retirar os pull-ups excedentes dos módulos quando necessário. Conferir que nenhum módulo leva as linhas a 5 V. Observar uma transação a 400 kHz com todos os módulos conectados; registrar nível alto, nível baixo, subida e ausência de colisões. Só então verificar endereços de MPU, OLED e INA228, caso este último esteja instalado. O driver do INA228 está implementado, mas sua resposta depende de módulo presente, ligação correta e configuração coerente com o shunt físico.
+
+Para o shunt, confirmar que o componente real é de 1 m$\Omega$, sua potência admissível contínua e a montagem térmica a 75 A. Usar ligação Kelvin independente dos cabos de potência, marcar IN+ e IN$-$ e comparar a tensão diferencial com $1\,\mathrm{mV/A}$ em correntes conhecidas e seguras. Medir aquecimento em regime; 75 A produzem 5,625 W no elemento resistivo. Não usar leitura de corrente, potência ou estado de bateria como proteção até que os limites e os ensaios da montagem sejam aceitos; o driver de leitura, sozinho, não implementa proteção de tração.
+
+O relé e seu transistor devem ser ensaiados separados do controlador de tração: identificar tensão nominal da bobina, corrente com o contato aberto e fechado, estado em reset e falta de alimentação, polaridade de D1, tempo de soltura e contato normalmente aberto/fechado. A topologia representada na folha v4 exige revisão antes de qualquer conexão ao driver. O estado remoto de parada descrito no capítulo \ref{cap:comandos} não aciona esse relé.
+
+\subsection{Configuração de rede, painéis e registro}\label{sec:config-operacional}
+Depois de gravar os três ESPs, observar no serial se as partições e a NVS foram inicializadas sem erro. Conectar o computador ou telefone ao AP da Equipe e abrir \url{http://192.168.4.1/}; registrar nome da rede, canal, versão, número de clientes e idade da telemetria. O acesso ao AP Equipe permite enviar comandos sem chave HTTP adicional; reservar a senha desse AP à equipe. Conferir a página de Visitantes separadamente para garantir que ela apresenta dados e não oferece comandos. O capítulo \ref{cap:wifi-paineis} descreve as rotas, a política de clientes e o motivo de o mestre ligar o Wi-Fi externo somente durante sessões.
+
+Na Equipe ou no terminal do mestre, inspecionar perfis Wi-Fi salvos, tentar a rede principal e registrar canal, RSSI, tentativas, erro e prazo. Para uma rede secundária, registrar autorização e a política de conexão automática antes de testar. Uma conexão ao roteador não comprova acesso ao Google nem integridade do relógio ou da URL HTTPS. Fazer uma consulta OTA e um envio de CSV de ensaio separadamente, observando o estado final de cada tarefa. Para o Google, seguir o cadastro de propriedades, implantação e teste do Apps Script do capítulo \ref{cap:memorias_google}; não copiar token, chave ou SSID para este manual.
+
+\subsection{Ensaios de falha e recuperação}\label{sec:ensaios-falha}
+Verificar deliberadamente, em bancada, situações que o diagnóstico deve distinguir: sensor I\textsuperscript{2}C ausente, pull-up inadequado, UART de um satélite interrompida, Wi-Fi externo indisponível, cartão SD removido antes da partida, memória sob carga de TLS, resposta HTTP de upload inválida e imagem OTA de teste que falhe a validação. Para cada caso, registrar causa ativa, contador, página OLED/LED, resposta web, log, tempo até detecção, comportamento preservado e recuperação. Repetir após religar a alimentação; a memória RTC usada pelo guardião de OTA não é persistência garantida sob corte total. Não provocar falha por desconexão de cabos energizados de potência ou por remoção do cartão durante escrita.
+
+Ao testar rollback, gravar uma imagem de laboratório que reinicie antes de ser validada e confirmar qual partição foi selecionada no próximo boot. Em teste separado, provocar três reinícios anormais da mesma imagem após a confirmação inicial e dentro da janela de estabilização; observar contagem e retorno. Esses são dois mecanismos diferentes, descritos no capítulo \ref{cap:ota}; registrar sequência temporal, causa de reset e versão efetiva em cada reinício. Não realizar o ensaio com controle de tração conectado.
+
+\section{Operação e manutenção}
+Antes de mover o veículo, conferir alimentação, conectores, fixação dos sensores, cabos afastados da potência, estado dos LEDs e integridade da parada física do veículo conforme o procedimento próprio da equipe. O painel remoto ainda não é mecanismo de parada física. Deixar o MPU em repouso durante a calibração inicial. Confirmar validade, origem e idade da telemetria. Ao encerrar, guardar os CSVs e logs do ensaio junto da versão de firmware e das condições experimentais. Desligar conforme a sequência elétrica adotada na montagem, evitando remover o cartão durante escrita.
+
+\subsection{Plano de verificação}
+Os critérios quantitativos de aceitação devem ser aprovados pela equipe para a finalidade do veículo; não há no material consultado uma campanha de calibração conclusiva. A tabela descreve ensaios reproduzíveis e a evidência a guardar.
+\begin{table}[htbp]\centering\small
+\caption{Ensaios recomendados antes de declarar uma medição validada}\label{tab:ensaios}
+\begin{tabularx}{\textwidth}{@{}l X X@{}}\toprule
+Objeto & Procedimento & Evidência e decisão\\\midrule
+Alimentação & Medir trilhos em vazio, partida e carga; inspecionar ruído e aquecimento. & Tensão, instrumento, corrente, temperatura e comparação com limites dos componentes.\\
+Encoders & Girar cada roda número conhecido de voltas, nos dois sentidos e com carro apoiado; comparar distância externa. & Contagens, $D$, $i$, erro e repetibilidade por lado; confirmar ausência de sentido na versão atual.\\
+MPU6050 & Calibrar parado; verificar eixos por inclinação e movimento controlado. & Estado de calibração, orientação, ruído e resposta longitudinal.\\
+UART & Interromper e restaurar cada enlace; injetar quadro corrompido em bancada. & Contadores CRC/perdas/duplicatas, idade da amostra e recuperação independente.\\
+SD & Gravar por tempo suficiente, retirar alimentação de modo controlado e reiniciar. & CSV legível, contadores, rotação, perda máxima observada e preservação dos arquivos.\\
+OTA & Instalar versão de teste, verificar alvo, reinício, versão nova e rollback controlado. & Manifesto, SHA-256, logs, estado após observação e resultado por dispositivo.\\\bottomrule
+\end{tabularx}\end{table}
+
+Não classificar o ensaio apenas como aprovado ou reprovado. Registrar data, responsável, revisão da placa, commit, versões dos três firmwares, instrumentos, condições, dados brutos, diferença em relação à referência e critério previamente definido. Testar também o sistema com Wi-Fi externo indisponível, SD ausente e navegador desconectado: a aquisição e a telemetria UART devem continuar quando a falha for degradável.
+
+\subsection{Atualização de firmware}
+Para OTA, conferir se há release completo com manifesto e três binários coerentes. Consultar a versão disponível no menu 2 do mestre ou na página Comandos da Equipe, autorizar o alvo, acompanhar progresso e aguardar a versão nova responder e completar a observação. Uma oferta sem autorização expira; verificar novamente se necessário. Em atualização de todos, satélites vêm antes do mestre. Não interpretar confirmação HTTP como instalação concluída.
+
+\begin{table}[htbp]\centering\small
+\caption{Sintomas e primeiras verificações}\label{tab:diagnostico}
+\begin{tabularx}{\textwidth}{@{}l X X@{}}\toprule
+Sintoma & Verificar & Ação inicial\\\midrule
+Sem amostra recente & Alimentação dos três ESPs, TX/RX/GND, baud, CRC, sequência e ACK. & Restaurar o enlace, consultar contadores e não confiar no último valor exibido.\\
+Contagem com roda parada & Pull-ups a 3,3\,V, blindagem, ruído de potência e filtro PCNT. & Isolar o chicote e medir formas de onda antes de mudar a geometria.\\
+Velocidade incoerente & Diâmetro, relação de transmissão, P/R e quatro bordas contadas. & Comparar contagens por volta e aferir a distância com referência.\\
+MPU inválido & SDA/SCL, endereço, alimentação, eixo e condição de repouso. & Conferir I\textsuperscript{2}C e repetir calibração após fixar a orientação.\\
+Sem CSV & Cartão, 3,3\,V, SPI2, montagem FAT, fila e espaço livre. & Preservar o cartão e consultar logs; telemetria ao vivo pode seguir.\\
+Ação web negada & Permissão do Mestre (quando exigida), carga inválida ou idade da UART. & Conferir a mensagem de rejeição, a permissão aplicável e consultar resposta e estado separadamente.\\
+OTA interrompida & Rede externa, release, manifesto, hash, espaço da partição e ACK UART. & Ler erro por alvo e versão que responde antes de repetir.\\\bottomrule
+\end{tabularx}\end{table}
+
+\subsection{Pendências técnicas rastreáveis}
+\begin{enumerate}
+\item Associar a placa física instalada a um projeto KiCad, revisão de esquema, PCB, conectores e mapa de alimentação; acrescentar fotos de ambas as faces e do chicote.
+\item Medir diâmetro efetivo das rodas, relação real dos encoders, resolução e erro; validar orientação do MPU6050 no chassi.
+\item Integrar e calibrar o INA228 e o shunt para corrente e tensão do barramento; implementar os demais sensores físicos antes de publicar seus campos como medições.
+\item Registrar testes de desempenho com SD, Wi-Fi e OTA concorrentes e os prazos de detecção de amostra antiga; aprovar limites de erro e critérios por aplicação.
+\item Se houver futura atuação física, projetar uma cadeia independente de segurança, intertravamentos, autenticação de operador, prazo de validade dos pedidos e retorno de estado medido. O estado preparatório atual não atende essa função.
+\end{enumerate}

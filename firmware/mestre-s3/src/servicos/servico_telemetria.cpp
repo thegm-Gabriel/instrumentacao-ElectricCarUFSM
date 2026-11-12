@@ -129,6 +129,16 @@ bool dados_validos(const DadosTelemetriaVeiculo& dados) {
         !std::isfinite(dados.acelerador_percentual) ||
         !std::isfinite(dados.freio_percentual) ||
         !std::isfinite(dados.tensao_pacote_v) || !std::isfinite(dados.corrente_a) ||
+        (dados.eletrica_valida &&
+         (dados.tensao_pacote_v < 0.0f || dados.tensao_pacote_v > 65.535f ||
+          dados.corrente_a < -327.68f || dados.corrente_a > 327.67f ||
+          dados.potencia_w < -32768.0f || dados.potencia_w > 32767.0f ||
+          !std::isfinite(dados.ina_tensao_shunt_mv) ||
+          !std::isfinite(dados.ina_temperatura_c) ||
+          dados.ina_tensao_shunt_mv < -163.84f ||
+          dados.ina_tensao_shunt_mv > 163.84f ||
+          dados.ina_temperatura_c < -40.0f ||
+          dados.ina_temperatura_c > 125.0f)) ||
         !std::isfinite(dados.carga_percentual) || !std::isfinite(dados.latitude) ||
         !std::isfinite(dados.longitude) || !std::isfinite(dados.rumo_graus) ||
         !std::isfinite(dados.potencia_w) || !std::isfinite(dados.autonomia_km) ||
@@ -238,7 +248,30 @@ esp_err_t servico_telemetria_enviar(const DadosTelemetriaVeiculo& dados) {
         escalar_int16(dados.aceleracao_g, 1000.0f);
     pacote.temperatura_mpu_centesimos_c =
         escalar_int16(dados.temperatura_mpu_c, 100.0f);
+    if (dados.eletrica_valida && !dados.simulado) {
+        pacote.estado_ina = TELEMETRIA_INA_PRESENTE;
+        pacote.ina_shunt_microvolts = static_cast<int32_t>(
+            std::lround(dados.ina_tensao_shunt_mv * 1000.0f));
+        pacote.ina_temperatura_centesimos_c =
+            escalar_int16(dados.ina_temperatura_c, 100.0f);
+        pacote.ina_diagnostico = dados.ina_diagnostico;
+        if (dados.ina_energia_valida && std::isfinite(dados.ina_energia_wh) &&
+            dados.ina_energia_wh >= 0.0 && dados.ina_energia_wh <= 4294967.295) {
+            pacote.estado_ina |= TELEMETRIA_INA_ENERGIA_VALIDA;
+            pacote.ina_energia_mwh = static_cast<uint32_t>(
+                std::llround(dados.ina_energia_wh * 1000.0));
+        }
+        if (dados.ina_carga_valida && std::isfinite(dados.ina_carga_ah) &&
+            dados.ina_carga_ah >= -2147483.648 &&
+            dados.ina_carga_ah <= 2147483.647) {
+            pacote.estado_ina |= TELEMETRIA_INA_CARGA_VALIDA;
+            pacote.ina_carga_mah = static_cast<int32_t>(
+                std::llround(dados.ina_carga_ah * 1000.0));
+        }
+    }
     if (dados.mpu_ativo) pacote.estado_mpu |= TELEMETRIA_MPU_ATIVO;
+    if (dados.simulado || dados.eletrica_valida)
+        pacote.estado_mpu |= TELEMETRIA_ELETRICA_VALIDA;
     if (dados.mpu_calibrado) pacote.estado_mpu |= TELEMETRIA_MPU_CALIBRADO;
     if (dados.eixo_longitudinal_compativel) {
         pacote.estado_mpu |= TELEMETRIA_MPU_EIXO_COMPATIVEL;

@@ -45,19 +45,16 @@ como recurso complementar.
 
 ## ESP32-S3 da equipe
 
-`include/nucleo/configuracao.h` define o AP `UFSM-Carro-Equipe`, canal 11,
+`include/nucleo/configuracao.h` define o AP `NEXUS-Equipe`, canal 11,
 até cinco clientes e a UART1 em GPIO 5 (RX) e 6 (TX). A rede padrão do ESP-IDF
 usa `192.168.4.1` e DHCP. O firmware anuncia o portal HTTP pela opção DHCP 114,
 quando suportada. Ele não oferece servidor DNS local; acesso confiável:
 `http://192.168.4.1/`.
 
 O ponto de acesso usa a mesma senha Wi-Fi configurada no firmware de Visitantes.
-Essa senha autoriza a conexão à rede, mas **não** autoriza ações HTTP: o ESP da
-Equipe cria na primeira partida uma chave administrativa independente e a
-mostra no terminal serial a 115200 baud. A chave permanece na NVS após OTA;
-apagar a NVS gera outra chave. Guarde-a antes de depender do painel para operar.
-Se a autenticação não iniciar, o servidor da Equipe não é aberto; uma imagem OTA
-pendente falha no autoteste e pode voltar à anterior.
+Clientes conectados ao AP da Equipe podem enviar comandos HTTP; não há chave
+administrativa adicional. A permissão validada no mestre continua necessária
+para alterar a rede principal e a política Wi-Fi.
 
 `web/index.html`, `web/style.css`, `web/layout.css` e `web/app.js` são as fontes
 do painel NEXUS. `web/gerar_painel.py` gera `src/servicos/painel_web.c`,
@@ -91,10 +88,12 @@ independentemente dessa escolha. O cartão Google também permite iniciar a
 sincronização dos arquivos pendentes e acompanhar o progresso informado pelo
 mestre. Uma requisição lenta ou falha pode reduzir a taxa efetiva no navegador.
 Gráficos e CSV do navegador acumulam dados apenas enquanto a página está aberta.
-Os gráficos combinam duas séries no mesmo intervalo de tempo, com escalas e
+Os gráficos combinam séries no mesmo intervalo de tempo, com duas escalas e
 unidades nas laterais. Movimento mostra velocidade (escala inicial de 0 a 30 km/h,
 expandida quando uma amostra excede esse valor e restaurada depois)
-e aceleração; o gráfico elétrico permite escolher as duas grandezas. Os
+e aceleração; o gráfico elétrico permite escolher duas grandezas com eixos
+laterais e uma terceira curva opcional, tracejada, com escala própria indicada
+na legenda. Passar o mouse ou tocar no gráfico mostra os valores da amostra. Os
 diagnósticos do mestre e da equipe começam com CPU e memória livre, enquanto
 Visitantes mostra latência e disponibilidade das consultas; seu diagnóstico
 também oferece CPU, temperatura e memória quando a consulta ao satélite responde.
@@ -169,32 +168,17 @@ do DHCP nem impede que um dispositivo com a senha salva se reconecte.
 | `GET /api/wifi/clientes` | Clientes conectados ao AP Equipe, tempo de sessão e limite configurado. |
 | `POST /api/wifi/limite` | Define o limite de sessão do AP Equipe em minutos. |
 | `POST /api/wifi/desconectar` | Desconecta um cliente do AP Equipe pelo endereço MAC. |
-| `GET /api/comandos/acesso` | Confere a chave administrativa sem enviar comando. |
 | `GET /api/mestre?consulta=...` | Consulta o mestre pela UART e transforma a resposta em JSON. |
 | `POST /api/mestre?consulta=...` | Solicita uma ação ao mestre; a resposta confirma o recebimento/aceitação, e ações assíncronas exigem consulta posterior do estado. |
 
-As três rotas `POST` acima exigem `Authorization: Basic` com usuário `equipe` e
-a chave administrativa como senha. A chave é aleatória, gerada na primeira
-partida, guardada na NVS e mostrada no terminal serial em cada partida. A
-senha dos APs Wi-Fi permanece a mesma. No painel, use **Preparar acesso** antes
-de precisar enviar um comando urgente; o navegador guarda a chave apenas na
-sessão da aba. Se a NVS for apagada, uma nova chave é gerada e deve ser lida
-novamente no serial. As consultas `GET` de telemetria e estado permanecem
-acessíveis sem ela. Até duas consultas simultâneas ao mestre e uma ação
+As rotas `POST` podem ser usadas por clientes conectados ao AP da Equipe. Até
+duas consultas simultâneas ao mestre e uma ação
 simultânea podem ocupar tarefas de resposta; uma nova chamada recebe HTTP 503
 quando a respectiva capacidade está ocupada.
 
-O painel usa HTTP local, sem TLS. Basic transporta a chave em cada ação; por
-isso, restrinja o acesso ao AP e não distribua a chave administrativa com o QR
-code da rede. A chave não substitui a senha de permissão validada no mestre
-para alterações de Wi-Fi que a exigem.
-
-**Preparar acesso** envia uma consulta sem efeito ao próprio ESP da Equipe para
-verificar a chave. Uma chave incorreta recebe HTTP 401 e é descartada do
-navegador; nenhuma ação é encaminhada ao mestre. A chave também pode ser
-informada no primeiro envio, mas essa entrada atrasaria um pedido urgente.
-A senha administrativa de certas alterações de Wi-Fi **no mestre** continua
-necessária quando a operação a exigir.
+O painel usa HTTP local, sem TLS. Proteja o acesso ao AP da Equipe, pois a
+senha da rede é o controle de acesso aos comandos. A permissão de certas
+alterações de Wi-Fi no mestre permanece separada.
 
 Consultas GET aceitas: `ping`, `versao`, `saude`, `telemetria`,
 `uart`, `ota`, `sincronizacao`, `wifi`, `diagnostico_mestre`, `configuracao`,
@@ -224,7 +208,7 @@ são rejeitadas. A fila de comandos evita disputas com a recepção UART.
 | `intervalo_relatorio` | Grupo de 0 a 3, quebra de linha e intervalo numérico. |
 | `intervalo_ota`, `intervalo_telemetria_ota` | Um intervalo numérico; o mestre valida a faixa. |
 | `simulador_telemetria` | `1` ativa ou `0` desativa até o próximo reinício. |
-| `wifi_preparar` | SSID, quebra de linha e senha da rede. Prepara a próxima operação. |
+| `wifi_preparar` | SSID, quebra de linha e senha da rede. Senha vazia representa rede aberta; outras precisam de 8 a 63 caracteres. Prepara a próxima operação. |
 | `wifi_conectar_preparada`, `wifi_salvar_preparada` | Vazio; exigem uma rede preparada. |
 | `wifi_conectar_salva`, `wifi_excluir_salva` | Índice de 1 a 5, conforme a lista consultada. |
 | `wifi_automatico` | `0` ou `1`, quebra de linha e senha de permissão. |
@@ -232,8 +216,7 @@ são rejeitadas. A fila de comandos evita disputas com a recepção UART.
 | `wifi_politica` | Cinco linhas: tentativas por rede, tempo por tentativa em ms, intervalo entre tentativas em ms, limite da sessão em ms e senha de permissão. |
 
 O HTTP rejeita consulta ausente ou desconhecida e método incompatível com
-`400` ou `405`. Ações sem chave válida recebem `401` **antes** de criar a tarefa
-assíncrona ou encaminhar dados pela UART. Consultas e ações autorizadas são
+`400` ou `405`. Consultas e ações aceitas são
 encaminhadas pela UART; conexão a uma rede Wi-Fi pode aguardar até cerca de
 185 s, enquanto consultas de satélite usam prazo menor. A confirmação visual
 antes do envio pertence ao JavaScript do painel. `ok:true` indica que a
@@ -241,13 +224,17 @@ resposta de comando foi aceita;
 para OTA, upload e outras ações assíncronas, consulte o estado depois.
 
 O painel não recupera sessões passadas do SD nem confirma sozinho o efeito final
-de uma operação assíncrona. Tensão do pacote, corrente, carga e pedais não são
-adquiridos no modo real atual; esses valores só são exibidos quando a telemetria
-indica modo simulado. `tensao_adc_bruta` é apenas a contagem não calibrada do ADC.
+de uma operação assíncrona. Tensão do barramento, corrente e potência vêm do
+INA228 quando o mestre marca a leitura elétrica como válida. A página da equipe
+mostra também, dentro de **Operação e sensores**, queda no shunt, temperatura
+do chip, energia e carga acumuladas desde o reset do INA228 e diagnóstico
+quando disponíveis. Não há um cartão separado para o sensor; carga percentual,
+autonomia e pedais ainda só são apresentados no modo simulado.
+`tensao_adc_bruta` é apenas a contagem não calibrada do ADC.
 
 ## ESP32-S3 de visitantes
 
-`include/nucleo/configuracao.h` define o AP `UFSM-Carro-Visitantes`, canal 1,
+`include/nucleo/configuracao.h` define o AP `NEXUS-Visitantes`, canal 1,
 até dez clientes, largura solicitada de 20 MHz e potência máxima solicitada de
 16 dBm, além da UART1 em GPIO 5 (RX) e 6 (TX). Canal, largura e potência podem
 ser alterados por flags de compilação dentro dos limites do cabeçalho. O driver
@@ -340,10 +327,13 @@ leitura nova abre uma lacuna nos gráficos.
 O gráfico **Movimento** une velocidade e aceleração na mesma linha de tempo,
 com escala e unidade próprias nas bordas esquerda e direita. A velocidade
 começa em 0–30 km/h e expande o eixo quando as leituras visíveis exigem; isso
-não altera a escala fixa do velocímetro. O gráfico **Sistema elétrico**, quando
-há dados, oferece quatro comparações: potência/corrente, tensão/corrente,
-potência/tensão ou carga/potência. Ambos usam janelas de 1, 5 ou 10 minutos,
-mostram as duas grandezas no mesmo instante ao tocar o gráfico e preservam
+não altera a escala fixa do velocímetro. O gráfico **Sistema elétrico** permite
+selecionar potência, corrente, tensão, estado de carga e autonomia simulados ou,
+quando disponíveis, queda de tensão no shunt, temperatura, energia e carga
+acumuladas do INA228. As duas primeiras curvas usam os eixos laterais; a
+terceira é opcional, tracejada e usa escala própria indicada na legenda. O toque
+ou ponteiro mostra o valor de cada grandeza na amostra. Ambos usam janelas de
+30 segundos, 2 ou 10 minutos e preservam
 lacunas em vez de ligar pontos através de falhas. O histórico existe apenas
 enquanto a página está aberta.
 
@@ -351,13 +341,15 @@ O Sobre traz o símbolo do carro, a intenção do projeto, orientação e equipe
 discente. A tipografia dos cartões largos cresce no computador sem ampliar os
 cartões estreitos do celular; não há fontes ou bibliotecas carregadas da rede.
 
-A seção de energia também apresenta **autonomia restante** em km, recebida no
+A seção de energia mostra tensão com três casas decimais e os demais valores
+disponíveis com pelo menos duas casas decimais, sem alterar a precisão da
+medição original. Também apresenta **autonomia restante** em km, recebida no
 campo `autonomia_decimos_km`, e **consumo médio** em Wh/km. A autonomia é uma
 estimativa do mestre; atualmente só existe no modo simulado e é `null` no modo
 real. A prévia local fornece esse campo para experimentar a interface.
 O consumo médio é calculado pelo navegador, dividindo a energia positiva
 integrada pela distância dos mesmos intervalos válidos. Inclui energia gasta
-parado e não desconta regeneração. Só aparece após 20 m de distância acumulada
+parado e não desconta regeneração. Só aparece após 100 m de distância acumulada
 com leituras de potência e percurso. Lacunas de comunicação, falta de potência
 ou de percurso não acrescentam distância ao denominador; intervalos acima de
 3 segundos também são descartados. Recarregar a página, trocar a origem entre

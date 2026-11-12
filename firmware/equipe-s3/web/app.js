@@ -10,47 +10,7 @@
   const tone = (id, name) => { const el = $(id); if (el) el.className = 'dot ' + name; };
   const badge = (id, text, name) => { const el = $(id); if (el) { el.textContent = text; el.className = 'badge ' + name; } };
   const message = (text, kind = '') => { const el = $(state.tab==='controle'?'critical-notice':'notice'); el.hidden = false; el.textContent = text; el.className = 'notice ' + kind; };
-  const state = { tab: 'telemetria', range: 30, signal: 'power', signalSecondary: 'current', telemetry: null, local: null, localAt: 0, master: {}, visitors: {}, browserOnline: false, browserChecked: false, localChecked: false, lastHttp: 0, masterOnline: false, masterChecked: false, visitorsOnline: false, visitorsChecked: false, lastSample: 0, lastSampleAgeMs: 0, lastSequence: null, samples: [], deviceSamples: {mestre:[],equipe:[],visitantes:[]}, deviceSignal:{mestre:'cpu',equipe:'cpu',visitantes:'rtt'}, deviceSignalSecondary:{mestre:'heap',equipe:'heap',visitantes:'availability'}, events: [], commandEvents: [], commandRuns: [], selected: {mestre:'mestre',equipe:'equipe', visitantes:'visitantes'}, busy: false, energyWh: 0, distanceStart: null, pending: null, polls: {}, telemetryRefreshMs: 250, commandRefreshMs: 2000 };
-  let adminKey = '';
-  try { adminKey = sessionStorage.getItem('nexus_admin_key') || ''; } catch (_) { /* Navegador sem armazenamento de sessão. */ }
-  function forgetAdminKey(){adminKey='';try{sessionStorage.removeItem('nexus_admin_key');}catch(_){}}
-  function commandHeaders(contentType){
-    if(!adminKey){
-      const entered=prompt('Chave administrativa do ESP da equipe (mostrada no terminal serial):');
-      if(!entered)throw Error('Comando não enviado: informe a chave administrativa.');
-      adminKey=entered.trim().toLowerCase();
-      if(!/^[0-9a-f]{32}$/.test(adminKey)){forgetAdminKey();throw Error('Chave administrativa inválida: são 32 caracteres hexadecimais.');}
-      try{sessionStorage.setItem('nexus_admin_key',adminKey);}catch(_){/* Mantém apenas nesta página. */}
-    }
-    return {'Content-Type':contentType,Authorization:'Basic '+btoa('equipe:'+adminKey)};
-  }
-  const nativeFetch=globalThis.fetch.bind(globalThis);
-  const fetch=async (url,options={})=>{
-    const action=options.method?.toUpperCase()==='POST'&&
-      /^\/api\/(mestre(?:\?|$)|wifi\/)/.test(String(url));
-    if(action){
-      const type=options.headers?.['Content-Type']||'text/plain; charset=utf-8';
-      options={...options,headers:{...options.headers,...commandHeaders(type)}};
-    }
-    const response=await nativeFetch(url,options);
-    if(action&&response.status===401)forgetAdminKey();
-    return response;
-  };
-  async function prepareCommandAccess(){
-    try{
-      const authorization=commandHeaders('text/plain')['Authorization'];
-      const response=await nativeFetch('/api/comandos/acesso',
-        {headers:{Authorization:authorization},cache:'no-store'});
-      if(!response.ok){
-        if(response.status===401)forgetAdminKey();
-        throw Error(response.status===401?'Chave incorreta. Confira o terminal serial do ESP da equipe.':'Não foi possível verificar a chave agora.');
-      }
-      document.querySelectorAll('[data-admin-access]').forEach(button=>button.textContent='Acesso preparado');
-      message('Acesso aos comandos preparado nesta sessão.','success');
-    }catch(error){message(error.message,'error');}
-  }
-  document.querySelectorAll('[data-admin-access]').forEach(button=>
-    button.addEventListener('click',prepareCommandAccess));
+  const state = { tab: 'telemetria', range: 30, signal: 'power', signalSecondary: 'current', signalTertiary: 'none', telemetry: null, local: null, localAt: 0, master: {}, visitors: {}, browserOnline: false, browserChecked: false, localChecked: false, lastHttp: 0, masterOnline: false, masterChecked: false, visitorsOnline: false, visitorsChecked: false, lastSample: 0, lastSampleAgeMs: 0, lastSequence: null, samples: [], deviceSamples: {mestre:[],equipe:[],visitantes:[]}, deviceSignal:{mestre:'cpu',equipe:'cpu',visitantes:'rtt'}, deviceSignalSecondary:{mestre:'heap',equipe:'heap',visitantes:'availability'}, events: [], commandEvents: [], commandRuns: [], selected: {mestre:'mestre',equipe:'equipe', visitantes:'visitantes'}, busy: false, energyWh: 0, distanceStart: null, pending: null, polls: {}, telemetryRefreshMs: 250, commandRefreshMs: 2000 };
   const devices = {
     mestre: {group:'mestre', name:'ESP32 mestre', id:'MESTRE', role:'Mestre', function:'Aquisição e telemetria do veículo'},
     equipe: {group:'equipe', name:'ESP32 da equipe', id:'EQUIPE', role:'Satélite / gateway', function:'Recepção UART, Wi-Fi e painel web'},
@@ -174,8 +134,15 @@
   addEventListener('hashchange', () => showTab(location.hash.slice(1)));
   addEventListener('popstate', () => showTab(location.hash.slice(1)));
   document.querySelectorAll('.range').forEach(el => el.addEventListener('click', () => { state.range = Number(el.dataset.range); document.querySelectorAll('.range').forEach(b => b.classList.toggle('active', b === el)); drawCharts(); }));
-  $('electric-signal').addEventListener('change', e => { const previous=state.signal;state.signal=e.target.value;if(state.signal===state.signalSecondary){state.signalSecondary=previous;$('electric-signal-2').value=previous;}drawCharts(); });
-  $('electric-signal-2').addEventListener('change', e => { const previous=state.signalSecondary;state.signalSecondary=e.target.value;if(state.signalSecondary===state.signal){state.signal=previous;$('electric-signal').value=previous;}drawCharts(); });
+  const electricSlots=[['electric-signal','signal'],['electric-signal-2','signalSecondary'],['electric-signal-3','signalTertiary']];
+  function selectedElectricKeys(){return [state.signal,state.signalSecondary,state.signalTertiary].filter(key=>key!=='none');}
+  electricSlots.forEach(([id,key])=>$(id).addEventListener('change',event=>{
+    const next=event.target.value,previous=state[key],other=electricSlots.find(([otherId,otherKey])=>otherId!==id&&state[otherKey]===next);
+    if(other&&previous==='none'){event.target.value=previous;return;}
+    state[key]=next;
+    if(other){state[other[1]]=previous;$(other[0]).value=previous;}
+    drawCharts();
+  }));
   const speedPeak={last:null,lastAt:0,sequence:null,source:null,candidate:0,candidateAt:0,trough:0,armed:true,cooldownUntil:0,value:null,until:0,timer:null};
   const PEAK_HOLD_MS=1400;
   const speedScale={max:30,belowSince:null};
@@ -342,13 +309,14 @@
   }
   function renderCriticalTelemetry(stale){
     const d=stale?null:state.telemetry,sim=!!d?.simulado;
+    const electrical=!!d&&(sim||!!(d.estado_mpu&128));
     badge('critical-freshness',!state.telemetry?'Aguardando telemetria':stale?'Leitura desatualizada':sim?'Leitura simulada':'Leitura do mestre',stale?'warn':sim?'warn':'good');
     set('critical-speed',d?format(value(d,'velocidade_centesimos_kmh',100),'',1).trim():'—');
     set('critical-throttle',sim?format(value(d,'acelerador_decimos_percentual',10),'%',1):'Não disponível');
     set('critical-brake',sim?format(value(d,'freio_decimos_percentual',10),'%',1):'Não disponível');
-    set('critical-current',sim?format(value(d,'corrente_centesimos_a',100),'A',2):'Não disponível');
-    set('critical-voltage',sim?format(value(d,'tensao_pacote_mv',1000),'V',1):'Não disponível');
-    set('critical-power',sim?format(value(d,'potencia_w'),'W',0):'Não disponível');
+    set('critical-current',electrical?format(value(d,'corrente_centesimos_a',100),'A',2):'Não disponível');
+    set('critical-voltage',electrical?format(value(d,'tensao_pacote_mv',1000),'V',3):'Não disponível');
+    set('critical-power',electrical?format(value(d,'potencia_w'),'W',0):'Não disponível');
   }
   const healthCauses=['Memória crítica','Pilha de tarefa baixa','Sensor','I²C','UART','Supervisão de tarefas','Equipe sem resposta','Visitantes sem resposta','Wi-Fi fraco','Falha OTA recente','Persistência no SD','Memória baixa'];
   function renderHealth(){
@@ -383,7 +351,12 @@
     if(telemetryMotion.arrivedAt){const elapsed=now-telemetryMotion.arrivedAt;if(elapsed>=120&&elapsed<=2500)telemetryMotion.period=Math.round(telemetryMotion.period*.7+elapsed*.3);}
     telemetryMotion.arrivedAt=now;
     if (state.samples.length && now - state.samples[state.samples.length - 1].time > 3000) state.samples.push({time:now - 1, gap:true});
-    const sample = {time:now, simulated:d.simulado, speed:value(d,'velocidade_centesimos_kmh',100), accel:d.simulado || (d.estado_mpu & 1) ? value(d,'aceleracao_milesimos_ms2',1000) : null, power:d.simulado ? value(d,'potencia_w') : null, current:d.simulado ? value(d,'corrente_centesimos_a',100) : null, voltage:d.simulado ? value(d,'tensao_pacote_mv',1000) : null};
+    const electrical=d.simulado || !!(d.estado_mpu & 128);
+    const ina=electrical&&!d.simulado&&!!(d.estado_ina&1);
+    const sample = {time:now, simulated:d.simulado, speed:value(d,'velocidade_centesimos_kmh',100), accel:d.simulado || (d.estado_mpu & 1) ? value(d,'aceleracao_milesimos_ms2',1000) : null, power:electrical ? value(d,'potencia_w') : null, current:electrical ? value(d,'corrente_centesimos_a',100) : null, voltage:electrical ? value(d,'tensao_pacote_mv',1000) : null,
+      soc:d.simulado?value(d,'carga_decimos_percentual',10):null,autonomy:d.simulado?value(d,'autonomia_decimos_km',10):null,
+      shunt:ina?value(d,'ina_shunt_microvolts',1000):null,inaTemp:ina?value(d,'ina_temperatura_centesimos_c',100):null,
+      inaEnergy:ina&&(d.estado_ina&2)?value(d,'ina_energia_mwh',1000):null,inaCharge:ina&&(d.estado_ina&4)?value(d,'ina_carga_mah',1000):null};
     const previousMotion=state.samples.length?state.samples[state.samples.length-1]:null;
     if(previousMotion&&!previousMotion.gap&&Number.isFinite(previousMotion.speed)&&Number.isFinite(sample.speed)){
       const drop=previousMotion.speed-sample.speed;
@@ -409,10 +382,11 @@
   function renderTelemetry(d) {
     const available = !!(d && d.valido);
     if (!available) return;
-    const speed = value(d,'velocidade_centesimos_kmh',100), accel = d.simulado || (d.estado_mpu & 1) ? value(d,'aceleracao_milesimos_ms2',1000) : null, soc = d.simulado ? value(d,'carga_decimos_percentual',10) : null, power = d.simulado ? value(d,'potencia_w') : null;
+    const electrical=d.simulado || !!(d.estado_mpu & 128);
+    const speed = value(d,'velocidade_centesimos_kmh',100), accel = d.simulado || (d.estado_mpu & 1) ? value(d,'aceleracao_milesimos_ms2',1000) : null, soc = d.simulado ? value(d,'carga_decimos_percentual',10) : null, power = electrical ? value(d,'potencia_w') : null;
     animateTelemetry('speed',speed,1,()=>updateArc(false));
     animateTelemetry('accel',accel,2,current=>{$('accel-card').classList.toggle('is-negative',current!==null&&current<-.015);set('accel-context',current===null?'Sensor indisponível':current<-.04?'Desaceleração':current>.04?'Aceleração':'Movimento estável');});
-    animateTelemetry('soc',soc,1,current=>{$('soc-bar').style.width=Math.max(0,Math.min(100,current||0))+'%';set('soc-context',current===null?'Carga indisponível':current<20?'Carga baixa':current<80?'Carga disponível':'Carga elevada');});
+    animateTelemetry('soc',soc,2,current=>{$('soc-bar').style.width=Math.max(0,Math.min(100,current||0))+'%';set('soc-context',current===null?'Carga indisponível':current<20?'Carga baixa':current<80?'Carga disponível':'Carga elevada');});
     const powerKw=power!==null&&Math.abs(power)>=1000;
     if(telemetryMotion.powerUnit!==undefined&&telemetryMotion.powerUnit!==powerKw){const oldPower=telemetryMotion.items.power;if(oldPower?.frame)cancelAnimationFrame(oldPower.frame);delete telemetryMotion.items.power;}
     telemetryMotion.powerUnit=powerKw;
@@ -420,11 +394,20 @@
     animateTelemetry('power',powerKw?power/1000:power,powerKw?2:0,current=>renderPowerRail(current===null?null:powerKw?current*1000:current));
     if(power===null){$('power-card').classList.remove('is-regen');set('power-context','Medição indisponível');}
     set('gear', d.simulado ? marchas[d.marcha] || 'Não disponível' : 'Não disponível'); set('distance', format(value(d,'percurso_metros',1000),'km',2)); set('master-time', age(value(d,'tempo_mestre_ms'))); set('source', d.simulado ? 'Dados simulados' : 'Mestre');
-    set('voltage', format(d.simulado ? value(d,'tensao_pacote_mv',1000) : null,'V',1)); set('current', format(d.simulado ? value(d,'corrente_centesimos_a',100) : null,'A',2)); set('soc-detail', format(soc,'%',1));
-    set('range-estimate',format(d.simulado?value(d,'autonomia_decimos_km',10):null,'km',1));
-    set('energy', d.simulado && state.samples.length > 1 ? format(state.energyWh,'Wh',1) : 'Não disponível');
+    set('voltage', format(electrical ? value(d,'tensao_pacote_mv',1000) : null,'V',3)); set('current', format(electrical ? value(d,'corrente_centesimos_a',100) : null,'A',2)); set('soc-detail', format(soc,'%',2));
+    set('range-estimate',format(d.simulado?value(d,'autonomia_decimos_km',10):null,'km',2));
+    set('energy', electrical && state.samples.length > 1 ? format(state.energyWh,'Wh',2) : 'Não disponível');
     const distanceKm = state.distanceStart === null ? null : (d.percurso_metros - state.distanceStart)/1000;
-    set('consumption', d.simulado && distanceKm !== null && distanceKm >= 0.1 && state.energyWh >= 0 ? format(state.energyWh/distanceKm,'Wh/km',1) : 'Não disponível');
+    set('consumption', electrical && distanceKm !== null && distanceKm >= 0.1 && state.energyWh >= 0 ? format(state.energyWh/distanceKm,'Wh/km',2) : 'Não disponível');
+    const ina=electrical&&!d.simulado&&!!(d.estado_ina&1);
+    badge('ina-badge',ina?'Leitura do INA228':d.simulado?'Simulação':'Sem leitura',ina?'good':d.simulado?'warn':'muted');
+    set('ina-shunt',ina?format(value(d,'ina_shunt_microvolts',1000),'mV',3):'Não disponível');
+    set('ina-temp',ina?format(value(d,'ina_temperatura_centesimos_c',100),'°C',2):'Não disponível');
+    set('ina-energy',ina&&(d.estado_ina&2)?format(value(d,'ina_energia_mwh',1000),'Wh',2):'Não disponível');
+    set('ina-charge',ina&&(d.estado_ina&4)?format(value(d,'ina_carga_mah',1000),'Ah',3):'Não disponível');
+    const diag=Number(d.ina_diagnostico)||0;
+    const diagText=diag&0xc00?'Acumulador saturado':diag&0x200?'Cálculo inválido':!(diag&1)?'Memória inválida':'Normal';
+    set('ina-diagnostic',ina?diagText+' · 0x'+diag.toString(16).toUpperCase().padStart(4,'0'):'Não disponível');
     const throttle = d.simulado ? value(d,'acelerador_decimos_percentual',10) : null, brake = d.simulado ? value(d,'freio_decimos_percentual',10) : null;
     animateTelemetry('throttle-arc-value',throttle,0,current=>{$('throttle-fill').style.setProperty('--fill-level',Math.max(0,Math.min(100,current||0))+'%');},'%');
     animateTelemetry('brake-arc-value',brake,0,current=>{$('brake-fill').style.setProperty('--fill-level',Math.max(0,Math.min(100,current||0))+'%');},'%');
@@ -707,9 +690,12 @@
     if(consult==='wifi'||consult==='configuracao')observeOperationalRun(consult,data);
   }
   async function loadSavedNetworks(count){
-    if(state.polls.savedNetworks)return;state.polls.savedNetworks=true;
+    while(state.polls.savedNetworks){
+      if(state.polls.savedNetworks.count===count)return state.polls.savedNetworks.promise;
+      await state.polls.savedNetworks.promise;
+    }
+    const work=(async()=>{
     const select=$('wifi-saved'),selected=select.value,networks=[];
-    try{
       for(let index=1;index<=Math.min(5,Number(count)||0);index++){
         try{const data=await remote(()=>getJSON('/api/mestre?consulta=rede_wifi_salva&indice='+index,18000));networks.push({index,ssid:data.ssid});}catch(_){/* A posição fica indisponível. */}
       }
@@ -717,7 +703,10 @@
       if(!networks.length){const option=document.createElement('option');option.value='';option.textContent='Nenhuma rede salva informada';select.append(option);}
       else networks.forEach(({index,ssid})=>{const option=document.createElement('option');option.value=String(index);option.textContent=index+' · '+ssid;select.append(option);});
       if(networks.some(item=>String(item.index)===selected))select.value=selected;
-    }finally{state.polls.savedNetworks=false;}
+      return networks;
+    })();
+    state.polls.savedNetworks={count,promise:work};
+    try{return await work;}finally{if(state.polls.savedNetworks?.promise===work)state.polls.savedNetworks=null;}
   }
   document.querySelectorAll('#command-center input,#command-center select').forEach(field=>field.addEventListener('input',()=>{field.dataset.edited='1';}));
   $('report-group').addEventListener('change',()=>{const config=state.master.configuracao;if(config?.intervalos_relatorios_ms){$('report-interval').dataset.edited='';setField('report-interval',config.intervalos_relatorios_ms[Number($('report-group').value)]);}});
@@ -732,8 +721,8 @@
     if(!raw||!Number.isFinite(seconds)||seconds<min||seconds>max)throw new Error('Confira '+(input.closest('label')?.textContent.trim()||id)+' ('+min+' a '+max+' s).');
     return String(Math.round(seconds*1000));
   }
-  function permission(){const field=$('wifi-permission'),secret=field.value;if(!secret||secret.includes('\n')||bytesLength(secret)>=108){field.closest('details').open=true;field.focus();throw new Error('Informe a permissão administrativa para esta ação protegida.');}return secret;}
-  function preparedNetwork(){const ssid=$('wifi-ssid').value,password=$('wifi-password').value;if(!ssid||bytesLength(ssid)>32||bytesLength(password)<8||bytesLength(password)>63||ssid.includes('\n')||password.includes('\n'))throw new Error('Informe SSID de até 32 bytes e senha de 8 a 63 bytes.');return ssid+'\n'+password;}
+  function permission(){const field=$('wifi-permission'),secret=field.value;if(!secret||/[\r\n]/.test(secret)||bytesLength(secret)>=108){field.closest('details').open=true;field.focus();throw new Error('Informe a permissão administrativa para esta ação protegida.');}return secret;}
+  function preparedNetwork(){const ssid=$('wifi-ssid').value,password=$('wifi-password').value,length=bytesLength(password);if(!ssid||bytesLength(ssid)>32||(length!==0&&length<8)||length>63||/[\r\n]/.test(ssid)||/[\r\n]/.test(password))throw new Error('Informe SSID de até 32 bytes; deixe a senha vazia para rede aberta ou use 8 a 63 bytes.');return ssid+'\n'+password;}
   function savedIndex(){const index=$('wifi-saved').value;if(!/^[1-5]$/.test(index))throw new Error('Selecione uma rede salva informada pelo mestre.');return index;}
   function buildPlan(action){
     const name=actionNames[action];if(!name)throw new Error('Comando desconhecido.');
@@ -755,15 +744,16 @@
     if(action==='intervalo_relatorio'){const group=Number($('report-group').value),interval=Number(numberField('report-interval'));plan.steps[0].body=group+'\n'+interval;plan.refresh=['configuracao'];plan.expected={field:'intervalos_relatorios_ms',index:group,value:interval,label:'Intervalo do relatório'};}
     if(action==='intervalo_ota'){const interval=Number(numberField('ota-interval'));plan.steps[0].body=String(interval);plan.refresh=['configuracao'];plan.expected={field:'intervalo_ota_minutos',value:interval,label:'Verificação OTA'};}
     if(action==='intervalo_telemetria_ota'){const interval=Number(numberField('telemetry-ota-interval'));plan.steps[0].body=String(interval);plan.refresh=['configuracao'];plan.expected={field:'intervalo_telemetria_ota_ms',value:interval,label:'Telemetria durante OTA'};}
-    if(action==='wifi_test'){plan.expectedSsid=$('wifi-ssid').value;plan.steps=[{code:'wifi_preparar',body:preparedNetwork()},{code:'wifi_conectar_preparada',body:''}];if($('wifi-save').checked)plan.steps.push({code:'wifi_salvar_preparada',body:''});plan.secret=true;plan.refresh=['wifi','configuracao'];}
+    if(action==='wifi_test'){plan.expectedSsid=$('wifi-ssid').value;plan.steps=[{code:'wifi_preparar',body:preparedNetwork()},{code:'wifi_conectar_preparada',body:''}];plan.saveNetwork=$('wifi-save').checked;if(plan.saveNetwork)plan.steps.push({code:'wifi_salvar_preparada',body:''});plan.secret=true;plan.refresh=['wifi','configuracao'];}
     if(action==='wifi_primary'){plan.expectedSsid=$('wifi-ssid').value;const network=preparedNetwork(),secret=permission();plan.steps=[{code:'wifi_preparar',body:network},{code:'wifi_alterar_principal',body:secret}];plan.secret=true;plan.refresh=['wifi','configuracao'];}
-    if(action==='wifi_conectar_salva'||action==='wifi_excluir_salva'){plan.steps[0].body=savedIndex();plan.refresh=['wifi','configuracao'];if(action==='wifi_conectar_salva')plan.expectedSsid=($('wifi-saved').selectedOptions[0]?.textContent||'').split(' · ').slice(1).join(' · ');}
+    if(action==='wifi_conectar_salva'||action==='wifi_excluir_salva'){plan.steps[0].body=savedIndex();plan.refresh=['wifi','configuracao'];plan.expectedSsid=($('wifi-saved').selectedOptions[0]?.textContent||'').split(' · ').slice(1).join(' · ');}
     if(action==='wifi_restaurar_principal'){plan.steps[0].body=permission();plan.secret=true;plan.refresh=['wifi','configuracao'];}
     if(action==='wifi_automatico'){const enabled=$('wifi-auto').value==='1';plan.steps[0].body=(enabled?'1':'0')+'\n'+permission();plan.secret=true;plan.refresh=['configuracao'];plan.expected={field:'wifi_automatico',value:enabled,label:'Conexão automática'};}
-    if(action==='wifi_politica'){plan.steps[0].body=[numberField('wifi-attempts'),wifiSecondsField('wifi-attempt-time'),wifiSecondsField('wifi-retry-interval'),wifiSecondsField('wifi-session-limit')].join('\n')+'\n'+permission();plan.secret=true;plan.refresh=['configuracao'];}
+    if(action==='wifi_politica'){const values=[numberField('wifi-attempts'),wifiSecondsField('wifi-attempt-time'),wifiSecondsField('wifi-retry-interval'),wifiSecondsField('wifi-session-limit')];plan.steps[0].body=values.join('\n')+'\n'+permission();plan.expectedPolicy=values.map(Number);plan.secret=true;plan.refresh=['configuracao'];}
     return plan;
   }
   function observedConfiguration(plan,config){
+    if(plan.expectedPolicy){const keys=['tentativas_wifi','tempo_tentativa_wifi_ms','intervalo_tentativas_wifi_ms','tempo_limite_wifi_ms'];const matches=keys.every((key,index)=>Number(config[key])===plan.expectedPolicy[index]);return {matches,text:matches?'Política Wi-Fi confirmada nos quatro parâmetros do mestre.':'A política consultada difere dos valores solicitados; confira tentativas e tempos.'};}
     if(!plan.expected)return null;
     const expected=plan.expected,current=expected.index===undefined?config[expected.field]:config[expected.field]?.[expected.index];
     if(current===undefined)return null;
@@ -774,6 +764,7 @@
     if(!run||!run.responses.length||!run.refreshQueries?.includes(consult)||Date.now()>run.followUntil||['Falhou','Sem resposta'].includes(run.status))return;
     run.checkedAt=Date.now();
     if(consult==='configuracao'){
+      if(['wifi_test','wifi_conectar_salva','wifi_excluir_salva','wifi_primary','wifi_restaurar_principal'].includes(run.action))return;
       const observed=observedConfiguration(run,data);
       if(observed)updateRun(run,observed.matches?'Valor confirmado':'Aguardando valor',observed.text+' Leitura atual do mestre.',observed.matches?'good':'warn');
       else if(run.action==='alternar_relatorios')updateRun(run,'Estado consultado','Relatórios no mestre: '+(data.relatorios_pausados?'pausados':'ativos')+'.','good');
@@ -784,6 +775,7 @@
       const enabled=!!data.ativo,matches=enabled===run.expected?.value;
       updateRun(run,matches?'Estado confirmado':'Aguardando estado','O mestre informa telemetria '+(enabled?'simulada':'real')+'. Padrão após reiniciar: '+(data.padrao_firmware?'simulada':'real')+'.',matches?'good':'warn');
     }else if(consult==='wifi'){
+      if(run.action.startsWith('wifi_'))return;
       const connected=!!data.conectado,matched=connected&&run.expectedSsid&&data.rede===run.expectedSsid;
       const status=matched?'Rede observada':connected&&run.expectedSsid?'Aguardando rede':connected?'Wi-Fi consultado':'Aguardando conexão';
       const detail=connected?'Mestre conectado a '+(data.rede||'rede não identificada')+'.':'O mestre ainda não informa conexão ativa.';
@@ -801,8 +793,6 @@
   }
   async function sendStopNow(){
     if(state.stopInFlight)return;
-    try{commandHeaders('text/plain; charset=utf-8');}
-    catch(error){message(error.message,'error');return;}
     state.stopInFlight=true;availability();
     const run={name:'Solicitar parada remota',action:'parada_remota',time:Date.now(),requests:[],responses:[],step:1,status:'Enviando',text:'Pedido enviado ao mestre; aguardando resposta.',tone:'warn',checkedAt:0,hasRefresh:true,refreshQueries:['controle_remoto'],followUntil:Date.now()+30000};
     state.commandRuns.unshift(run);state.commandRuns.length=Math.min(state.commandRuns.length,12);renderMasterCommandHistory();
@@ -844,7 +834,27 @@
       }
       run.followUntil=Date.now()+120000;
       let checked=0;const observed={};
-      for(const query of plan.refresh){const result=await masterQuery(query);if(result){checked++;observed[query]=result;run.checkedAt=Date.now();}if(query==='configuracao'&&result)await loadSavedNetworks(result.quantidade_redes_wifi);}
+      for(const query of plan.refresh){const result=await masterQuery(query);if(result){checked++;observed[query]=result;run.checkedAt=Date.now();}if(query==='configuracao'&&result)observed.savedNetworks=await loadSavedNetworks(result.quantidade_redes_wifi);}
+      if(plan.action==='wifi_test'||plan.action==='wifi_conectar_salva'){
+        const saved=plan.saveNetwork&&observed.savedNetworks?.some(network=>network.ssid===plan.expectedSsid);
+        const detail=plan.action==='wifi_conectar_salva'?' Rede já estava na lista salva.':plan.saveNetwork?(saved?' Rede encontrada na lista salva do mestre.':' O mestre aceitou o salvamento, mas a lista não confirmou a rede; atualize o estado para conferir.'):' Rede não salva, conforme solicitado.';
+        updateRun(run,saved?'Rede salva e confirmada':plan.saveNetwork?'Salvamento sem confirmação':'Conexão validada','O mestre confirmou o teste de conexão com '+plan.expectedSsid+'. O rádio foi desligado após o teste.'+detail,saved||!plan.saveNetwork?'good':'warn');
+        message(plan.name+': conexão validada.'+(saved?' Rede salva e confirmada.':plan.saveNetwork?' Confira a lista de redes salvas.':''),saved||!plan.saveNetwork?'success':'');
+        if(plan.action==='wifi_test')$('wifi-password').value='';
+        return;
+      }
+      if(plan.action==='wifi_excluir_salva'){
+        const removed=observed.savedNetworks?.every(network=>network.ssid!==plan.expectedSsid);
+        updateRun(run,removed?'Exclusão confirmada':'Exclusão sem confirmação',removed?'A rede '+plan.expectedSsid+' não aparece mais na lista salva do mestre.':'O mestre aceitou a exclusão, mas a lista atual não confirmou a remoção.',removed?'good':'warn');
+        message(plan.name+': '+(removed?'rede removida da lista.':'confira a lista de redes salvas.'),removed?'success':'');
+        return;
+      }
+      if(plan.action==='wifi_primary'||plan.action==='wifi_restaurar_principal'){
+        updateRun(run,'Gravação aceita',plan.action==='wifi_primary'?'O mestre confirmou a gravação de '+plan.expectedSsid+' como rede principal. A conexão será testada na próxima sessão Wi-Fi.':'O mestre confirmou a restauração da rede principal padrão. A conexão será testada na próxima sessão Wi-Fi.','good');
+        message(plan.name+': gravação confirmada pelo mestre.','success');
+        $('wifi-password').value='';$('wifi-permission').value='';
+        return;
+      }
       if(plan.refresh.length&&!checked){
         const unsupported=run.followSync&&Number.isFinite(state.master.versao?.capacidades)&&(state.master.versao.capacidades&CAP_SYNC)===0;
         updateRun(run,unsupported?'Sem acompanhamento':'Acompanhar estado',unsupported?'O mestre aceitou a ação, mas seu firmware não oferece o andamento detalhado. Atualize o mestre para acompanhar esta sincronização.':'O mestre respondeu ao comando, mas a consulta do estado não retornou. A atualização automática tentará novamente.','warn');
@@ -928,13 +938,14 @@
     if(canvas.width!==width||canvas.height!==height){canvas.width=width;canvas.height=height;}
     const ctx=canvas.getContext('2d');ctx.setTransform(ratio,0,0,ratio,0,0);ctx.clearRect(0,0,rect.width,rect.height);return {ctx,w:rect.width,h:rect.height};
   }
-  const chartInfo={speed:{label:'Velocidade',unit:'km/h',color:'#59D9F7'},accel:{label:'Aceleração',unit:'m/s²',color:'#FFCA64'},power:{label:'Potência',unit:'W',color:'#59D9F7'},current:{label:'Corrente',unit:'A',color:'#FFCA64'},voltage:{label:'Tensão',unit:'V',color:'#4CE0A2'}};
+  const chartInfo={speed:{label:'Velocidade',unit:'km/h',color:'#59D9F7',digits:1},accel:{label:'Aceleração',unit:'m/s²',color:'#FFCA64',digits:2},power:{label:'Potência',unit:'W',color:'#59D9F7',digits:2},current:{label:'Corrente',unit:'A',color:'#FFCA64',digits:2},voltage:{label:'Tensão',unit:'V',color:'#4CE0A2',digits:3},soc:{label:'SoC · simulado',unit:'%',color:'#C8A8FF',digits:2},autonomy:{label:'Autonomia · simulada',unit:'km',color:'#A8DA88',digits:2},shunt:{label:'Queda no shunt · INA228',unit:'mV',color:'#FF9297',digits:3},inaTemp:{label:'Temperatura · INA228',unit:'°C',color:'#D4A9F7',digits:2},inaEnergy:{label:'Energia acumulada · INA228',unit:'Wh',color:'#69D6CC',digits:2},inaCharge:{label:'Carga acumulada · INA228',unit:'Ah',color:'#E7B4DE',digits:3}};
   function chartRange(key,values){
     if(key==='speed')return [0,Math.max(30,Math.ceil(Math.max(0,...values)*1.08/5)*5)];
     if(key==='accel'){const limit=Math.max(2,Math.ceil(Math.max(0,...values.map(Math.abs))*1.15*2)/2);return [-limit,limit];}
+    if(key==='soc')return [0,100];
     if(!values.length)return [0,1];
     let min=Math.min(...values),max=Math.max(...values);
-    if(key==='power'||key==='rtt')min=Math.min(0,min);
+    if(key==='power'||key==='inaEnergy'||key==='rtt')min=Math.min(0,min);
     const spread=Math.max(1,(max-min)*.18);min-=spread;max+=spread;
     const step=Math.pow(10,Math.floor(Math.log10((max-min)/4)));
     return [key==='rtt'?0:Math.floor(min/step)*step,Math.ceil(max/step)*step];
@@ -955,7 +966,7 @@
       ctx.fillStyle='#BACBD5';ctx.textAlign=i===0?'left':i===2?'right':'center';
       ctx.fillText(new Date(start+(end-start)*i/2).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit'}),gx,h-7);
     }
-    series.forEach((axis,index)=>{
+    series.slice(0,2).forEach((axis,index)=>{
       const [min,max]=axis.range;
       ctx.fillStyle=axis.color;ctx.font='600 10px Segoe UI, sans-serif';ctx.textAlign=index?'right':'left';ctx.fillText(axis.unit,index?right:left,15);
       ctx.font='10px Segoe UI, sans-serif';ctx.textAlign=index?'left':'right';
@@ -964,10 +975,11 @@
     ctx.save();ctx.beginPath();ctx.rect(left,top,right-left,bottom-top);ctx.clip();
     ctx.setLineDash([3,5]);ctx.strokeStyle='#8F725C';ctx.lineWidth=1;
     state.events.filter(e=>e.time>=start&&e.time<=end).forEach(e=>{const px=x(e.time);ctx.beginPath();ctx.moveTo(px,top);ctx.lineTo(px,bottom);ctx.stroke();});ctx.setLineDash([]);
-    series.forEach(axis=>{
+    series.forEach((axis,index)=>{
       const [min,max]=axis.range,y=v=>bottom-(v-min)/(max-min)*(bottom-top);
-      ctx.strokeStyle=axis.color;ctx.lineWidth=2.2;ctx.lineJoin='round';ctx.lineCap='round';ctx.beginPath();let open=false,last=null;
+      ctx.strokeStyle=axis.color;ctx.lineWidth=index===2?1.9:2.2;ctx.lineJoin='round';ctx.lineCap='round';ctx.setLineDash(index===2?[6,4]:[]);ctx.beginPath();let open=false,last=null;
       samples.forEach(s=>{const reading=s[axis.key];if(s.gap||!Number.isFinite(reading)){open=false;return;}const px=x(s.time),py=y(reading);if(open)ctx.lineTo(px,py);else ctx.moveTo(px,py);open=true;last={x:px,y:py};});ctx.stroke();
+      ctx.setLineDash([]);
       if(last){ctx.fillStyle=axis.color;ctx.beginPath();ctx.arc(last.x,last.y,3.3,0,Math.PI*2);ctx.fill();}
     });
     const hover=state.hover?.[canvasId];if(hover&&hover.time>=start&&hover.time<=end){
@@ -975,16 +987,24 @@
       series.forEach(axis=>{if(!Number.isFinite(hover[axis.key]))return;const [min,max]=axis.range,py=bottom-(hover[axis.key]-min)/(max-min)*(bottom-top);ctx.fillStyle=axis.color;ctx.strokeStyle='#172735';ctx.lineWidth=2;ctx.beginPath();ctx.arc(px,py,5,0,Math.PI*2);ctx.fill();ctx.stroke();});
     }
     ctx.restore();
-    if(!samples.some(s=>keys.some(key=>Number.isFinite(s[key])))){ctx.fillStyle='#BACBD5';ctx.textAlign='center';ctx.font='12px Segoe UI, sans-serif';ctx.fillText(canvasId==='electric-chart'&&!state.telemetry?.simulado?'Sem leitura elétrica no firmware real':'Aguardando amostras disponíveis',w/2,h/2);}
+    if(!samples.some(s=>keys.some(key=>Number.isFinite(s[key])))){ctx.fillStyle='#BACBD5';ctx.textAlign='center';ctx.font='12px Segoe UI, sans-serif';ctx.fillText(canvasId==='electric-chart'?'Aguardando medição elétrica':'Aguardando amostras disponíveis',w/2,h/2);}
   }
   function drawCharts(){
-    plot('motion-chart',['speed','accel']);plot('electric-chart',[state.signal,state.signalSecondary]);
+    plot('motion-chart',['speed','accel']);plot('electric-chart',selectedElectricKeys());
     const primary=chartInfo[state.signal],secondary=chartInfo[state.signalSecondary];
-    set('electric-caption','À esquerda, '+primary.label.toLowerCase()+' ('+primary.unit+'); à direita, '+secondary.label.toLowerCase()+' ('+secondary.unit+').');
+    const extra=state.signalTertiary==='none'?null:chartInfo[state.signalTertiary];
+    set('electric-caption','À esquerda, '+primary.label.toLowerCase()+' ('+primary.unit+'); à direita, '+secondary.label.toLowerCase()+' ('+secondary.unit+').'+(extra?' Curva tracejada: escala própria indicada na legenda; toque para ler o valor.':''));
     [["electric-legend-primary",primary],["electric-legend-secondary",secondary]].forEach(([id,info])=>{
       const legend=$(id),mark=legend.querySelector('.legend-key');mark.style.backgroundColor=info.color;
       if(legend.lastChild?.textContent!==info.label)legend.replaceChildren(mark,document.createTextNode(info.label));
     });
+    const third=$('electric-legend-tertiary');third.hidden=!extra;
+    if(extra){
+      const key=state.signalTertiary,now=Date.now(),readings=state.samples.filter(sample=>!sample.gap&&sample.time>=now-state.range*1000&&Number.isFinite(sample[key])).map(sample=>sample[key]);
+      const [min,max]=chartRange(key,readings),scale=readings.length?' · '+number(min,extra.digits)+'–'+number(max,extra.digits)+' '+extra.unit:' · sem leitura';
+      third.querySelector('.legend-key').style.backgroundColor=extra.color;
+      set('electric-tertiary-label',extra.label+scale);
+    }
   }
   function drawDeviceChart(group,id){
     const canvas=$('device-chart-'+group);if(!canvas||state.tab!==group||state.selected[group]!==id||!canvas.getBoundingClientRect().width)return;
@@ -1007,8 +1027,10 @@
       const rect=canvas.getBoundingClientRect(),px=e.clientX-rect.left,start=Date.now()-state.range*1000,frame=chartFrame(rect.width,rect.height),ts=start+(px-frame.left)/Math.max(1,frame.right-frame.left)*state.range*1000;
       const list=state.samples.filter(s=>!s.gap&&Math.abs(s.time-ts)<state.range*1000/12);
       if(!list.length){tip.hidden=true;state.hover={};drawCharts();return;}
-      const sample=list.reduce((a,b)=>Math.abs(a.time-ts)<Math.abs(b.time-ts)?a:b),chosen=canvasId==='electric-chart'?[state.signal,state.signalSecondary]:keys;
-      tip.textContent=new Date(sample.time).toLocaleTimeString('pt-BR')+' · '+chosen.map(k=>chartInfo[k].label+': '+(Number.isFinite(sample[k])?number(sample[k],k==='speed'?1:2)+' '+chartInfo[k].unit:'Não disponível')).join(' · ');
+      const sample=list.reduce((a,b)=>Math.abs(a.time-ts)<Math.abs(b.time-ts)?a:b),chosen=canvasId==='electric-chart'?selectedElectricKeys():keys;
+      const heading=document.createElement('strong');heading.className='chart-tip-time';heading.textContent=new Date(sample.time).toLocaleTimeString('pt-BR');
+      const rows=chosen.map(key=>{const info=chartInfo[key],row=document.createElement('span'),mark=document.createElement('i'),label=document.createElement('span'),reading=document.createElement('b');row.className='chart-tip-reading';mark.className='chart-tip-key';mark.style.backgroundColor=info.color;label.textContent=info.label;reading.textContent=Number.isFinite(sample[key])?number(sample[key],info.digits)+' '+info.unit:'Não disponível';row.append(mark,label,reading);return row;});
+      tip.replaceChildren(heading,...rows);
       tip.hidden=false;tip.style.left=Math.min(Math.max(8,px+12),Math.max(8,rect.width-tip.offsetWidth-8))+'px';tip.style.top='18px';
       state.hover={[canvasId]:sample};drawCharts();
     };

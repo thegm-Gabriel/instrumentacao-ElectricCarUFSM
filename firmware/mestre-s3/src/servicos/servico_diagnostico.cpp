@@ -17,6 +17,7 @@
 #include "gerenciadores/gerenciador_i2c.h"
 #include "gerenciadores/gerenciador_uart.h"
 #include "servicos/servico_odometro.h"
+#include "servicos/servico_controle_sensores.h"
 #include "servicos/servico_ota.h"
 #include "servicos/servico_supervisao.h"
 #include "servicos/servico_telemetria.h"
@@ -257,7 +258,8 @@ ResumoSaudeSistema calcular_resumo() {
     resumo.menor_psram_livre = menor_psram;
     resumo.menor_maior_bloco_psram = menor_bloco_psram;
     resumo.temperatura_ultimo_erro = temperatura_ultimo_erro;
-    if (sensor_temperatura != nullptr) {
+    if (sensor_temperatura != nullptr &&
+        servico_controle_sensores_ativo(SensorControlado::TemperaturaEsp)) {
         float temperatura_c = 0.0f;
         temperatura_ultimo_erro =
             temperature_sensor_get_celsius(sensor_temperatura,
@@ -272,7 +274,7 @@ ResumoSaudeSistema calcular_resumo() {
     }
     resumo.motivo_ultimo_reset = static_cast<uint32_t>(esp_reset_reason());
     resumo.erros_sensores = sensores.adc.total + sensores.mpu6050.total +
-                            sensores.encoder.total;
+                            sensores.encoder.total + sensores.ina228.total;
     resumo.erros_i2c = i2c.erros;
     resumo.erros_uart = equipe.erros_envio + equipe.erros_recepcao +
                         visitantes.erros_envio + visitantes.erros_recepcao;
@@ -360,9 +362,14 @@ ResumoSaudeSistema calcular_resumo() {
         resumo.bytes_pilha_livres < PILHA_CRITICA_BYTES) {
         causas |= CausaSaudePilhaCritica;
     }
-    if (sensores.adc.consecutivos >= 3 ||
-        sensores.mpu6050.consecutivos >= 3 ||
-        sensores.encoder.consecutivos >= 3) causas |= CausaSaudeSensor;
+    if ((servico_controle_sensores_ativo(SensorControlado::Adc) &&
+         sensores.adc.consecutivos >= 3) ||
+        (servico_controle_sensores_ativo(SensorControlado::Mpu6050) &&
+         sensores.mpu6050.consecutivos >= 3) ||
+        (servico_controle_sensores_ativo(SensorControlado::Encoders) &&
+         sensores.encoder.consecutivos >= 3) ||
+        (servico_controle_sensores_ativo(SensorControlado::Ina228) &&
+         sensores.ina228.consecutivos >= 3)) causas |= CausaSaudeSensor;
     if (sensores.persistencia_odometro.consecutivos >= 2) {
         causas |= CausaSaudePersistencia;
     }
@@ -535,6 +542,7 @@ esp_err_t servico_diagnostico_registrar_resultado(
         case SensorDiagnosticado::Adc: registro = &diagnostico.adc; break;
         case SensorDiagnosticado::Mpu6050: registro = &diagnostico.mpu6050; break;
         case SensorDiagnosticado::Encoder: registro = &diagnostico.encoder; break;
+        case SensorDiagnosticado::Ina228: registro = &diagnostico.ina228; break;
         default: return ESP_ERR_INVALID_ARG;
     }
     const uint64_t instante_ms =

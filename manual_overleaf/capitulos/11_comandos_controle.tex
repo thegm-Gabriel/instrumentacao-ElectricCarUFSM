@@ -1,0 +1,52 @@
+\chapter{Comandos, consultas e controle preparatório}\label{cap:comandos}
+\section{Canal de comandos e caminho da requisição}
+A telemetria é uma publicação periódica do mestre. Operações como consultar a versão, trocar a fonte de dados, iniciar sincronização e autorizar OTA precisam de requisição e resposta: o operador deve saber se o pedido chegou, foi aceito ou foi rejeitado. Por isso, o enlace UART contém uma segunda família de quadros, além da telemetria. Essa separação evita interpretar um ACK de amostra como resultado de uma ação e permite prazos diferentes para uma consulta rápida e uma transferência demorada. O satélite da equipe é a ponte HTTP--UART; o visitante não recebe uma interface de operação.
+
+\begin{figure}[htbp]\centering
+\begin{tikzpicture}[node distance=20mm, >={Latex},
+  bloco/.style={draw=nexus,rounded corners,fill=pale,align=center,
+    minimum height=13mm,text width=3.3cm,font=\small}]
+\node[bloco] (browser) {Navegador da Equipe};
+\node[bloco,right=of browser] (equipe) {ESP Equipe\\servidor HTTP};
+\node[bloco,right=of equipe] (master) {ESP Mestre\\serviço solicitado};
+\draw[->,thick] ([yshift=3mm]browser.east)--node[above,font=\scriptsize]{requisição HTTP}([yshift=3mm]equipe.west);
+\draw[->,thick] ([yshift=3mm]equipe.east)--node[above,font=\scriptsize]{comando UART1}([yshift=3mm]master.west);
+\draw[->,thick,accent] ([yshift=-3mm]master.west)--node[below,font=\scriptsize]{resposta UART}([yshift=-3mm]equipe.east);
+\draw[->,thick,accent] ([yshift=-3mm]equipe.west)--node[below,font=\scriptsize]{resposta HTTP}([yshift=-3mm]browser.east);
+\end{tikzpicture}
+\caption{Encaminhamento de uma requisição do painel técnico ao mestre. Operações demoradas têm estado consultado depois da resposta inicial.}\label{fig:comando}
+\end{figure}
+
+\subsection{Formato e verificações no UART}
+O protocolo de comandos v1 começa por \texttt{C7 7C}. O cabeçalho compactado inclui versão, tipo solicitação/resposta, origem, destino, código de comando, identificador da solicitação, tamanho, resultado e campo reservado. A carga pode ter até 128 bytes e o quadro termina com CRC-32. O receptor verifica início, versão, sentido, tamanho e CRC antes de interpretar campos; números multibyte são codificados em \emph{little-endian}. O resultado explícito pode ser OK, não suportado, carga inválida, ocupado, negado, erro interno ou timeout. Uma resposta antiga ou de outro ID não deve ser usada como confirmação do pedido atual.
+
+O mesmo ID pode aparecer novamente após perda da resposta. O mestre conserva respostas recentes e devolve a resposta memorizada sem repetir a ação com efeito colateral. Esse comportamento é importante para sincronização, mudanças de rede e OTA. As máscaras de capacidades anunciadas na resposta de versão e em consulta específica permitem que o painel oculte ou desabilite ações que um firmware mais antigo não entende. O mestre usa a capacidade anunciada pelos satélites também para escolher o tamanho compatível de bloco OTA. Um campo de capacidade é parte de compatibilidade de protocolo, não um indicador físico do veículo.
+
+\begin{table}[htbp]\centering\small
+\caption{Grupos de códigos do protocolo de comandos v1}\label{tab:codigos-comandos}
+\begin{tabularx}{\textwidth}{@{}l l X@{}}\toprule
+Códigos & Tipo & Finalidade\\\midrule
+1--8 & Consultas básicas & Ping, versão, capacidades, saúde, telemetria, UART, OTA e Wi-Fi.\\
+20--25 & OTA & Verificação, autorizações por alvo, cancelamento e atualização de todos.\\
+30--33 & Mestre & Resumo no terminal, ação estruturada, configuração e rede salva.\\
+34--40 & Diagnóstico e satélites & Ping/versão de satélite, diagnóstico, sincronização, simulador, clientes e gestão de AP.\\
+41 & Controle preparatório & Consultar estado solicitado de marcha, limites e parada.\\\bottomrule
+\end{tabularx}\end{table}
+
+O código 31 contém uma ação tipada, com campos para número, índice, intervalo ou texto, em vez de criar um comando UART para cada botão do navegador. As ações implementadas incluem pausar relatórios, zerar percurso, sincronizar Google, ajustar intervalos, preparar/salvar/conectar redes, alterar política Wi-Fi, selecionar simulador e alterar pedidos preparatórios. Consultas de configuração e perfis salvos são separadas para não produzir efeito colateral.
+
+\section{HTTP da Equipe e acesso local}
+O satélite Equipe disponibiliza uma API HTTP local. O navegador usa \texttt{GET} em \path{/api/mestre?consulta=NOME} para solicitar dados do mestre e \texttt{POST} na mesma rota para enviar uma ação. O satélite traduz essas chamadas em comandos do protocolo UART; o mestre não expõe essa API por Wi-Fi. As rotas \path{/api/telemetria}, \path{/api/diagnostico} e \path{/api/wifi/clientes} consultam dados do próprio satélite. Não há chave administrativa HTTP adicional: quem se associa ao AP Equipe pode enviar ações locais ou dirigidas ao Mestre. O servidor reserva até duas consultas simultâneas ao Mestre e uma ação; chamadas adicionais podem receber HTTP 503. Consulta desconhecida ou método errado é rejeitado.
+
+Algumas alterações de Wi-Fi exigem uma senha de permissão verificada pelo \emph{Mestre}. Ela vale somente para essas mudanças protegidas e não é autorização geral para os outros comandos. A senha do AP Equipe deve ser distribuída apenas a operadores porque o HTTP local não usa TLS; o AP Visitantes não oferece comandos. Não incluir a senha de permissão nem a senha do AP técnico em capturas, QR público ou exportação de telemetria.
+
+\subsection{Resposta imediata versus término da operação}
+Um \texttt{ok:true} ou resposta UART OK pode indicar que o mestre aceitou um pedido; não significa que um CSV chegou ao Google, que a imagem OTA reiniciou e foi validada, ou que uma alteração de rede completou. A interface consulta o estado posteriormente e apresenta progresso e erro final. Esse desenho evita um falso sucesso quando a operação continua em tarefa própria. Sem resposta, o valor anterior mostrado no navegador não confirma uma nova solicitação. Se o prazo esgotar, consultar diagnóstico, ID, tentativas e estado antes de repetir.
+
+\section{Pedidos de marcha, limites e parada}
+A página Controle mostra leituras recentes e os pedidos armazenados. Marcha solicitada admite neutro, frente ou ré; velocidade máxima solicitada usa centésimos de km/h (0--3500, equivalentes a 0--35\,km/h); aceleração máxima usa milésimos de m/s\textsuperscript{2} (0--5000); parada admite solicitar ou liberar. Na partida, a parada está solicitada, a marcha é neutra e ambos os limites são zero. Uma marcha diferente de neutro exige parada liberada e limites positivos. Zerar um limite retorna o pedido a neutro; para inverter, solicitar neutro primeiro. Solicitar parada trava o pedido e zera a marcha solicitada; liberar não retoma a marcha anterior. O estado e sua revisão vivem na RAM do mestre e reiniciam com ele.
+
+Esses campos \textbf{não alteram a marcha publicada, os sensores, GPIO, PWM, DAC, relé, freio ou motor}. O campo de atuação habilitada permanece falso. A confirmação de parada registra um pedido, não comprova desaceleração ou imobilização. O botão da página é enviado sem diálogo de confirmação, mas ainda depende de navegador, Wi-Fi, UART e mestre; ele não substitui a parada de emergência física. Dois navegadores podem modificar o mesmo estado; a revisão permite perceber mudança, mas não fornece exclusividade de operador. Antes de qualquer integração física, são necessários intertravamentos baseados na velocidade medida, autorização individual, validade temporal dos pedidos, política para perda de enlace e retorno de estado do atuador.
+
+\section{Terminal serial e procedimentos rápidos}
+No terminal do Mestre a 115\,200 baud, a opção 1 solicita resumo de diagnóstico; 2 abre OTA; 3 e 4 tratam intervalos e pausa de relatórios; 5 gerencia redes; 6 consulta satélites; 7 mostra sensores, odômetro e falhas; 8 inicia envio dos CSVs pendentes; 9 grava áudio WAV temporário para treinamento; 10 ajusta avisos, logs e cores do menu; 11 mostra um estado rápido; 0 redesenha o menu. No submenu de sensores é possível pausar cada fonte ou todas para depuração e retomá-las sem recompilar. A pausa não deve ser confundida com falha do sensor; conferir o estado antes de usar a telemetria. A opção de logs permite escolher o nível global ou por serviço, incluindo silenciar, só erros, avisos e informações. Essas escolhas controlam o terminal; falhas relevantes continuam destinadas ao registro diagnóstico no SD quando disponível. A senha de uma rede aberta é vazia. A digitação de senhas Wi-Fi não ecoa caracteres; a senha de permissão de mudanças protegidas é mascarada. Para uma alteração, registrar estado antes e depois, resposta, versão dos três firmwares e log de erro caso o resultado não corresponda ao pedido.

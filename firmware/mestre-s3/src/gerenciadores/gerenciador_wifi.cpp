@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
+#include <new>
 
 #include "esp_event.h"
 #include "esp_log.h"
@@ -229,6 +231,55 @@ bool gerenciador_wifi_credenciais_validas(const char* ssid, const char* senha) {
     const size_t tamanho_senha = std::strlen(senha);
     return tamanho_ssid >= 1 && tamanho_ssid <= 32 &&
            (tamanho_senha == 0 || (tamanho_senha >= 8 && tamanho_senha <= 63));
+}
+
+esp_err_t gerenciador_wifi_procurar_redes(const char* const* ssids,
+                                          size_t quantidade, bool* encontradas,
+                                          TickType_t tempo_limite) {
+    if (ssids == nullptr || encontradas == nullptr || quantidade == 0 ||
+        tempo_limite == 0 || mutex_operacao == nullptr) return ESP_ERR_INVALID_ARG;
+    std::fill_n(encontradas, quantidade, false);
+    const TickType_t inicio = xTaskGetTickCount();
+    if (xSemaphoreTake(mutex_operacao, tempo_limite) != pdTRUE) return ESP_ERR_TIMEOUT;
+    const TickType_t restante = tempo_restante(inicio, tempo_limite);
+    esp_err_t erro = restante == 0 ? ESP_ERR_TIMEOUT : ativar_radio(restante);
+    if (erro == ESP_OK) {
+        wifi_scan_config_t busca{};
+        busca.show_hidden = true;
+        erro = esp_wifi_scan_start(&busca, true);
+    }
+    uint16_t total = 0;
+    if (erro == ESP_OK) erro = esp_wifi_scan_get_ap_num(&total);
+    if (erro == ESP_OK && total != 0) {
+        constexpr uint16_t CAPACIDADE = 64;
+        auto redes = std::unique_ptr<wifi_ap_record_t[]>(
+            new (std::nothrow) wifi_ap_record_t[CAPACIDADE]{});
+        if (!redes) erro = ESP_ERR_NO_MEM;
+        else {
+            uint16_t lidas = std::min(total, CAPACIDADE);
+            erro = esp_wifi_scan_get_ap_records(&lidas, redes.get());
+            if (erro == ESP_OK && total > CAPACIDADE) erro = ESP_ERR_NOT_SUPPORTED;
+            if (erro == ESP_OK) {
+                bool ocultas = false;
+                for (uint16_t j = 0; j < lidas; ++j)
+                    ocultas |= redes[j].ssid[0] == '\0';
+                for (size_t i = 0; i < quantidade; ++i)
+                    for (uint16_t j = 0; j < lidas; ++j)
+                        if (std::strcmp(ssids[i],
+                                reinterpret_cast<const char*>(redes[j].ssid)) == 0) {
+                            encontradas[i] = true;
+                            break;
+                        }
+                if (ocultas && std::none_of(encontradas, encontradas + quantidade,
+                                           [](bool vista) { return vista; }))
+                    erro = ESP_ERR_NOT_SUPPORTED;
+            }
+        }
+    }
+    xSemaphoreGive(mutex_operacao);
+    ESP_LOGI(ETIQUETA, "Varredura Wi-Fi: %u rede(s), resultado %s",
+             static_cast<unsigned>(total), esp_err_to_name(erro));
+    return erro;
 }
 
 esp_err_t gerenciador_wifi_iniciar(const char* ssid, const char* senha) {

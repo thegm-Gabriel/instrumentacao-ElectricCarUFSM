@@ -1,0 +1,133 @@
+\chapter{Eletrônica da placa e instrumentação elétrica}\label{cap:eletronica}
+\section{Alcance do esquema analisado}
+As folhas hierárquicas consultadas se identificam como revisão v4 de 18/10/2026. Elas representam o circuito projetado; o repositório não associa essa revisão a uma PCB comprovadamente montada no veículo. O símbolo do mestre usa a designação ESP32-S3-DevKitC, enquanto o firmware é configurado para o módulo N16R8. Antes de fabricar ou modificar a placa, conferir módulo, footprint, pinos físicos, esquema, lista de materiais e identificação impressa da PCB. Valores e ligações citados abaixo descrevem o esquema, salvo quando o texto identifica uma implementação no firmware ou um requisito de ensaio.
+
+\section{Cadeia de alimentação: 48 V, 5 V e 3,3 V}
+A folha de alimentação representa uma entrada rotulada 48 V, um módulo buck identificado como 100 V/5 V--2 A, saída de 5 V com C1 de 47\,$\mu$F e um estágio indicado como AMS1117 para produzir 3,3 V. O buck é um conversor chaveado abaixador: transfere energia por uma chave e um indutor para obter 5 V com perdas menores que uma queda linear direta desde o barramento do veículo. \textbf{Na distribuição projetada, a linha de 5 V alimenta os módulos ESP e outros consumidores de 5 V; a linha de 3,3 V fornece alimentação a determinados periféricos e os pull-ups dos sinais.} Os pinos GPIO dos ESPs continuam sendo sinais lógicos de 3,3 V, mesmo quando a placa de desenvolvimento recebe 5 V no pino de alimentação.
+
+O rótulo de 100 V/5 V--2 A identifica o símbolo customizado, não uma medição da capacidade do módulo comprado. Confirmar fabricante, faixa de entrada, tensão máxima do conjunto de baterias carregado, corrente contínua e de pico, dissipação, proteção contra surtos e polaridade. Para o estágio linear, a potência térmica aproximada é $P_{\mathrm{LDO}}=(V_{\mathrm{in}}-V_{\mathrm{out}})I$; de 5 V para 3,3 V, cada 0,5 A requer dissipar cerca de 0,85 W. É preciso somar os consumos de todos os ramos, inclusive os picos de Wi-Fi e escrita no SD, e medir as duas linhas durante a partida. O fato de uma placa ESP aceitar 5 V na entrada não permite alimentar seus GPIOs com 5 V.
+
+\begin{figure}[htbp]\centering
+\begin{tikzpicture}[>=Latex,bloco/.style={draw=nexus,rounded corners,fill=pale,align=center,minimum height=10mm,font=\small}]
+\node[bloco,text width=2.2cm] (bat) at (0,0) {Entrada rotulada\\48 V};
+\node[bloco,text width=2.2cm] (buck) at (3.3,0) {Buck\\5 V};
+\node[bloco,text width=3.0cm] (cinco) at (7.3,0) {Placas ESP e módulos\\alimentados em 5 V};
+\node[bloco,text width=2.5cm] (ldo) at (3.3,-1.9) {Estágio AMS1117\\3,3 V};
+\node[bloco,text width=3.0cm] (tres) at (7.3,-1.9) {Módulos de 3,3 V\\e pull-ups};
+\draw[->,thick] (bat)--(buck);
+\draw[->,thick] (buck)--(cinco);
+\draw[->,thick] (buck)--(ldo);
+\draw[->,thick] (ldo)--(tres);
+\end{tikzpicture}
+\caption{Distribuição de alimentação representada no esquema; confirmar cada saída na placa montada.}\label{fig:alimentacao}
+\end{figure}
+
+\begin{table}[htbp]\centering\small
+\caption{Linhas de alimentação e cargas indicadas no esquema}\label{tab:alimentacao-modulos}
+\begin{tabularx}{\textwidth}{@{}p{3.6cm}p{2.0cm}X@{}}\toprule
+Conjunto & Linha indicada & O que conferir na montagem\\\midrule
+Placas ESP mestre, Equipe e Visitantes & 5 V na placa & Entrada de 5 V e regulador interno da placa usada; GPIO e UART permanecem em 3,3 V.\\
+Buzzer, circuito do relé e conector do módulo INA228 & 5 V & Corrente da bobina, módulo realmente instalado e compatibilidade dos sinais com 3,3 V.\\
+MPU6050, OLED e microSD & 3,3 V & Tensões nos conectores, consumo e desacoplamento local.\\
+SDA/SCL e canais A/B dos encoders & 3,3 V via resistores & Pull-ups são referências de nível lógico, não fontes de alimentação dos módulos.\\
+Corpo dos encoders & Divergente & O conector do esquema indica 5 V; a documentação do modelo cita alimentação externa de 12 V. Conferir etiqueta e folha de dados do componente instalado antes de ligar.\\\bottomrule
+\end{tabularx}\end{table}
+
+O esquema apresentado não fecha, por si só, uma análise de proteção da entrada: fusível, proteção contra inversão, sobretensão transitória, desconexão de manutenção e segregação de cabos de tração precisam ser identificados na placa real e nos documentos do veículo. O GND comum é necessário para sinais UART e I\textsuperscript{2}C, mas correntes altas do motor não devem circular pelo retorno fino dos sensores. Planejar retornos e pontos de medição para evitar que queda de tensão em trilhas seja interpretada como sinal.
+
+\section{Desacoplamento e transientes}
+Na folha de alimentação, C1 de 47\,$\mu$F aparece entre 5 V e GND na saída do buck. Na folha de periféricos, há 100\,$\mu$F e 100\,nF junto da alimentação de 3,3 V do módulo microSD. O capacitor maior fornece reserva local para variações mais lentas de corrente; o cerâmico de 100\,nF fornece um caminho de baixa impedância para componentes rápidos. Eles se complementam: um valor grande isolado não substitui um capacitor pequeno colocado perto do pino, e o capacitor pequeno não sustenta uma demanda longa.
+
+Posicionar desacoplamentos com trilhas curtas de alimentação e retorno; medir afundamento e ruído nos pinos durante Wi-Fi, escrita SD e acionamentos. Verificar tensão nominal, corrente de ripple, polaridade e ESR (resistência série equivalente) conforme o conversor e o regulador efetivamente usados. Os módulos ESP e sensores podem incluir capacitores próprios; sua presença e valor não devem ser inferidos apenas pelo símbolo do conector. As diretrizes de hardware do ESP32-S3 recomendam desacoplamento local também no domínio de 3,3 V e junto à memória.
+
+\section{Barramento I\textsuperscript{2}C e resistores de pull-up}
+I\textsuperscript{2}C usa SDA (dados) e SCL (clock) compartilhados. As saídas são do tipo \emph{dreno aberto}: um dispositivo consegue puxar a linha para zero, mas não a força ativamente para nível alto. Um resistor de \emph{pull-up} em cada linha fornece esse alto quando ninguém a puxa para baixo. No esquema v4, R5 e R6 são de 4,7\,k$\Omega$ para 3,3 V; o firmware configura 400\,kHz no mestre. MPU6050 e OLED compartilham o barramento; o conector J8 reserva SDA/SCL para o módulo associado ao INA228. Endereços diferentes permitem coexistência, mas o endereço efetivo do INA228 depende da montagem de A0/A1 no módulo e ainda deve ser registrado.
+
+Módulos comerciais frequentemente já trazem resistores de pull-up. Todos os resistores da mesma linha ficam em paralelo:
+\begin{equation}
+\frac{1}{R_{\mathrm{eq}}}=\sum_{k=1}^{n}\frac{1}{R_k}.
+\label{eq:pullup}
+\end{equation}
+Duas unidades de 4,7\,k$\Omega$ equivalem a 2,35\,k$\Omega$; quatro equivalem a 1,175\,k$\Omega$; cinco, a 940\,$\Omega$. Resistência excessivamente baixa exige que os dispositivos drenem corrente alta para produzir zero; resistência alta demais, junto à capacitância dos cabos e módulos, faz a borda subir lentamente. A janela admissível depende de $V_{\mathrm{DD}}$, corrente de afundamento, capacitância total e tempo de subida. O limite inferior aproximado é $R_{p,\min}=(V_{\mathrm{DD}}-V_{OL,\max})/I_{OL}$: se o dispositivo suportar 3\,mA com nível baixo máximo de 0,4\,V a 3,3\,V, resulta cerca de 967\,$\Omega$. Cinco resistores de 4,7\,k$\Omega$ em paralelo já ficariam abaixo desse exemplo. Para modo rápido a 400\,kHz, a nota de aplicação da TI dá $t_r \simeq 0{,}8473R_{\mathrm{eq}}C_b$ e limite de subida de 300\,ns. Se $C_b=100$\,pF, o limite superior calculado é cerca de 3,54\,k$\Omega$; 4,7\,k$\Omega$ sozinho pode ser lento, enquanto 2,35\,k$\Omega$ é um candidato. Em $C_b=200$\,pF, o limite superior cai para 1,77\,k$\Omega$. Esses exemplos não substituem medir o barramento real.
+
+Antes de montar todos os módulos, identificar os pull-ups existentes em cada placa, medir a resistência equivalente de SDA e SCL com a alimentação desligada e decidir quais resistores de módulo devem ser removidos ou desconectados. \textbf{Manter ao menos um par de pull-ups a 3,3 V}, mas remover os pares excedentes quando a associação em paralelo sair da janela calculada. Se um módulo puxar SDA/SCL para 5 V, remover seus pull-ups para 5 V ou instalar adaptação de nível apropriada antes de ligar ao ESP32-S3. Confirmar o resultado no osciloscópio, com todos os módulos e cabos, durante transferências a 400\,kHz. Resistores dos encoders são outro circuito e não entram nessa conta.
+
+\section{INA228 e shunt de 1 m$\Omega$}
+O conector J8 da folha de periféricos é denominado INA228 e entradas do motorista; ele traz alimentação indicada como 5 V, GND, SDA/SCL e outros sinais. O firmware mestre contém um driver para o INA228 no endereço I\textsuperscript{2}C \texttt{0x40} e publica grandezas elétricas quando a leitura é válida. O código configura shunt nominal de 1\,m$\Omega$ e corrente máxima de 75\,A. A posição física do shunt, o módulo específico e um ensaio de calibração ainda precisam ser confirmados na montagem. Os parâmetros a seguir descrevem a intenção de projeto e a configuração do software, não uma leitura experimental já comprovada.
+
+\begin{figure}[htbp]\centering
+\begin{tikzpicture}[>=Latex,bloco/.style={draw=nexus,rounded corners,fill=pale,align=center,minimum height=9mm,font=\small}]
+\node[bloco,text width=2.6cm] (fonte) at (0,0) {Banco de baterias\\positivo};
+\node[bloco,text width=2.0cm] (shunt) at (3.5,0) {Shunt\\1 m$\Omega$};
+\node[bloco,text width=2.5cm] (carga) at (7.0,0) {Controlador\\do motor};
+\node[bloco,text width=2.4cm] (ina) at (3.5,-2.2) {INA228\\interface I\textsuperscript{2}C};
+\draw[->,very thick] (fonte)--(shunt);
+\draw[->,very thick] (shunt)--(carga);
+\draw[->,accent,thick] (shunt.south west)--node[left,font=\scriptsize]{IN+}(ina.north west);
+\draw[->,accent,thick] (shunt.south east)--node[right,font=\scriptsize]{IN$-$}(ina.north east);
+\node[bloco,text width=2.5cm] (vbus) at (7.0,-2.2) {Ponto VBUS\\após o shunt};
+\draw[->,accent,dashed] (carga.south)--(vbus.north);
+\draw[->,accent,dashed] (vbus.west)--(ina.east);
+\end{tikzpicture}
+\caption{Exemplo de medição no lado positivo com VBUS após o shunt. As tomadas Kelvin e o ponto VBUS devem ser definidos no projeto elétrico; o desenho não comprova o chicote instalado.}\label{fig:shunt-kelvin}
+\end{figure}
+
+O INA228 recebe duas medições distintas. \textbf{VSHUNT} é a diferença entre IN+ e IN$-$, tomada diretamente nos extremos do elemento resistivo por fios Kelvin; dividida pela resistência conhecida, fornece a corrente e seu sentido. \textbf{VBUS} é a tensão entre o pino VBUS e GND no ponto positivo escolhido do barramento do banco de baterias. Não é a queda no shunt: ela indica a tensão do barramento que alimenta o controlador. Se o pino for conectado antes ou depois do shunt, a leitura difere aproximadamente pela própria queda no shunt; a posição precisa constar do esquema final. A potência elétrica pode ser calculada a partir de corrente e tensão de barramento coerentes no tempo, $P\simeq V_{\mathrm{BUS}}I$, com convenção de sinal definida para consumo e regeneração. O driver no Mestre já lê os registradores de VSHUNT, VBUS, corrente, potência, temperatura do chip, energia e carga acumuladas. A validade exige resposta do dispositivo e verificações de faixa; uma leitura disponível ainda requer calibração experimental da montagem.
+
+Com $R_{\mathrm{shunt}}=1\,\mathrm{m}\Omega=0{,}001\,\Omega$:
+\begin{equation}
+V_{\mathrm{shunt}}=IR_{\mathrm{shunt}},\qquad
+1\,\mathrm{A}\longleftrightarrow 1\,\mathrm{mV},\qquad
+75\,\mathrm{A}\longleftrightarrow 75\,\mathrm{mV}.
+\label{eq:shunt}
+\end{equation}
+O calor no elemento resistivo é $P_{\mathrm{shunt}}=I^2R$: em 75 A, 5,625 W. Um shunt anunciado para 75 A precisa suportar essa dissipação no ambiente e na fixação reais, com margem térmica, seção dos terminais e tempo de sobrecarga adequados. A resistência muda com temperatura e com a tolerância de fabricação. As duas linhas de medição devem chegar a pontos Kelvin próximos ao elemento resistivo, separados do trajeto de corrente de potência, para não somar queda de tensão dos parafusos e cabos.
+
+Segundo a folha de dados da TI, o INA228 oferece faixas diferenciais de $\pm163{,}84$\,mV e $\pm40{,}96$\,mV em VSHUNT. Para 75 A com shunt de 1\,m$\Omega$, a faixa de $\pm40{,}96$\,mV saturaria antes da corrente nominal; deve-se selecionar a faixa ampla (\texttt{ADCRANGE=0}) se a meta for medir até 75 A. Esse nome identifica a seleção do conversor interno do INA228. VBUS aceita de 0 a 85 V segundo a folha de dados do circuito integrado; a tensão máxima do banco de baterias, inclusive sob carga completa e transitórios, precisa respeitar o limite do circuito e do módulo comprado. A alimentação lógica VS e os pull-ups SDA/SCL são assuntos distintos: o conector J8 indica 5 V, mas isso não autoriza aplicar 5 V aos GPIOs do mestre. Verificar regulador, tradutor de nível e resistores da placa INA228 adquirida.
+
+Para converter o registrador CURRENT em ampères, o firmware configura a calibração do INA228 com a resistência nominal do shunt. A folha de dados define, para \texttt{ADCRANGE=0},
+\begin{equation}
+\mathrm{CURRENT\_LSB}\geq \frac{I_{\max}}{2^{19}},
+\qquad
+\mathrm{SHUNT\_CAL}=13107{,}2\cdot10^6\,
+       \mathrm{CURRENT\_LSB}\,R_{\mathrm{shunt}} .
+\label{eq:ina-cal}
+\end{equation}
+No código, \texttt{CURRENT\_LSB} é calculado como $75/2^{19}$\,A por bit, aproximadamente 143\,$\mu$A, e \texttt{SHUNT\_CAL} resulta em cerca de 1875 para 1\,m$\Omega$. O Mestre confere identificação do chip e leitura de retorno da calibração, usa a faixa ampla de VSHUNT e rejeita erro matemático, conversão ainda não pronta, temperatura fora da faixa e corrente acima do limite admitido. Após três erros seguidos, suspende a leitura e tenta reinicializar o módulo após cinco segundos. A telemetria marca grandezas indisponíveis quando não há leitura válida; o simulador não deve ser confundido com o sensor. Definir a polaridade IN+/IN$-$ para que consumo e regeneração tenham sinais inequívocos. Comparar leituras em vários pontos com instrumento de referência, inclusive perto de zero e perto do máximo. Um alerta de sobrecorrente por software não substitui proteção elétrica independente.
+
+\section{Relé habilitador, botão de emergência e diodo de roda livre}
+A função prevista para K1 é interromper a \emph{linha de habilitação} do driver do motor elétrico, e não conduzir a corrente de tração. A intenção de integração é pôr um contato normalmente aberto do relé em série com um botão de emergência normalmente fechado, no circuito de habilitação exigido pelo driver. Com ambos fechados, o driver pode ser habilitado; ao pressionar o botão, abrir o contato ou perder a alimentação da bobina, a linha é interrompida. Assim, o condutor dispõe de uma ação local e o sistema poderia pedir uma desabilitação remota. O sentido elétrico e os níveis da entrada ENABLE devem ser confirmados na documentação do driver utilizado; o diagrama abaixo representa a função pretendida, não um chicote já montado.
+
+\begin{figure}[htbp]\centering
+\begin{tikzpicture}[>=Latex,bloco/.style={draw=nexus,rounded corners,fill=pale,align=center,minimum height=10mm,font=\small}]
+\node[bloco,text width=2.3cm] (sinal) at (0,0) {Fonte do sinal\\de habilitação};
+\node[bloco,text width=2.5cm] (botao) at (3.1,0) {Botão de emergência\\NF};
+\node[bloco,text width=2.3cm] (contato) at (6.2,0) {Contato K1\\NA};
+\node[bloco,text width=2.4cm] (driver) at (9.3,0) {Entrada ENABLE\\do driver};
+\draw[->,thick] (sinal)--(botao);
+\draw[->,thick] (botao)--(contato);
+\draw[->,thick] (contato)--(driver);
+\node[bloco,text width=2.3cm] (gpio) at (0,-2.0) {Saída do ESP\\futura};
+\node[bloco,text width=2.5cm] (base) at (3.1,-2.0) {Resistor de base\\e estado seguro};
+\node[bloco,text width=2.3cm] (trans) at (6.2,-2.0) {Transistor\\Q4};
+\node[bloco,text width=2.4cm] (bobina) at (9.3,-2.0) {Bobina K1\\D1 em paralelo};
+\draw[->,thick,accent] (gpio)--(base);
+\draw[->,thick,accent] (base)--(trans);
+\draw[->,thick,accent] (trans)--(bobina);
+\draw[densely dashed,->] (bobina.north)--node[right,font=\scriptsize]{aciona}(contato.south east);
+\end{tikzpicture}
+\caption{Duas partes da função pretendida: caminho de habilitação em série, acima, e acionamento da bobina, abaixo. NF: normalmente fechado; NA: normalmente aberto.}\label{fig:rele-habilitador}
+\end{figure}
+
+A folha do esquema contém K1 (símbolo SANYOU SRD), Q4 (BC337), R1 de 1\,k$\Omega$, R2 de 10\,k$\Omega$ e D1 (1N4007). \textbf{A função de desabilitação remota ainda não está implementada no firmware consultado}: o painel e o mestre guardam um pedido de parada na RAM, mas não acionam Q4, K1 ou uma entrada do driver. Para transformar o pedido em atuação, serão necessários mapeamento do GPIO, circuito que desenergize K1 em falha ou reinício, política para perda de comunicação, retorno do estado real do contato/driver e ensaio de resposta. O botão físico deve funcionar independentemente do navegador, Wi-Fi e UART.
+
+A bobina é indutiva. Ao interromper sua corrente, o campo magnético tenta mantê-la e pode produzir sobretensão no transistor. O diodo de roda livre D1 em paralelo oferece um caminho temporário para essa corrente: cátodo no lado positivo da bobina e ânodo no lado comutado pelo transistor, ficando reversamente polarizado durante o acionamento normal. Ele reduz o pico de tensão, mas pode aumentar o tempo de soltura do relé; medir esse tempo no circuito final. Q4 evita exigir do GPIO a corrente da bobina; R1 limita a corrente de base, e o estado de desligamento da base precisa ser definido durante reset e partida.
+
+\begin{nota}{Conferência obrigatória da folha v4}
+No desenho exportado da folha, R2 de 10\,k$\Omega$ aparece em série com a alimentação da bobina e Q4 como derivação desse ramo; essa ligação não corresponde diretamente ao acionamento por transistor em série mostrado funcionalmente acima. A queda de tensão em R2 pode impedir a corrente nominal da bobina. É necessário revisar a ligação no esquema, conferir bobina, contato escolhido, orientação de D1 e estado sem alimentação, executar a checagem elétrica do KiCad e testar com fonte limitada em bancada antes de conectar o driver. A posição do botão de emergência em série também deve constar do esquema e do chicote finais.
+\end{nota}
+
+Outros transistores da folha representam sinais de modo e reversão e o MCP4725 aparece como DAC (conversor digital-analógico) para a referência de acelerador. Esses caminhos ainda não são acionados pelo controle preparatório implementado. Antes de integração, mapear tensão exigida pelo driver, estado seguro de cada fio, isolação, tempo de resposta, limites físicos e retorno medido; testar separadamente de toda a tração.
+
+\paragraph{Fontes técnicas.}
+As faixas e equações do INA228 vêm da \href{https://www.ti.com/lit/ds/symlink/ina228.pdf}{folha de dados da Texas Instruments}. O cálculo da janela de pull-ups segue \href{https://www.ti.com/lit/an/slva689/slva689.pdf}{I\textsuperscript{2}C Bus Pull-Up Resistor Calculation}, da TI. O desacoplamento do ESP deve ser confrontado com o \href{https://docs.espressif.com/projects/esp-hardware-design-guidelines/en/latest/esp32s3/schematic-checklist.html}{checklist de esquema do ESP32-S3}, da Espressif, e com a folha de dados de cada módulo comprado.

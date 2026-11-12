@@ -22,6 +22,20 @@ Qualquer tensão externa precisa de condicionamento elétrico apropriado para a
 entrada de 3,3 V do ESP32-S3; os campos de tensão do pacote do veículo não devem
 ser interpretados como medição do conjunto de baterias a partir desse ADC.
 
+## Monitor elétrico INA228 do mestre
+
+O INA228 compartilha o I²C0 a 400 kHz com MPU6050 e OLED: SDA no GPIO 8,
+SCL no GPIO 9, alimentação lógica compatível com 3,3 V e GND comum.
+O firmware usa o endereço `0x40`, obtido com **A0 e A1 em GND**. O shunt
+configurado é de **1 mΩ**, com corrente máxima esperada de **75 A**; confirme
+o valor real e a conexão Kelvin na placa montada. Os terminais `IN+` e `IN−`
+devem ficar nos lados correspondentes do shunt; o sentido configurado considera
+corrente positiva como consumo. `VBUS` deve ser ligado ao ponto cuja tensão se
+quer publicar. O INA228 aceita até 85 V no barramento, mas o protocolo UART
+atual representa no máximo 65,535 V; valores maiores são recusados como
+leitura publicável. O pino `ALERT` não é usado: os sinalizadores de diagnóstico
+são lidos pelo I²C, sem atuação física de proteção.
+
 ## LEDs e buzzer do mestre
 
 | Função | GPIO do mestre | Ligação recomendada |

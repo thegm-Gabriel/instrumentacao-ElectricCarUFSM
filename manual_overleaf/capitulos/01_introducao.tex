@@ -1,0 +1,22 @@
+\chapter{Introdução}
+\section{O projeto e a finalidade do NEXUS}
+O veículo elétrico experimental da Universidade Federal de Santa Maria, campus Cachoeira do Sul, reúne energia, mecânica, eletrônica e programação numa plataforma de ensino e pesquisa. O NEXUS organiza a instrumentação e a comunicação necessárias para acompanhar o veículo em ensaios: obtém sinais, transforma-os em dados com unidade e indicação de validade, distribui a telemetria e preserva registros para análise. O nome expressa a ligação entre os subsistemas embarcados e as pessoas que os utilizam.
+
+Instrumentação abrange o sensor, sua alimentação e ligação elétrica, a aquisição, o processamento e a calibração. Telemetria é o transporte dos resultados até as interfaces e os arquivos. O sistema oferece um painel técnico à equipe e um painel público aos visitantes. Há também pedidos de controle em desenvolvimento; na revisão documentada, o firmware apenas registra esses pedidos e \textbf{não aciona fisicamente motor, freio ou controlador}.
+
+\section{Objetivo e público}
+Este manual reúne a arquitetura, as ligações previstas no firmware, o tratamento dos dados, os serviços embarcados, a operação e os procedimentos de verificação. Destina-se a quem monta e confere o chicote, desenvolve os programas, acompanha ensaios ou interpreta os registros. O projeto do circuito de tração, os dispositivos físicos de proteção e a montagem mecânica completa precisam de seus próprios desenhos, cálculos e ensaios; esta descrição da telemetria não os substitui.
+
+\section{O que está disponível nesta revisão}
+Há três programas independentes para ESP32-S3: Mestre, Equipe e Visitantes. O Mestre integra aquisição de movimento, cálculo, histórico, comunicação com os satélites e serviços de rede usados conforme a necessidade. Equipe e Visitantes recebem telemetria por enlaces UART independentes e oferecem páginas locais por Wi-Fi, com níveis diferentes de acesso. O retrato é publicado aos satélites a cada 250\,ms em operação normal; o histórico seleciona uma amostra por segundo quando o microSD está disponível.
+
+O repositório contém mais de uma revisão de circuito, mas não identifica de modo inequívoco qual placa está instalada no veículo. A geometria das rodas e a relação mecânica dos encoders também exigem medição no conjunto real. O modelo de telemetria reserva campos para energia, pedais, localização e outras grandezas; a presença de um campo no pacote ou no painel \textbf{não comprova uma medição física}. O driver do INA228 já foi integrado ao Mestre para leitura elétrica, com shunt configurado de 1\,m$\Omega$ e faixa prevista de 75\,A. A montagem, o sentido da corrente e a calibração ainda exigem conferência na placa real antes de interpretar os valores como ensaio validado.
+
+\begin{nota}{Dados simulados}
+O simulador embarcado ajuda a verificar quadros e páginas sem depender de todos os sensores. A configuração padrão usa a origem real; quando a simulação é ativada durante uma sessão, sua origem é marcada no protocolo e deve ser identificada na interface. A partida seguinte restaura o padrão compilado.
+\end{nota}
+
+\section{Como usar o manual}
+Comece pelo capítulo~\ref{cap:arquitetura} para localizar os três ESPs e seguir o caminho de uma amostra. Use o capítulo~\ref{cap:hardware} para conferir conectores, GPIOs, níveis lógicos e sensores \emph{antes} de ligar a placa; em seguida, consulte o capítulo~\ref{cap:eletronica} para alimentação, barramentos, INA228 e circuito de habilitação do driver. As tabelas de pinagem descrevem o software e precisam ser comparadas com a revisão física montada.
+
+Para alterar ou investigar o funcionamento, siga o capítulo~\ref{cap:firmware} e os capítulos dedicados a comandos, Wi-Fi, memória, atualização e diagnóstico. Eles diferenciam o que já funciona, o que está apenas previsto e o que ainda requer ensaio. Na operação, use o capítulo~\ref{cap:operacao} como sequência de preparação e registro de resultados. Ao encontrar um valor inesperado, verifique sua origem, unidade, validade e versão do firmware antes de compará-lo com uma referência. O apêndice identifica as fontes e os dados mínimos que devem acompanhar cada ensaio.

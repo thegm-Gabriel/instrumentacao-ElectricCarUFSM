@@ -57,8 +57,8 @@ as leituras do veículo sem controles de operação.
 
 > **Estado atual do controle:** pedidos de marcha, limites e parada remota são
 > registrados no mestre, mas **não acionam fisicamente o veículo**. Ações pelo
-> painel da equipe exigem uma chave administrativa própria, diferente da senha
-> Wi-Fi. Veja [controle remoto](documentacao/controle-remoto.md) e
+> painel da equipe ficam disponíveis aos clientes do AP da Equipe. Veja
+> [controle remoto](documentacao/controle-remoto.md) e
 > [acesso aos satélites](documentacao/satelites.md).
 
 ## Por onde começar

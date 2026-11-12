@@ -87,7 +87,18 @@ void testar_limites_de_conteudo() {
     TEST_ASSERT_FALSE(protocolo_telemetria_conteudo_valido(&pacote));
 
     pacote = criar_pacote_valido();
-    pacote.estado_mpu |= 0x80u;
+    pacote.estado_mpu |= TELEMETRIA_ELETRICA_VALIDA;
+    pacote.estado_ina = TELEMETRIA_INA_PRESENTE |
+                        TELEMETRIA_INA_ENERGIA_VALIDA |
+                        TELEMETRIA_INA_CARGA_VALIDA;
+    pacote.ina_shunt_microvolts = -12500;
+    pacote.ina_temperatura_centesimos_c = 3550;
+    pacote.ina_energia_mwh = 12000;
+    pacote.ina_carga_mah = -350;
+    pacote.crc16 = protocolo_telemetria_calcular_crc16(&pacote);
+    TEST_ASSERT_TRUE(protocolo_telemetria_conteudo_valido(&pacote));
+
+    pacote.estado_mpu &= (uint8_t)~TELEMETRIA_ELETRICA_VALIDA;
     pacote.crc16 = protocolo_telemetria_calcular_crc16(&pacote);
     TEST_ASSERT_FALSE(protocolo_telemetria_conteudo_valido(&pacote));
 }

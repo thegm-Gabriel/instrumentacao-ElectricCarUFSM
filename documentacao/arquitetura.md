@@ -18,7 +18,7 @@ flowchart LR
     E <-->|Wi-Fi / HTTP| PE["Navegador · painel técnico"]
     V <-->|Wi-Fi / HTTP| PV["Navegador · painel público"]
     M <-->|SPI2| SD["microSD · histórico e logs"]
-    M <-->|I²C| IO["MPU6050 e OLED"]
+    M <-->|I²C| IO["MPU6050, INA228 e OLED"]
     M <-->|Wi-Fi / HTTPS| REDE["Releases OTA e Google"]
 ```
 
@@ -173,7 +173,7 @@ o comando remoto da equipe pode trocar a fonte durante a sessão. Em ambos os
 casos, entrega o mesmo modelo ao `servico_telemetria` usado pelos sensores reais.
 
 A transmissão UART usa uma fila independente por destino. O protocolo compartilhado
-v4 identifica versão, tipo e tamanho da carga, transporta as grandezas processadas
+v5 identifica versão, tipo e tamanho da carga, transporta as grandezas processadas
 do MPU6050 e protege o quadro com CRC-16. Assim,
 o ciclo de aquisição não aguarda a conclusão física de cada transmissão e os
 receptores conseguem distinguir corrupção, incompatibilidade e conteúdo inválido.

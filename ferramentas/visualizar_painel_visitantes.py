@@ -94,6 +94,7 @@ def telemetria_simulada(inicio: float) -> dict:
         "idade_ms": 0,
         "sequencia": int(segundos * 2) + 1,
         "simulado": True,
+        "eletrica_disponivel": True,
         "marcha": marcha,
         "velocidade_centesimos_kmh": round(velocidade * 100),
         "acelerador_decimos_percentual": round(acelerador * 10),

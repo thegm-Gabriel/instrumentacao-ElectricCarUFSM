@@ -1,0 +1,60 @@
+\chapter{Arquitetura do sistema}\label{cap:arquitetura}
+\section{Divisão em três unidades}
+O Mestre coordena os serviços embarcados: recebe sinais, forma o retrato do veículo, distribui telemetria, registra histórico e executa as operações que precisam de rede externa. A unidade Equipe apresenta o estado técnico e encaminha solicitações de manutenção e configuração. A unidade Visitantes oferece uma visualização pública de leitura. Separar essas funções permite que cada interface evolua e atenda seus usuários sem comandar diretamente a cadência de aquisição do Mestre. Cada satélite usa seu próprio enlace UART com ele.
+
+\begin{figure}[htbp]\centering
+\begin{tikzpicture}[>={Latex}, every node/.style={draw=nexus,rounded corners,fill=pale,align=center,minimum height=10mm,font=\small}]
+\node[text width=3.0cm] (entradas) at (0,2.3) {Sensores e sinais\\do veículo};
+\node[text width=3.4cm] (mestre) at (0,0) {ESP32-S3 Mestre\\processamento e serviços};
+\node[text width=2.5cm] (sd) at (-4.8,0) {microSD\\histórico e logs};
+\node[text width=2.9cm] (equipe) at (-3.3,-2.4) {ESP32-S3 Equipe\\painel técnico};
+\node[text width=2.9cm] (visitantes) at (3.3,-2.4) {ESP32-S3 Visitantes\\painel público};
+\node[text width=2.9cm] (operador) at (-3.3,-4.25) {Navegador da equipe};
+\node[text width=2.9cm] (publico) at (3.3,-4.25) {Navegador visitante};
+\draw[->,thick] (entradas.south)--(mestre.north);
+\draw[<->,thick] (sd.east)--node[draw=none,fill=white,above,font=\scriptsize,inner sep=2pt]{SPI2}(mestre.west);
+\draw[<->,thick] (mestre.south west)--node[draw=none,fill=white,above,sloped,font=\scriptsize,inner sep=2pt]{UART1}(equipe.north east);
+\draw[<->,thick] (mestre.south east)--node[draw=none,fill=white,above,sloped,font=\scriptsize,inner sep=2pt]{UART2}(visitantes.north west);
+\draw[<->,thick] (equipe.south)--node[draw=none,fill=white,right,font=\scriptsize,inner sep=2pt]{Wi-Fi/HTTP}(operador.north);
+\draw[<->,thick] (visitantes.south)--node[draw=none,fill=white,right,font=\scriptsize,inner sep=2pt]{Wi-Fi/HTTP}(publico.north);
+\end{tikzpicture}
+\caption{Fluxo entre unidades. Os dois enlaces UART e os dois pontos de acesso Wi-Fi são independentes.}\label{fig:arquitetura}
+\end{figure}
+
+\begin{table}[htbp]\centering\small
+\caption{Responsabilidade principal de cada unidade}\label{tab:unidades}
+\begin{tabularx}{\textwidth}{@{}p{2.7cm}X@{}}\toprule
+Unidade & Responsabilidade no sistema\\\midrule
+Mestre & Coordena a aquisição e o processamento, mantém o estado do sistema, publica telemetria, registra os dados de bordo e conduz operações externas, como atualização e envio de arquivos.\\
+Equipe & Mantém a interface técnica local, mostra diagnósticos e faz a ponte entre as solicitações do operador e o Mestre.\\
+Visitantes & Mantém a interface pública local para acompanhar a telemetria, sem oferecer comandos operacionais.\\\bottomrule
+\end{tabularx}\end{table}
+
+\section{Da aquisição à apresentação}
+Cada fonte de dados possui sua própria forma de aquisição. O Mestre combina os resultados disponíveis em um retrato \texttt{DadosTelemetriaVeiculo}, preservando origem e indicadores de validade. O serviço de telemetria converte valores para as escalas do protocolo, atribui sequência e tempo desde a partida e envia cópias às UARTs. Cada satélite verifica formato, versão, tamanho, CRC e plausibilidade antes de disponibilizar a amostra ao seu servidor HTTP. O ACK devolvido ao Mestre permite medir prazo de resposta e perdas do enlace.
+
+Em paralelo, o serviço de histórico seleciona uma amostra por segundo e a entrega a uma tarefa que escreve no microSD. Essa tarefa não dita o ritmo de aquisição: uma escrita demorada é absorvida pela fila até seu limite, e eventuais perdas são contabilizadas. O navegador consulta o satélite a seu próprio ritmo; fechar ou recarregar a página não apaga o CSV de bordo. As páginas e as rotas HTTP são detalhadas no capítulo~\ref{cap:wifi-paineis}.
+
+\section{Cadências dos serviços}
+Uma frequência de amostragem, uma frequência de publicação e uma frequência de atualização da página medem atividades diferentes. Não há uma frequência única para todos os sensores: alguns são atendidos por tarefa periódica e os pulsos dos encoders são acumulados pelo periférico PCNT quando ocorrem. A tabela apresenta os ritmos dos \emph{serviços}, sem confundi-los com a velocidade elétrica dos barramentos.
+
+\begin{table}[htbp]\centering\small
+\caption{Periodicidade dos serviços na configuração consultada}\label{tab:ritmos}
+\begin{tabularx}{\textwidth}{@{}p{3.3cm}p{3.2cm}X@{}}\toprule
+Serviço & Periodicidade & O que o intervalo determina\\\midrule
+Aquisição & Própria de cada fonte & Leituras periódicas ou eventos são processados para formar o próximo retrato.\\
+Telemetria normal & 250\,ms (4\,Hz) & Novo retrato enviado a cada satélite pela sua UART.\\
+Histórico no microSD & 1\,s (1\,Hz) & Seleção de uma amostra para o CSV, se o cartão estiver disponível.\\
+Consulta do navegador & Equipe: 250--1000\,ms; Visitantes: 500\,ms & Intervalo solicitado pela página; rede e servidor podem ampliar o prazo efetivo.\\
+Diagnóstico do Mestre & 1\,s & Atualização do estado de saúde e das causas ativas.\\
+Telemetria durante OTA & 2\,s por padrão & Reserva mais tempo da UART para blocos da imagem; ajustável de 500\,ms a 10\,s.\\\bottomrule
+\end{tabularx}\end{table}
+
+I\textsuperscript{2}C reúne os periféricos compatíveis em um barramento compartilhado, SPI2 liga o microSD e PCNT conta bordas dos encoders sem exigir leitura contínua de pinos pela CPU. A rede externa do Mestre é usada em sessões de OTA e envio ao Google; o fluxo local de aquisição, UART e painéis não depende desse roteador.
+
+\section{Falhas, degradação e indicação ao operador}
+\emph{Operação degradada} significa que o Mestre continua executando as funções essenciais, porém perdeu uma função ou reduziu sua qualidade: por exemplo, sem microSD há telemetria ao vivo, mas não CSV persistente; sem tela ainda há UART e painel; sem roteador externo, OTA e Google ficam indisponíveis, enquanto a comunicação local continua. Já \emph{falha} é o estado de saúde usado para condições críticas, especialmente pouca memória ou margem de pilha insuficiente. A aplicação pode reiniciar se a partida de um serviço essencial não puder ser concluída. Nem toda ausência de módulo opcional tem a mesma gravidade.
+
+O diagnóstico acompanha resultados de sensores, erros I\textsuperscript{2}C e UART, falta de resposta dos satélites, atrasos de tarefas, memória e pilhas, intensidade de sinal da rede externa, persistência e falhas OTA. Ele combina contagem, persistência e janelas temporais para distinguir um erro isolado de um problema recorrente. O estado pode ser \emph{saudável}, \emph{atenção}, \emph{falha} ou \emph{recuperando}; a causa e os limiares de cada caso estão no capítulo~\ref{cap:diagnostico}.
+
+O operador vê o estado resumido nos LEDs e no buzzer, o motivo e o progresso na OLED, e os detalhes nos relatórios seriais e no painel técnico da Equipe. A telemetria informa origem, validade e sequência dos dados que chegam aos satélites; os diagnósticos trazem contadores e causas para investigar perda de função. Verde sinaliza condição saudável, amarelo atenção, vermelho falha crítica e azul marca fases como partida ou atualização, conforme o padrão de sinalização. Avisos sonoros marcam transições relevantes. Assim, a ausência de um registro no SD, por exemplo, pode ser identificada sem atribuir automaticamente defeito aos sensores de movimento.

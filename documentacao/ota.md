@@ -91,8 +91,8 @@ As mesmas autorizações estão disponíveis na página **Comandos** de
 `http://192.168.4.1/`, quando o operador está conectado ao ponto de acesso do
 módulo da equipe. A página exige
 confirmação para ações que alteram estado e acompanha o resultado pela UART.
-O envio HTTP também exige a chave administrativa do ESP da Equipe, diferente
-da senha Wi-Fi; veja [satélites](satelites.md).
+O envio HTTP fica disponível aos clientes conectados ao AP da Equipe; veja
+[satélites](satelites.md).
 
 ## Escolher a versão
 
@@ -218,10 +218,15 @@ ESPs e confira no painel da Equipe se o mestre e os satélites respondem.
 No terminal do mestre, abra **2 - Atualização OTA** e escolha **2 - Verificar
 nova versão agora**, ou use a verificação na página **Comandos**. Consulte
 versões e disponibilidade **antes** de autorizar um alvo. Pela página web, as
-ações exigem a chave administrativa da Equipe.
+ações ficam disponíveis aos clientes conectados ao AP da Equipe.
 
 Autorize mestre, Equipe, Visitantes ou **todos** no terminal ou no painel.
 Em **todos**, os satélites são atualizados primeiro e o mestre por último.
+Se um satélite não responder, **todos** é recusado. A autorização individual
+de um satélite consulta somente seu estado pendente; portanto, a indisponibilidade
+do outro satélite não a impede. Ainda é necessário que o alvo escolhido tenha
+respondido à verificação, tenha atualização compatível e continue acessível
+durante a transferência.
 Observe porcentagem, bytes confirmados, resultado e versão que volta a
 responder; uma resposta de comando apenas confirma o pedido. Aguarde também a
 janela de observação da nova imagem e confira que não houve rollback. Se a

@@ -1,0 +1,108 @@
+\documentclass[11pt,a4paper,oneside]{report}
+\input{configuracao}
+\begin{document}
+\begin{titlepage}
+\centering
+{\small UNIVERSIDADE FEDERAL DE SANTA MARIA\\CAMPUS CACHOEIRA DO SUL\\ENGENHARIA ELÉTRICA\par}
+\vspace{2cm}
+{\color{nexus}\fontsize{48}{52}\selectfont\bfseries NEXUS\par}
+\vspace{0.3cm}{\Large Manual técnico do sistema\par}
+\vspace{0.4cm}{\large Instrumentação, telemetria e integração\\do veículo elétrico experimental\par}
+\vspace{1cm}\textcolor{accent}{\rule{0.75\textwidth}{1.5pt}}\par
+\vspace{1.0cm}
+\begin{minipage}{0.83\textwidth}
+\centering
+\textbf{Equipe discente desta etapa}\par\vspace{0.25cm}
+\begin{tabular}{c}
+Adylson Hahn\\[0.12cm]
+Érick Ramon Biscaglia\\[0.12cm]
+Gabriel Muttoni\\[0.12cm]
+Gustavo Reckziegel Machado\\[0.12cm]
+Théos Schultz Tompsen
+\end{tabular}\par
+\vspace{0.65cm}
+\textbf{Orientador}\par\vspace{0.15cm}
+Prof. Dr. Paulo César Vargas Luz\par
+\end{minipage}
+\vfill
+{\small Revisão documental 2.2 --- baseada no repositório em 11/11/2026\\Cachoeira do Sul, RS --- 2026\par}
+\end{titlepage}
+\pagenumbering{roman}
+\chapter*{Controle do documento}
+\addcontentsline{toc}{chapter}{Controle do documento}
+Este manual descreve o NEXUS a partir dos arquivos de firmware, da documentação do projeto e das decisões de escopo comunicadas pela equipe até 11 de novembro de 2026. Algumas rotinas legadas ainda podem existir no código, embora estejam fora do escopo desta revisão. \textbf{Configuração no código não comprova montagem física ou ensaio concluído.} Onde a placa instalada, a calibração ou um resultado experimental não estão identificados, o texto registra essa limitação de forma explícita. Antes de alterar conexões ou operar o protótipo, confronte a revisão física com os esquemas e as definições do firmware.
+\begin{table}[htbp]\centering
+\caption{Histórico de revisões do manual}\label{tab:revisoes}
+\begin{tabularx}{\textwidth}{@{}llX@{}}\toprule
+Revisão & Data & Conteúdo\\\midrule
+0.1 & 10/11/2026 & Modelo inicial e estrutura editorial do arquivo recebido.\\
+1.0 & 10/11/2026 & Redação técnica baseada no repositório: arquitetura, ligações, aquisição, protocolos, operação, atualização e pontos de validação.\\
+2.0 & 10/11/2026 & Aprofundamento de eletrônica, Wi-Fi, comandos, memória, Google, OTA, rollback, falhas, OLED e procedimentos de bancada.\\
+2.1 & 10/11/2026 & Revisão de arquitetura, sensores, firmware e tabelas; retirada da leitura analógica de tensão e do áudio; diagramas, ligações e marca d'água.\\
+2.2 & 11/11/2026 & Acesso HTTP, redes abertas e varredura Wi-Fi, leitura INA228 em Operação e sensores, terminal e logs, gráfico elétrico opcional e ajuste dos diagramas.\\\bottomrule
+\end{tabularx}\end{table}
+\begin{nota}{Leitura correta dos estados}
+\textbf{Implementado} significa presente no código analisado; \textbf{configurado} é um valor definido no firmware; \textbf{a verificar} requer confronto com a montagem; \textbf{não validado} significa que não há registro de ensaio suficiente no material consultado. Telemetria simulada serve para demonstração e nunca deve ser confundida com medição.
+\end{nota}
+\tableofcontents
+\listoffigures\addcontentsline{toc}{chapter}{Lista de figuras}
+\listoftables\addcontentsline{toc}{chapter}{Lista de tabelas}
+\chapter*{Siglas e convenções}\addcontentsline{toc}{chapter}{Siglas e convenções}
+\small\begin{longtable}{@{}p{2.2cm}p{13.4cm}@{}}\toprule
+Sigla & Significado e uso no NEXUS\\\midrule
+ACK & Confirmação de recebimento de um quadro UART; não representa resultado final de uma operação longa.\\
+API HTTP & Conjunto de rotas de rede que o navegador consulta nos satélites; distinto dos quadros UART e das funções internas do firmware.\\
+AP & Ponto de acesso Wi-Fi criado por um satélite.\\
+CRC & Verificação de redundância cíclica; detecta corrupção de quadros, sem autenticar o emissor.\\
+DAC & Conversor digital-analógico; produz uma tensão a partir de um valor digital.\\
+CSV & Valores separados por vírgulas; formato do histórico de telemetria no microSD.\\
+DHCP & Serviço que atribui endereços IP aos clientes do AP.\\
+ESP-IDF & Ambiente de desenvolvimento da Espressif usado pelos três firmwares.\\
+GPIO & Pino de entrada ou saída de propósito geral.\\
+INA228 & Circuito integrado de monitoramento de corrente, tensão e potência da Texas Instruments.\\
+HTTP/HTTPS & Protocolo das páginas e APIs; HTTPS acrescenta proteção TLS.\\
+I\textsuperscript{2}C & Barramento serial compartilhado pelo MPU6050 e pela tela OLED.\\
+LDO & Regulador linear de baixa queda de tensão; dissipa a diferença de tensão em calor.\\
+NVS & Armazenamento persistente de pequenos valores na flash.\\
+OTA & Atualização de firmware pela rede, sem cabo após a primeira gravação.\\
+PCNT & Contador de pulsos por hardware do ESP32-S3, usado nos encoders.\\
+PSRAM & Memória RAM externa volátil do módulo mestre.\\
+PWM & Modulação por largura de pulso, usada para gerar tons no buzzer.\\
+RTC & Domínio de relógio de tempo real do ESP; sua memória pode sobreviver a certos reinícios, mas não a corte de energia.\\
+RSSI & Indicador de potência recebida no enlace Wi-Fi, em dBm.\\
+RTT & Tempo de ida e volta entre um envio UART e sua confirmação.\\
+SD/SPI & Cartão Secure Digital e barramento serial usado para acessá-lo.\\
+SHA-256 & Resumo criptográfico de 256 bits usado para conferir imagens OTA.\\
+TLS & Proteção criptográfica da comunicação HTTPS.\\
+UART & Interface serial assíncrona, com TX e RX entre mestre e satélites.\\
+VBUS & Pino/medição de tensão do barramento do banco de baterias no INA228, conforme o ponto de ligação escolhido.\\
+VSHUNT & Tensão diferencial entre os terminais de medição do shunt usada para calcular corrente.\\\bottomrule
+\end{longtable}\normalsize
+\par\medskip Grandezas são indicadas com unidade: tensão em V, corrente em A, potência em W, velocidade em km/h, aceleração em m/s\textsuperscript{2} e tempo em ms ou s. Frequência de aquisição, publicação, registro e atualização do navegador são processos distintos.
+\clearpage\pagenumbering{arabic}
+\AddToShipoutPictureBG{%
+  \begin{tikzpicture}[remember picture,overlay]
+    \fill[white] (current page.south west) rectangle (current page.north east);
+    \node[opacity=\nexusWatermarkOpacity,blend mode=difference]
+      at (current page.center)
+      {\includegraphics[width=\nexusWatermarkWidth]{imagens/logo_carro_eletrico.png}};
+  \end{tikzpicture}%
+}
+\input{capitulos/01_introducao}
+\input{capitulos/02_arquitetura}
+\input{capitulos/03_hardware}
+\input{capitulos/07_eletronica_placa}
+\input{capitulos/04_firmware}
+\input{capitulos/11_comandos_controle}
+\input{capitulos/08_wifi_paineis}
+\input{capitulos/09_memorias_google}
+\input{capitulos/10_ota_rollback}
+\input{capitulos/12_diagnostico_oled}
+\input{capitulos/06_operacao_testes}
+\appendix
+\chapter{Fontes e rastreabilidade}
+\section{Fontes internas utilizadas}
+O conteúdo foi conferido principalmente em \path{README.md}, \path{documentacao/arquitetura.md}, \path{documentacao/filosofia.md}, \path{documentacao/mestre.md}, \path{documentacao/satelites.md}, \path{documentacao/pinagem.md}, \path{documentacao/hardware.md}, \path{documentacao/protocolos.md}, \path{documentacao/ota.md}, \path{documentacao/google.md}, \path{documentacao/controle-remoto.md} e \path{documentacao/conceitos.md}. A referência executável é o código em \path{firmware/mestre-s3}, \path{firmware/equipe-s3}, \path{firmware/visitantes-s3} e \path{firmware/compartilhado}. Os esquemas e placas candidatos estão em \path{hardware/kicad/KiCad_pcb_telemetria}. Para a seção elétrica, foram consultadas a folha de dados do INA228 e a nota sobre pull-ups I\textsuperscript{2}C da Texas Instruments, além das diretrizes de hardware do ESP32-S3 da Espressif. O valor de shunt de 1 m$\Omega$ e a capacidade de 75 A foram informados pelo projeto e precisam ser confirmados no componente instalado.
+\section{Registro de configuração para cada ensaio}
+Em todo ensaio, anotar: data e responsável; identificação impressa da placa e do chicote; revisão do esquema e da PCB; commit do repositório; versões de cada firmware; configuração de sensores e rodas; instrumentos de referência e sua calibração; condições de alimentação; arquivos brutos do microSD; resultado observado e eventual incidente. O repositório consultado não associa uma revisão física única à placa instalada nem contém um relatório de validação geral. Essas informações devem acompanhar a próxima revisão deste manual.
+\end{document}

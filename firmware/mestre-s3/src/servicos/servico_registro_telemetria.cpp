@@ -598,6 +598,7 @@ void registrar_diagnostico_esp() {
     const bool falha_sensor_nova =
         sensores.adc.total > ultimos_log_sensores.adc.total ||
         sensores.mpu6050.total > ultimos_log_sensores.mpu6050.total ||
+        sensores.ina228.total > ultimos_log_sensores.ina228.total ||
         sensores.encoder.total > ultimos_log_sensores.encoder.total ||
         sensores.persistencia_odometro.total >
             ultimos_log_sensores.persistencia_odometro.total;
@@ -865,13 +866,16 @@ void registrar_diagnostico_esp() {
             const auto retrato = servico_diagnostico_obter_retrato();
             std::fprintf(arquivo,
                 "SENSORES adc=%s/%" PRIu32 "/%" PRIu32 " mpu=%s/%" PRIu32 "/%" PRIu32
-                " encoder=%s/%" PRIu32 "/%" PRIu32 " odometro_nvs=%s/%" PRIu32 "/%" PRIu32 "\n",
+                " encoder=%s/%" PRIu32 "/%" PRIu32 " ina228=%s/%" PRIu32 "/%" PRIu32
+                " odometro_nvs=%s/%" PRIu32 "/%" PRIu32 "\n",
                 esp_err_to_name(sensores.adc.ultimo_erro), sensores.adc.total,
                 sensores.adc.consecutivos,
                 esp_err_to_name(sensores.mpu6050.ultimo_erro), sensores.mpu6050.total,
                 sensores.mpu6050.consecutivos,
                 esp_err_to_name(sensores.encoder.ultimo_erro), sensores.encoder.total,
                 sensores.encoder.consecutivos,
+                esp_err_to_name(sensores.ina228.ultimo_erro), sensores.ina228.total,
+                sensores.ina228.consecutivos,
                 esp_err_to_name(sensores.persistencia_odometro.ultimo_erro),
                 sensores.persistencia_odometro.total,
                 sensores.persistencia_odometro.consecutivos);

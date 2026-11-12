@@ -23,6 +23,11 @@ constexpr gpio_num_t PINO_I2C_SDA = GPIO_NUM_8;
 constexpr gpio_num_t PINO_I2C_SCL = GPIO_NUM_9;
 constexpr uint32_t FREQUENCIA_I2C_HZ = 400000;
 constexpr uint8_t ENDERECO_MPU6050 = 0x68;
+// INA228: A0/A1 em GND. Confirmar shunt e sentido na montagem final.
+constexpr uint8_t ENDERECO_INA228 = 0x40;
+constexpr float RESISTENCIA_SHUNT_INA228_OHM = 0.001f;
+constexpr float CORRENTE_MAXIMA_INA228_A = 75.0f;
+constexpr float SINAL_CORRENTE_INA228 = 1.0f;
 constexpr uint32_t TEMPO_LIMITE_I2C_MS = 100;
 
 // Ferramenta temporária de coleta para o modelo de voz. O INMP441 trabalha

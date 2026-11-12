@@ -16,6 +16,7 @@
 #include "esp_timer.h"
 #include "nucleo/configuracao_placa.h"
 #include "nucleo/configuracao_registro_telemetria.h"
+#include "servicos/servico_controle_sensores.h"
 
 namespace {
 constexpr char ETIQUETA[] = "gravador_audio";
@@ -159,6 +160,8 @@ esp_err_t servico_gravador_audio_treinamento_gravar(
         return ESP_ERR_INVALID_ARG;
     }
     *resultado = {};
+    if (!servico_controle_sensores_ativo(SensorControlado::Microfone))
+        return ESP_ERR_INVALID_STATE;
 
     char nome_normalizado[TAMANHO_MAXIMO_NOME + 1]{};
     if (!normalizar_nome(nome, nome_normalizado, sizeof(nome_normalizado))) {

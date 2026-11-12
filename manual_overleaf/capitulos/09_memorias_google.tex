@@ -1,0 +1,135 @@
+\chapter{Memórias, histórico e integração com o Google}\label{cap:memorias_google}
+
+\section{Por que há várias memórias}
+O NEXUS não possui uma memória única que sirva igualmente para executar código, atender periféricos, guardar ajustes e conservar horas de telemetria. O mestre usa um ESP32-S3-WROOM-1-N16R8, isto é, módulo previsto para 16\,MiB de flash e 8\,MiB de PSRAM. A flash é persistente, porém tem ciclos limitados de escrita; a RAM interna e a PSRAM são voláteis; o cartão microSD é removível e comporta arquivos longos. Os satélites usam uma tabela de partições para flash de 4\,MiB. Antes de gravar a placa, é obrigatório conferir o módulo instalado: a designação do ambiente de compilação não altera a capacidade física.
+
+\begin{table}[htbp]\centering\small
+\caption{Papel e persistência das memórias no sistema}\label{tab:memorias_papel}
+\begin{tabularx}{\textwidth}{@{}p{2.5cm}X X@{}}\toprule
+Meio & Uso no projeto e motivo & Após perda de energia\\\midrule
+Flash de programa & Guarda as duas imagens de aplicação OTA e os dados de partida; permite voltar a uma imagem anterior. & Permanece, salvo apagamento ou regravação.\\
+NVS na flash & Pequenos valores alteráveis: odômetro, perfis e política Wi-Fi, intervalo OTA e ajustes específicos dos satélites. Evita regravar uma imagem inteira para mudar uma preferência. & Permanece enquanto a partição NVS não for apagada nem corrompida.\\
+RAM interna & Tarefas, pilhas, filas e buffers que exigem acesso rápido. Parte com capacidade DMA é necessária para transferências de periféricos. & Perdida.\\
+PSRAM externa & Históricos e buffers grandes que não precisam ocupar a RAM interna escassa. O firmware mede disponibilidade e admite alguns recuos para RAM interna. & Perdida.\\
+RTC & Domínio de memória do chip que pode sobreviver a certos tipos de reinício, conforme a implementação; não substitui NVS ou cartão. & Não se deve presumir retenção após corte de alimentação.\\
+microSD & CSVs, logs e cópia de configuração. Permite retirar e auditar arquivos sem regravar o ESP. & Permanece se o cartão e o sistema de arquivos estiverem íntegros.\\\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{nota}{Estado implementado versus propriedade do chip}
+A arquitetura usa concretamente flash, NVS, RAM interna, PSRAM e microSD. A memória RTC aparece aqui para evitar confundi-la com armazenamento durável: nos serviços de histórico e configuração analisados não há dependência de uma cópia em RTC. Em particular, o estado de seleção das imagens OTA pertence aos metadados de OTA na flash, não a um arquivo CSV nem a uma suposta cópia permanente em RAM.
+\end{nota}
+
+\subsection{Mapa da flash e consequências para OTA}\label{sec:particoes_flash}
+A tabela de partições fixa regiões e limites de tamanho antes da compilação. \texttt{ota\_0} e \texttt{ota\_1} são espaços alternativos para executáveis; uma atualização escreve a partição inativa e a seleção de partida muda somente segundo o fluxo OTA. \texttt{otadata} guarda os metadados de escolha e validação da imagem; \texttt{nvs} guarda valores de aplicação; \texttt{phy\_init} é reservada ao subsistema de rádio. Nenhuma dessas partições é uma área geral para CSV. Um firmware maior que sua partição OTA não pode ser instalado integralmente nesse esquema.
+
+\begin{table}[htbp]\centering\small
+\caption{Partições configuradas nos projetos PlatformIO; valores em hexadecimal}\label{tab:particoes_nexus}
+\begin{tabularx}{\textwidth}{@{}lXXl@{}}\toprule
+Partição & Mestre, 16\,MiB & Cada satélite, 4\,MiB & Finalidade\\\midrule
+\texttt{nvs} & \texttt{0x9000}, \texttt{0x6000} (24\,KiB) & \texttt{0x9000}, \texttt{0x5000} (20\,KiB) & Preferências persistentes\\
+\texttt{otadata} & \texttt{0xF000}, \texttt{0x2000} (8\,KiB) & \texttt{0xE000}, \texttt{0x2000} (8\,KiB) & Seleção e estado OTA\\
+\texttt{phy\_init} & \texttt{0x11000}, \texttt{0x1000} (4\,KiB) & \texttt{0x10000}, \texttt{0x1000} (4\,KiB) & Dados de rádio\\
+\texttt{ota\_0} & \texttt{0x20000}, \texttt{0x600000} (6\,MiB) & \texttt{0x20000}, \texttt{0x1E0000} (1920\,KiB) & Imagem A\\
+\texttt{ota\_1} & \texttt{0x620000}, \texttt{0x600000} (6\,MiB) & \texttt{0x200000}, \texttt{0x1E0000} (1920\,KiB) & Imagem B\\\bottomrule
+\end{tabularx}
+\end{table}
+
+Os deslocamentos acima vêm de \path{firmware/mestre-s3/particoes_ota.csv} e das tabelas equivalentes de Equipe e Visitantes. Regiões não listadas incluem áreas convencionais de partida e espaços reservados; espaço livre no chip não deve ser tratado como partição utilizável sem alterar a tabela, reconstruir e validar a gravação. A atualização de firmware não deve apagar a NVS, pois isso perderia odômetro e redes; uma gravação que apague toda a flash tem consequência diferente. O mecanismo de confirmação ou retorno de uma nova imagem é explicado no capítulo de OTA.
+
+\subsection{RAM, PSRAM, pilhas e transferências}
+A RAM interna é o recurso mais restrito durante Wi-Fi e HTTPS: as tarefas têm pilhas próprias, os controladores precisam de buffers e uma alocação grande depende não só da soma de bytes livres, mas do \emph{maior bloco livre}. Por isso o diagnóstico publica memória interna livre, menor nível já observado, maior bloco contíguo e menor margem de pilha. Um total livre aparentemente suficiente ainda pode falhar ao reservar um bloco contíguo. Buffers destinados a DMA (\emph{Direct Memory Access}, transferência direta entre periférico e memória) precisam de capacidades de alocação compatíveis; PSRAM livre não equivale automaticamente a RAM interna adequada a DMA.
+
+O mestre espera 8\,MiB de PSRAM. O histórico de saúde mantém 120 amostras a 1\,Hz nela; quando não está disponível, tenta uma versão reduzida de 30 amostras na RAM interna. Outros caminhos, como partes do pipeline OTA, também tentam PSRAM e registram quando recuam para RAM interna. Essa política permite continuar funções essenciais, mas diminui a margem de memória; não comprova que toda carga simultânea foi validada sem PSRAM. O registro CSV e o upload executam tarefas separadas no núcleo 0, enquanto aquisição e enlaces prioritários ficam configurados no núcleo 1. Essa distribuição reduz disputa, mas não transforma escrita em SD, rede e alocação em operações de tempo determinístico.
+
+\section{Caminho de uma amostra até o arquivo}\label{sec:csv_fluxo}
+O retrato ao vivo é produzido a 4\,Hz. A tarefa de histórico seleciona uma amostra por segundo, coloca-a em uma fila de 24 posições e deixa uma única tarefa proprietária da escrita de CSV. A fila absorve atrasos curtos do cartão; se a escrita ficar atrasada por mais tempo, amostras podem ser descartadas e o contador de perdas deve ser examinado. A separação impede que o tempo de resposta do cartão bloqueie diretamente o ciclo de aquisição. Os gráficos abertos no navegador contêm apenas o que aquela página recebeu e não são substitutos do arquivo local.
+
+\begin{figure}[htbp]\centering
+\begin{tikzpicture}[
+  >=Latex, node distance=4mm,
+  etapa/.style={draw=nexus,rounded corners,fill=pale,align=center,text width=10.8cm,minimum height=7mm,inner sep=3pt,font=\small},
+  seta/.style={->,thick,draw=accent}
+]
+\node[etapa] (origem) {Retrato do mestre a 4\,Hz: aquisição, cálculo e indicação de validade};
+\node[etapa,below=of origem] (fila) {Amostragem a 1\,Hz $\rightarrow$ fila de 24 posições $\rightarrow$ único gravador};
+\node[etapa,below=of fila] (ativo) {microSD: \texttt{.tmp} ativo; sincronização a cada 10\,s};
+\node[etapa,below=of ativo] (pendente) {Fechamento por 1\,h, 8\,MiB ou pedido de envio $\rightarrow$ \texttt{.csv} pendente};
+\node[etapa,below=of pendente] (google) {Envio manual HTTPS $\rightarrow$ confirmação exata do Web App};
+\node[etapa,below=of google] (enviado) {Movimentação local para \texttt{enviados/}; cópia original no Drive e linhas na planilha};
+\draw[seta] (origem)--(fila); \draw[seta] (fila)--(ativo);
+\draw[seta] (ativo)--(pendente); \draw[seta] (pendente)--(google);
+\draw[seta] (google)--(enviado);
+\end{tikzpicture}
+\caption{Fluxo do histórico; o aceite de um comando não é confirmação do destino.}\label{fig:fluxo_historico}
+\end{figure}
+
+\begin{table}[htbp]\centering\footnotesize
+\caption{Estados observáveis de um CSV no cartão}\label{tab:csv_estados}
+\begin{tabularx}{\textwidth}{@{}p{3.7cm}X@{}}\toprule
+Nome ou local & Significado e ação segura\\\midrule
+\path{telemetria_XXXXXXXX_NNNN.tmp} & Arquivo ativo. Não é enviado enquanto está aberto. \texttt{XXXXXXXX} identifica a sessão de partida e \texttt{NNNN}, a sequência do arquivo; nenhum dos dois é data civil.\\
+\path{telemetria_XXXXXXXX_NNNN.csv} & Arquivo fechado, elegível para envio. Continua pendente após perda de rede ou confirmação insuficiente.\\
+\path{telemetria/enviados/} & Cópia local preservada após confirmação do nome pelo Web App e movimentação bem-sucedida no cartão.\\
+\path{*.incompleto} & Arquivo que falhou na recuperação e é retido para inspeção, sem envio automático.\\\bottomrule
+\end{tabularx}
+\end{table}
+
+O arquivo gira ao atingir uma hora ou 8\,MiB, o que ocorrer primeiro. Isso limita o trabalho de recuperação de um arquivo interrompido e evita um CSV sem limite prático. O serviço sincroniza o arquivo ativo com o cartão aproximadamente a cada 10\,s; uma queda abrupta de energia ainda pode perder as linhas que não chegaram ao meio. Na partida, um \texttt{.tmp} com cabeçalho esperado e última linha completa é renomeado para \texttt{.csv}; se a estrutura não passar nessa verificação, ele é preservado como \texttt{.incompleto}. Não se deve renomear manualmente um arquivo danificado para forçar upload.
+
+Cada linha contém \texttt{tempo\_sessao\_ms}, ligado ao tempo desde a partida do mestre, e \texttt{simulado}, além dos campos da telemetria. A existência de uma coluna ou o número zero não demonstra que haja um sensor físico correspondente. Para analisar ensaios, confronte indicadores de validade, estado de simulação, revisão do firmware e calibração. O nome de sessão, sozinho, não fornece horário civil.
+
+\subsection{Logs estruturados e contexto de incidentes}
+O mestre escreve logs próprios em \path{/sdcard/logs}, em segmentos numerados, separados da saída \texttt{ESP\_LOG} do terminal. Em regime normal, o resumo de saúde é registrado a cada 30\,s. Ao detectar falha, o serviço tenta descarregar o histórico recente de saúde com marcadores \texttt{HIST\_INICIO}, \texttt{HIST} e \texttt{HIST\_FIM}, uma vez por incidente; depois registra a cada 2\,s por 2\,min. Para falha grave, usa 1\,s por 5\,min. Uma nova falha grave pode abrir outra captura. Segmentos chegam a 8\,MiB, com limite configurado de 16\,MiB por sessão. Esses limites contêm o uso do cartão sem prometer retenção ilimitada.
+
+Se o SD estiver indisponível, o primeiro lote de contexto pode permanecer pendente em RAM; essa memória é volátil e não constitui garantia após corte de energia. Incidentes posteriores sem capacidade de captura são contabilizados. O serviço tenta novamente o cartão após 30\,s. O relógio civil só passa a ser usado quando obtém uma referência UTC válida do cabeçalho \texttt{Date} de uma resposta HTTPS de OTA ou Google; antes disso, a linha deve ser interpretada pelo tempo relativo à partida. Não retroatribuir um horário UTC às amostras anteriores sem uma correlação de ensaio documentada. Logs estruturados não fazem parte do upload Google dos CSVs.
+
+\subsection{Cópia de configuração, NVS e recuperação}\label{sec:backup_config}
+A NVS é a fonte persistente normal para pequenas preferências. O odômetro acumulado é salvo em milímetros numa chave própria; perfis de Wi-Fi, política de seleção de rede e intervalo OTA possuem seus espaços de persistência. Quando a NVS não puder ser aberta, o odômetro pode continuar volátil, com erro diagnosticável. Cada gravação requer \texttt{commit}; atualizar a variável em RAM não equivale a gravá-la na flash.
+
+O mestre também escreve \path{/sdcard/configuracao_atual.txt} aproximadamente a cada 60\,s. O conteúdo tem versão de formato, sequência e checksum para rejeitar truncamento ou alteração acidental. A escrita passa por arquivo temporário e substituição; a sequência só avança após gravação bem-sucedida. Se falhar, há nova tentativa após 5\,s. Na partida, o serviço compara a cópia principal e a temporária e escolhe a válida mais recente. O backup não é espelho completo da NVS: restaura odômetro \emph{somente se a chave correspondente estiver ausente}, e aplica seletivamente preferências Wi-Fi, intervalo OTA e ajustes de relatórios segundo a situação das chaves. Não deve sobrescrever um valor NVS válido apenas por existir um arquivo mais antigo.
+
+Os nomes de redes podem aparecer na cópia, mas as senhas Wi-Fi não aparecem. O token e a URL do Google, definidos no cabeçalho privado de compilação, também não são recuperados desse arquivo. Depois de apagar NVS ou trocar a placa, recadastre credenciais e confira a política de rede; depois de reconstruir o firmware, confira a configuração privada Google. Uma queda antes do próximo backup pode deixar uma diferença de até aproximadamente um minuto de progresso nessa cópia, e a persistência NVS do odômetro tem sua própria cadência. Preserve cartão e NVS originais ao investigar divergência; não use o backup como prova de que todo valor em RAM foi salvo.
+
+\begin{nota}{Recuperação não é sincronização automática de dois bancos}
+O microSD protege alguns ajustes contra ausência de chaves NVS, mas não fornece restauração integral de senhas, segredos ou todos os estados transitórios. A política de recuperação é seletiva para evitar que uma cópia antiga reverta uma configuração válida.
+\end{nota}
+
+\section{Preparação da integração com Google Apps Script}\label{sec:google_config}
+O envio foi deliberadamente colocado fora do ciclo em tempo real e começa por pedido do operador. O destino é uma pasta do Google Drive com os CSVs originais e uma planilha \texttt{telemetria\_carro} na mesma pasta. Cada sessão de partida recebe uma aba \texttt{sessao\_XXXXXXXX}; a coluna \texttt{arquivo\_origem} vincula cada linha ao CSV de origem. O ESP não executa OAuth interativo: o Web App roda com as permissões da conta que o publicou. Como o acesso do aplicativo precisa permitir requisições sem login Google no ESP, um token compartilhado longo constitui a autorização efetiva. URL e token devem permanecer fora do repositório público e de capturas de log.
+
+\begin{enumerate}
+\item Crie, na conta que conservará os dados, uma pasta no Drive e copie o \emph{ID} presente no endereço da pasta; o nome visível não é o ID.
+\item Crie um projeto em Google Apps Script e coloque nele o conteúdo de \path{documentacao/telemetria-google/Code.gs}. Nas propriedades do script, crie \texttt{ID\_PASTA\_TELEMETRIA} com o ID da pasta e \texttt{TOKEN\_TELEMETRIA} com segredo aleatório de pelo menos 32 caracteres. A propriedade \texttt{ID\_PLANILHA\_TELEMETRIA} é preenchida pelo script ao criar ou localizar a planilha.
+\item Implante como \emph{Aplicativo da Web}, executando como a própria conta e permitindo acesso a \emph{Qualquer pessoa}; uma configuração que exija login Google impede a requisição direta do ESP. Autorize Drive e Sheets e copie a URL publicada terminada em \texttt{/exec}. A URL \texttt{/dev} serve ao editor e não é a configuração de produção.
+\item No mestre, crie o cabeçalho privado \path{firmware/mestre-s3/include/nucleo/segredos_ota.h} a partir do exemplo. Configure uma rede Wi-Fi externa com internet, \texttt{TELEMETRIA\_GOOGLE\_URL} com a URL \texttt{/exec} e \texttt{TELEMETRIA\_GOOGLE\_TOKEN} com o mesmo token das propriedades do script. Compile e grave o mestre.
+\item Se modificar \texttt{Code.gs} depois, use \emph{Gerenciar implantações}, edite a implantação, selecione \emph{Nova versão} e implante de novo. Salvar o código no editor não atualiza por si só a versão \texttt{/exec} consumida pelo ESP.
+\end{enumerate}
+
+O script \path{ferramentas/gerar_segredos_ota.py} gera somente as macros iniciais de Wi-Fi e \emph{sobrescreve} o cabeçalho privado. Depois de adicionar URL e token Google, edite o cabeçalho diretamente para não perdê-los. O arquivo real é local e ignorado pelo Git; o manual não contém credenciais reais. O token deve ser tratado como segredo operacional: se for exposto, troque-o no Apps Script e no firmware mestre, reconstrua e grave uma nova versão.
+
+\subsection{Protocolo de envio, confirmação e duplicatas}\label{sec:google_fluxo}
+O operador pode solicitar sincronização pelo terminal serial do mestre a 115200\,baud ou pela página \emph{Comandos} do ESP da Equipe, depois de habilitar acesso administrativo. A página de Visitantes não tem esse comando. O mestre não inicia dois envios simultâneos nem toma uma sessão Wi-Fi já ocupada por outra operação. Ele fecha o CSV atual, abre uma sessão temporária da estação Wi-Fi na rede externa, enumera os \texttt{.csv} pendentes e faz um \texttt{POST} HTTPS por arquivo. O conteúdo é transferido em blocos de 8192 bytes; o pedido inclui os parâmetros \texttt{arquivo} e \texttt{token}. A configuração prevê 60\,s de limite por upload, até quatro tentativas por arquivo e esperas crescentes entre tentativas. O painel mostra arquivo atual, bytes, porcentagem, taxa e resultado, mas o aceite inicial do comando significa apenas que a tarefa começou.
+
+O serviço segue o redirecionamento de resposta que o Google pode fazer para \texttt{script.googleusercontent.com}. A condição de sucesso é conjunta: código HTTP 200 \emph{e} corpo exatamente \texttt{OK:} seguido do mesmo nome de arquivo enviado. Somente depois disso o mestre move o arquivo para \path{/sdcard/telemetria/enviados}. Código 200 isolado, resposta parcial, página de login, \texttt{ERRO:*} ou confirmação de outro nome não são comprovantes. Se as quatro tentativas falharem, o CSV permanece pendente e o lote termina com erro. Se não existir arquivo pendente, a operação pode terminar com sucesso sem transferir bytes.
+
+O Apps Script verifica antes de inserir linhas se aquele nome já consta da aba da sessão e verifica antes de criar um CSV se o mesmo nome já existe na pasta. Isso torna a repetição do mesmo arquivo segura nos casos previstos: por exemplo, o Google pode ter gravado o arquivo mas a resposta se perder na rede, ou o mestre pode receber \texttt{OK} e falhar ao mover o arquivo no SD. Na próxima tentativa o nome permanece igual, e o script evita duplicar arquivo e linhas. A deduplicação depende desse nome estável e do script instalado; não resolve alteração manual do nome, mudança de pasta ou planilhas antigas, que não são migradas automaticamente.
+
+\begin{table}[htbp]\centering\small
+\caption{Diagnóstico de envio e ação indicada}\label{tab:google_falhas}
+\begin{tabularx}{\textwidth}{@{}p{4.0cm}X@{}}\toprule
+Sinal & Verificação ou consequência\\\midrule
+Pedido recusado ou botão desabilitado & Consultar estado do Mestre, microSD, Wi-Fi e sessão já ativa; não repetir comandos às cegas.\\
+Sem pendentes & Confirmar contador de amostras e fechamento de CSV. Uma execução vazia não prova que houve envio anterior.\\
+Erro de DNS, conexão ou TLS & Conferir perfil e sinal da rede externa, internet, URL \texttt{/exec}, data de resposta e registros do terminal. O AP local da Equipe não é, por si só, acesso à internet.\\
+\texttt{ERRO:configuracao} ou \texttt{ERRO:autorizacao} & Conferir propriedades do script, ID de pasta e correspondência do token, sem imprimi-lo em relatórios.\\
+\texttt{ERRO:nome}, \texttt{ERRO:conteudo} ou \texttt{ERRO:csv} & Inspecionar nome e conteúdo preservados no cartão; verificar cabeçalho e ao menos uma linha de dados.\\
+\texttt{ERRO:interno}, HTTP inesperado & Examinar \emph{Execuções} do Apps Script, permissões da conta, pasta, implantação e resposta no terminal.\\
+\texttt{OK} remoto, arquivo ainda pendente & Investigar falha de movimentação no SD. Reenviar o mesmo nome é seguro dentro da política de deduplicação.\\\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Verificação em bancada e limites documentais}
+Com cartão montado e uma rede externa configurada, deixe o mestre produzir amostras reais ou identificadas como simuladas. Confira que o diagnóstico mostra amostras gravadas, ausência de perdas na fila e arquivo fechado elegível. Solicite o envio, espere o \emph{resultado final}, confirme o CSV original na pasta, as linhas na aba da sessão e o arquivo em \texttt{enviados/}. Para testar recuperação, interrompa a rede antes da confirmação e verifique que o CSV continua pendente; ao restabelecer a rede, repita e confira que não apareceram duplicatas. Registre revisão do firmware, versão do script, nome do arquivo e observações, sem anotar o token.
+
+O código implementa esse fluxo, mas a documentação consultada não constitui um relatório de ensaio exaustivo com todas as combinações de falha de energia, cartão removido, PSRAM ausente e rede intermitente. Na instalação física, devem ser verificados retenção após desligamento, taxas de perda em carga, capacidade do cartão, integridade da recuperação e comportamento de reenvio antes de usar o histórico como registro experimental definitivo.

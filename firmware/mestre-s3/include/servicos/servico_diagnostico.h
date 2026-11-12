@@ -91,6 +91,7 @@ enum class SensorDiagnosticado : uint8_t {
     Adc,
     Mpu6050,
     Encoder,
+    Ina228,
 };
 
 struct RegistroErroDiagnostico {
@@ -105,6 +106,7 @@ struct EstatisticasSensoresDiagnostico {
     RegistroErroDiagnostico adc{};
     RegistroErroDiagnostico mpu6050{};
     RegistroErroDiagnostico encoder{};
+    RegistroErroDiagnostico ina228{};
     RegistroErroDiagnostico persistencia_odometro{};
 };
 

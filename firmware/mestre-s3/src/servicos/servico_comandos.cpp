@@ -390,7 +390,7 @@ codigo_resposta_comando_t executar_acao_mestre(
                 solicitacao.texto, sizeof(solicitacao.texto));
             const size_t tamanho_senha = senha == nullptr ? 0 : std::strlen(senha);
             if (tamanho_ssid < 1 || tamanho_ssid > 32 ||
-                tamanho_senha < 8 || tamanho_senha > 63) {
+                (tamanho_senha != 0 && tamanho_senha < 8) || tamanho_senha > 63) {
                 return RESPOSTA_COMANDO_CARGA_INVALIDA;
             }
             rede_wifi_preparada = {};

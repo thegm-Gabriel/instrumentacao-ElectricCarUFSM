@@ -1,0 +1,50 @@
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[utf8]{inputenc}
+  \usepackage[T1]{fontenc}
+  \usepackage{lmodern}
+\else
+  \usepackage{fontspec}
+  \setmainfont{Latin Modern Roman}
+  \setsansfont{Latin Modern Sans}
+  \setmonofont{Latin Modern Mono}
+\fi
+\usepackage[brazil]{babel}
+\usepackage{microtype}
+\usepackage[left=2.6cm,right=2.3cm,top=2.5cm,bottom=2.4cm,headheight=15pt]{geometry}
+\usepackage{xcolor,graphicx,booktabs,tabularx,array,longtable,amsmath}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta}
+\usepackage{eso-pic}
+\usepackage{titlesec,fancyhdr,enumitem,listings,tcolorbox}
+\usepackage{caption}
+\usepackage{xurl}
+\usepackage{hyperref}
+\definecolor{nexus}{HTML}{153650}
+\definecolor{accent}{HTML}{168B9A}
+\definecolor{pale}{HTML}{F0F5F8}
+% Intensidade da marca d'agua: 0 desativa; 0.04 a 0.08 costuma ser discreto.
+\newcommand{\nexusWatermarkOpacity}{0.055}
+\newcommand{\nexusWatermarkWidth}{0.43\paperwidth}
+\hypersetup{colorlinks=true,linkcolor=nexus,urlcolor=accent,pdftitle={NEXUS - Manual técnico},pdfauthor={Equipe NEXUS}}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+\setlength{\emergencystretch}{2em}
+\renewcommand{\arraystretch}{1.25}
+\setlength{\tabcolsep}{7pt}
+\linespread{1.12}
+\titleformat{\chapter}[display]{\color{nexus}\bfseries}{\large CAPÍTULO \thechapter}{5pt}{\Huge}
+\titlespacing*{\chapter}{0pt}{0pt}{20pt}
+\titleformat{\section}{\Large\bfseries\color{nexus}}{\thesection}{0.7em}{}
+\titleformat{\subsection}{\large\bfseries\color{nexus}}{\thesubsection}{0.7em}{}
+\pagestyle{fancy}\fancyhf{}
+\fancyhead[L]{\small\textcolor{nexus}{NEXUS | Manual técnico}}
+\fancyhead[R]{\small Revisão 2.1}
+\fancyfoot[L]{\small UFSM | Cachoeira do Sul}\fancyfoot[R]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\fancypagestyle{plain}{\fancyhf{}\fancyfoot[L]{\small NEXUS | UFSM}\fancyfoot[R]{\thepage}\renewcommand{\headrulewidth}{0pt}}
+\captionsetup{font=small,labelfont=bf,labelsep=endash}
+\setlist{nosep,leftmargin=*}
+\newtcolorbox{nota}[1]{colback=pale,colframe=accent,boxrule=0.5pt,arc=2mm,title=#1,fonttitle=\bfseries}
+\lstset{basicstyle=\ttfamily\small,backgroundcolor=\color{pale},frame=single,rulecolor=\color{accent},numbers=left,numberstyle=\tiny\color{gray},breaklines=true,columns=fullflexible,keepspaces=true,showstringspaces=false,captionpos=b,keywordstyle=\color{nexus}\bfseries,commentstyle=\color{gray}}
+\setcounter{tocdepth}{1}

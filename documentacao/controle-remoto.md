@@ -22,9 +22,7 @@ corrente, tensão e potência aparece antes dos comandos. A idade da telemetria
 Os valores solicitados aparecem acima dos formulários. Marcha, limites e
 liberação pedem confirmação. **Solicitar parada envia imediatamente, sem
 diálogo de confirmação**, acompanhado de aviso discreto. Antes de uma situação
-urgente, use **Preparar acesso** e informe a chave administrativa do ESP da
-Equipe, mostrada no terminal serial; isso evita a entrada da chave no primeiro
-toque no botão de parada. A página Comandos
+urgente, conecte-se ao AP da Equipe e confira a comunicação com o mestre. A página Comandos
 mantém o histórico e o estado observado. O estado é consultado
 automaticamente no ciclo de estados operacionais (aproximadamente 2 s, sujeito
 ao tempo das demais consultas UART), além do botão Atualizar estado.
@@ -108,8 +106,8 @@ atuação separado e retorno de estado medido. Antes de habilitá-la será neces
 definir autenticação/autorização, exclusividade e validade temporal dos pedidos,
 comportamento na perda de enlace, intertravamentos por velocidade real para
 inversão de sentido, limites físicos e confirmação de parada. O AP da Equipe
-exige uma chave administrativa para ações HTTP, mas não identifica
-individualmente os operadores. Não basta mudar o campo
+permite ações HTTP aos clientes conectados, sem identificar individualmente os
+operadores. Não basta mudar o campo
 `atuacao_habilitada` para tornar este mecanismo adequado a dirigir o veículo.
 
 ## Prévia e validação

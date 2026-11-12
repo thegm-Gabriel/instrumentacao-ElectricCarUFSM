@@ -1,0 +1,186 @@
+\chapter{Wi-Fi, painéis web e acesso à telemetria}\label{cap:wifi-paineis}
+
+\section{Função de cada rádio}
+Os três ESP32-S3 não formam uma única rede IP. O ESP Equipe cria um ponto de acesso (\emph{Access Point}, AP) para operação e diagnóstico local. O ESP Visitantes cria outro AP, dedicado à apresentação pública da telemetria. O ESP Mestre atua como estação (\emph{STA}) quando precisa alcançar uma rede externa para atualização pela rede (\emph{Over-the-Air}, OTA) ou sincronização com o Google. No uso local, o Mestre troca dados com os satélites pela UART; os navegadores não acessam diretamente o Mestre por IP.
+
+Essa separação mantém o painel público sem caminho HTTP para comandos, preserva a interface da Equipe quando o roteador externo não está disponível e dispensa Internet para visualizar as amostras. A rede externa do Mestre e os dois APs podem coexistir, mas alcance e desempenho dependem da alimentação, antenas, canais e ambiente de rádio. A arquitetura de UART e os quadros são descritos em outros capítulos; aqui o foco é como os dados chegam ao navegador e como se controla o acesso.
+
+\begin{figure}[htbp]\centering
+\begin{tikzpicture}[node distance=8mm and 11mm, >={Latex},
+    bloco/.style={draw=nexus,rounded corners,fill=pale,align=center,font=\small,minimum height=10mm,text width=2.35cm}]
+\node[bloco] (mestre) {ESP Mestre\\STA sob demanda};
+\node[bloco,above right=9mm and 16mm of mestre] (equipe) {ESP Equipe\\AP e HTTP};
+\node[bloco,below right=9mm and 16mm of mestre] (visitantes) {ESP Visitantes\\AP e HTTP};
+\node[bloco,right=16mm of equipe] (operador) {Navegador\\da Equipe};
+\node[bloco,right=16mm of visitantes] (publico) {Navegador\\do visitante};
+\node[bloco,below=22mm of mestre] (roteador) {Roteador externo\\OTA e Google};
+\draw[<->,thick] (mestre.north east)--node[above,sloped,font=\scriptsize]{UART1} (equipe.south west);
+\draw[<->,thick] (mestre.south east)--node[below,sloped,font=\scriptsize]{UART2} (visitantes.north west);
+\draw[<->,thick] (equipe)--node[above,font=\scriptsize]{Wi-Fi/HTTP} (operador);
+\draw[<->,thick] (visitantes)--node[below,font=\scriptsize]{Wi-Fi/HTTP} (publico);
+\draw[<->,thick,dashed] (roteador)--node[left,font=\scriptsize]{Wi-Fi STA} (mestre);
+\end{tikzpicture}
+\caption{Caminhos implementados. O Mestre não é um roteador entre os dois APs.}\label{fig:fluxo-web}
+\end{figure}
+
+\section{Configuração dos APs locais}\label{sec:aps-locais}
+Os nomes e parâmetros a seguir constam das configurações dos respectivos firmwares. Na revisão consultada, os dois APs usam a mesma senha configurada no firmware; ela não é reproduzida neste manual. Ambos usam WPA2-PSK e servidor HTTP na porta 80. \emph{PSK} é a chave compartilhada usada para ingressar na rede. A senha comum simplifica a distribuição inicial, mas amplia o alcance de uma credencial divulgada: publicar o QR de Visitantes também permite a associação ao AP Equipe. \textbf{Não há chave administrativa HTTP adicional no painel da Equipe}: quem consegue acessar esse AP pode enviar comandos. Restringir fisicamente e por distribuição de credenciais o acesso à rede técnica. Se a política exigir PSKs diferentes, será preciso alterar a configuração, compilar ambos os firmwares e rever os QR.
+
+\begin{table}[htbp]\centering\small
+\caption{Configuração local dos dois pontos de acesso}\label{tab:aps-wifi}
+\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash\bfseries}p{3.2cm}X X@{}}
+\toprule
+Parâmetro & Equipe & Visitantes\\
+\midrule
+Nome da rede (SSID) & \texttt{NEXUS-Equipe} & \texttt{NEXUS-Visitantes}\\
+Canal em 2,4 GHz & 11 & 1\\
+Limite de clientes conectados & 5 & 10\\
+Endereço para abrir o painel & \url{http://192.168.4.1/} & \url{http://192.168.4.1/}\\
+Tempo padrão por conexão & 15 minutos; configurável & 15 minutos; configurável\\
+Finalidade da interface & Diagnóstico e comandos para clientes do AP & Telemetria pública, somente leitura\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Ambos usam WPA2-PSK e fornecem endereços por DHCP na própria rede. A UART1 de cada satélite liga-se exclusivamente ao mestre; sua pinagem e velocidade pertencem ao enlace interno, não à configuração do AP. No Visitantes, o firmware solicita largura de 20 MHz e potência máxima de 16 dBm. No Equipe, esses dois parâmetros seguem a configuração do driver; a potência aplicada deve ser lida no diagnóstico do dispositivo.
+
+\emph{SSID} é o nome anunciado pela rede. Os canais 1 e 11 afastam os APs na faixa de 2,4 GHz e podem reduzir sobreposição; essa justificativa é uma inferência de engenharia, não uma medição de interferência no veículo. O limite maior de clientes do Visitantes atende ao público; o Equipe reserva sua interface de operação para um grupo menor. Os limites são de associações simultâneas, não de requisições HTTP por segundo.
+
+O mesmo IP \texttt{192.168.4.1} nos dois APs não cria conflito enquanto forem redes distintas. O telefone ou computador recebe um endereço por \emph{Dynamic Host Configuration Protocol} (DHCP) ao associar-se a um AP e envia pacotes ao ESP daquela rede. Um dispositivo conectado aos dois SSIDs por interfaces diferentes deve ter suas rotas verificadas; normalmente, conecte-se apenas ao SSID pretendido. O sistema operacional pode avisar que a rede local está sem Internet: mantenha a conexão para abrir o painel.
+
+\subsection{Portal cativo}
+O Equipe anuncia o endereço do portal pela opção 114 do DHCP quando o cliente a suporta. Ele não mantém um DNS local para interceptar qualquer nome digitado. O Visitantes oferece um DNS local opcional na porta 53, que responde com o IP do AP para favorecer a detecção de portal cativo; se a tarefa DNS falhar, o IP direto ainda funciona. Requisições HTTP desconhecidas no Visitantes são redirecionadas ao painel. A abertura automática depende do sistema operacional e da política do telefone. Em ambos os casos a entrada confiável é \url{http://192.168.4.1/}.
+
+\subsection{Tempo de sessão dos clientes}
+Cada AP acompanha o tempo de associação. O limite padrão é 15 minutos, salvo em \emph{Non-Volatile Storage} (NVS) no espaço \texttt{wifi\_sessao}, chave \texttt{limite\_min}. NVS é a área persistente da flash separada do programa. O valor 0 desativa o limite; o máximo aceito é 1440 minutos. Ao vencer o prazo, o AP desconecta a estação. Isso libera uma vaga, mas não revoga a senha, não altera a concessão DHCP e não impede reconexão com a PSK salva. Para retirar o acesso, é preciso alterar a senha Wi-Fi nos firmwares e substituir os QR divulgados.
+
+\section{Rede externa do Mestre}\label{sec:wifi-mestre}
+O Mestre usa Wi-Fi em modo STA para alcançar um roteador externo. O rádio fica normalmente desligado e é acionado para operações que exigem rede, como OTA ou sincronização com o Google. Isso reduz consumo e atividade de rádio durante a instrumentação. Estar conectado ao AP Equipe não fornece Internet ao Mestre: o caminho de controle é UART e os satélites não são roteadores.
+
+O firmware prevê uma rede principal de compilação, até cinco secundárias salvas em NVS e uma rede temporária preparada para teste. SSID e senha da principal ficam em cabeçalho privado \path{firmware/mestre-s3/include/nucleo/segredos_ota.h}. As secundárias e a política persistem no namespace \texttt{wifi\_perfis}. A principal também pode ser registrada em NVS para sobreviver a uma OTA cujo binário não contenha o mesmo cabeçalho privado. Apagar a NVS ou trocar a placa exige inventariar previamente os perfis.
+
+\begin{table}[htbp]\centering\small
+\begin{tabularx}{\textwidth}{>{\bfseries}p{5.5cm}X}
+\toprule
+Parâmetro padrão & Valor e função\\
+\midrule
+Canal preferencial & 0: procurar qualquer canal; o canal efetivo é imposto pelo roteador na associação\\
+Largura e potência solicitadas & 20 MHz; máximo de 16 dBm, sujeito ao rádio e à região\\
+Tentativas por rede & 3; faixa configurável de 1 a 10\\
+Tempo por tentativa & 8000 ms; faixa de 2000 a 30000 ms\\
+Intervalo entre tentativas & 750 ms; faixa de 100 a 5000 ms\\
+Prazo máximo da sessão & 30000 ms; faixa de 5000 a 180000 ms, sempre ao menos igual ao tempo de uma tentativa\\
+Redes secundárias & até 5 perfis persistentes\\
+\bottomrule
+\end{tabularx}
+\caption{Política padrão em \path{configuracao_wifi.h}. O prazo de sessão do Mestre é distinto dos 15 minutos por cliente dos APs.}\label{tab:wifi-mestre}
+\end{table}
+
+O prazo máximo impede que uma rede ausente paralise indefinidamente a operação. Antes de associar-se, o Mestre varre as redes visíveis e tenta primeiro os perfis conhecidos que aparecem no resultado, respeitando a política de autorização das secundárias. Se a varredura falhar, volta à ordem normal dos perfis; se funcionar e não encontrar nenhuma rede elegível, registra esse motivo sem gastar todas as tentativas de associação. Uma rede oculta pode requerer investigação específica porque não aparece nessa seleção. Três tentativas curtas, separadas por 750 ms, acomodam falhas transitórias. A sessão pode acabar antes de esgotar todas as tentativas. O firmware serializa o rádio entre serviços; uma ação recebida no Equipe atravessa a UART e pode demorar enquanto o Mestre tenta associar-se.
+
+\subsection{Perfis, autorização e procedimento}\label{sec:perfis-wifi}
+\begin{enumerate}
+  \item Definir a principal no cabeçalho privado antes da compilação, ou conservar a principal persistida. A geração inicial pode usar as variáveis \texttt{OTA\_WIFI\_SSID} e \texttt{OTA\_WIFI\_SENHA} com \path{ferramentas/gerar_segredos_ota.py}. O gerador reescreve o cabeçalho e inclui apenas as duas macros Wi-Fi; se já houver URL/token Google ou senha de permissão, editar manualmente para preservá-los.
+  \item No painel Equipe, preparar temporariamente SSID e senha de uma rede externa e testar a conexão. Deixar a senha vazia para uma rede aberta; nesse caso, confirmar também que o roteador anuncia a rede sem proteção. A rede preparada ainda não ocupa uma das cinco posições persistentes.
+  \item Salvar como secundária ou, com a senha de permissão do Mestre, promover a preparada a principal. Também é possível selecionar uma rede salva por índice de 1 a 5, excluir um perfil e restaurar a principal de compilação.
+  \item Ajustar, se necessário, busca automática e limites de tentativas, duração e sessão. A ativação automática de secundárias e mudanças protegidas exigem a senha de permissão do Mestre.
+  \item Depois de \emph{Conectar}, acompanhar o estado do Wi-Fi até ver associação ou erro. Depois de \emph{Salvar}, consultar a lista de redes salvas e conferir SSID e posição do perfil; conexão bem-sucedida não significa gravação persistente. O aceite do comando tampouco confirma a conclusão.
+\end{enumerate}
+Em uma rede usada só na manutenção, a autorização manual reduz associações inesperadas. O modo automático pode procurar alternativas conhecidas, mas a ordem dos perfis deve ser documentada. Alterar a principal sem testar a preparada pode deixar OTA e Google sem rota. Conectar ao roteador não prova que DNS, Internet, servidor OTA ou credenciais Google estejam funcionais.
+
+\section{Acesso local e permissão do Mestre}\label{sec:acesso-web}
+O AP Equipe exige a senha WPA2 para associação. A API HTTP local não pede uma segunda chave administrativa para consultas ou ações. Assim, um cliente admitido na rede técnica pode enviar pedidos ao satélite, inclusive comandos que este encaminha ao Mestre. O painel Visitantes continua separado e sem rotas de comando. Não publicar o QR ou a senha do AP Equipe como material público; o HTTP local não usa TLS.
+
+Determinadas mudanças de perfis e política Wi-Fi conservam uma senha de permissão verificada pelo \emph{Mestre}. Essa proteção é específica dessas operações e não protege os demais comandos do painel. Para senhas de redes externas, o campo pode ficar vazio somente quando a rede for aberta. No terminal do Mestre, a entrada de senha Wi-Fi não ecoa caracteres; a senha de permissão de comandos protegidos usa máscara. Não registrar credenciais em capturas ou logs compartilhados.
+
+\begin{figure}[htbp]\centering
+\begin{tikzpicture}[node distance=11mm, >={Latex},
+  etapa/.style={draw=nexus,rounded corners,fill=pale,align=center,text width=3.15cm,font=\small,minimum height=13mm}]
+\node[etapa] (wifi) {1. Associação ao AP\\PSK WPA2};
+\node[etapa,right=of wifi] (uart) {2. Pedido HTTP\\encaminhado pela UART};
+\node[etapa,right=of uart] (mestre) {3. Se exigida,\\permissão do Mestre};
+\draw[->,thick] (wifi)--(uart);
+\draw[->,thick] (uart)--(mestre);
+\end{tikzpicture}
+\caption{Caminho de uma ação técnica. A permissão adicional só se aplica às mudanças protegidas de Wi-Fi; a resposta HTTP não confirma o término da ação.}\label{fig:camadas-acesso}
+\end{figure}
+
+\section{Painel da Equipe}\label{sec:painel-equipe}
+O servidor entrega a mesma aplicação web em \texttt{/}, \texttt{/painel}, \texttt{/diagnostico} e \texttt{/mestre}. As sete páginas têm funções diferentes:
+\begin{description}
+  \item[Telemetria:] velocidade, movimento, energia quando disponível, sessão atual, qualidade do enlace e clientes dos APs. É a visão rápida do estado e da idade do dado.
+  \item[Comandos:] operações de Google, simulador, rede externa do Mestre, clientes do AP e OTA. Algumas mudanças de Wi-Fi exigem a permissão do Mestre.
+  \item[Controle:] histórico recente e campos de marcha solicitada, limites e parada. A página apresenta dados e solicitações; não fecha um laço de atuação física do veículo.
+  \item[ESP Mestre:] versão, saúde, memória, temperatura, tarefas, sensores, Wi-Fi, UART, sincronização, OTA e configuração conforme as respostas recebidas pela UART.
+  \item[ESP Equipe:] diagnóstico local: versão, Wi-Fi, memória, CPU, tarefas, temperatura, UART, comandos e OTA.
+  \item[ESP Visitantes:] estado do satélite público, versão e enlace alcançável pelo Mestre/Equipe. Não é um caminho de comandos para o público.
+  \item[Sobre:] créditos, identidade visual e contexto do sistema.
+\end{description}
+
+Na página \emph{Telemetria} da Equipe, as leituras do INA228 ficam dentro do cartão \emph{Operação e sensores}, junto das demais informações de aquisição, sem um cartão INA separado. O cartão \emph{Bateria e consumo} mostra pelo menos duas casas decimais nos valores disponíveis e três na tensão; a formatação não aumenta a resolução da medição. O diagnóstico do ESP Mestre também permite verificar presença, validade e erros do sensor. Tensão, corrente, potência, queda no shunt, temperatura e acumuladores só devem ser interpretados com a origem e o estado de leitura correspondentes; ausência do módulo ou sensor pausado não equivale a valor zero.
+
+Os arquivos de origem são \path{firmware/equipe-s3/web/index.html}, \path{style.css}, \path{layout.css} e \path{app.js}. O script \path{web/gerar_painel.py} os embute em \path{src/servicos/painel_web.c} antes da compilação. Editar as fontes e regenerar o C; uma mudança direta no arquivo gerado se perderá. O logotipo comum vem de \path{firmware/compartilhado/web/logo_carro_eletrico.png}.
+
+O navegador busca telemetria a 1, 2, 3 ou 4 Hz, sendo 4 Hz o padrão (uma tentativa a cada 250 ms). Estados de OTA, Google e simulador são atualizados em torno de 2 s, independentemente da cadência do gráfico. Latência HTTP, contenda do rádio e resposta lenta podem reduzir a taxa efetiva. Histórico e exportação CSV são montados no navegador somente enquanto a página permanece aberta; recarregar ou fechar a aba encerra esse histórico local. Isso não equivale a armazenamento de bordo de longo prazo.
+
+Ler cada campo junto de validade, idade e origem. Ausência de amostra não deve ser convertida em zero. O Mestre já lê o INA228 por I\textsuperscript{2}C para obter tensão do barramento, queda no shunt, corrente, potência, temperatura interna do circuito e acumuladores de energia/carga, quando o módulo responde e a medição é válida. O shunt configurado é de 1\,m$\Omega$ e a corrente máxima prevista é 75\,A; conferir montagem, polaridade e calibração antes de tratar valores como ensaio validado. Os sinais físicos de acelerador e freio ainda não são adquiridos. O simulador gera dados marcados como simulados; uma grandeza que só existe nele não deve ser apresentada como medição real.
+
+No gráfico do sistema elétrico, as séries principais usam as escalas laterais esquerda e direita. Uma terceira série pode ser ligada opcionalmente e começa desligada para preservar a leitura. Sua escala própria aparece na legenda, e passar o mouse ou tocar o traçado revela o valor da amostra. Potência, corrente, tensão e estado de carga (SoC) são escolhas quando há dados válidos; autonomia restante é uma estimativa disponível apenas na simulação. Queda no shunt, temperatura do INA228, energia e carga acumuladas aparecem somente para medições reais válidas. Misturar grandezas no mesmo gráfico permite comparar tendências, mas cada unidade e escala devem ser lidas separadamente.
+
+\subsection{API HTTP do Equipe}\label{sec:api-equipe}
+\begin{table}[htbp]\centering\small
+\begin{tabularx}{\textwidth}{>{\ttfamily}p{4.5cm}p{1.4cm}X}
+\toprule
+\normalfont\bfseries Rota & \bfseries Método & \bfseries Finalidade\\
+\midrule
+/api/telemetria & GET & Última amostra, sequência, idade e métricas UART.\\
+/api/diagnostico & GET & Versão, rádio, memória, CPU/tarefas, temperatura, UART, comandos e OTA locais.\\
+/api/wifi/clientes & GET & Estações associadas, MAC, tempo de conexão e limite de sessão.\\
+/api/wifi/limite & POST & Alterar limite dos clientes do AP.\\
+/api/wifi/desconectar & POST & Desconectar cliente do AP.\\
+/api/mestre?consulta=... & GET & Consultar o Mestre pela UART e devolver JSON.\\
+/api/mestre?consulta=... & POST & Encaminhar ação ao Mestre; a conclusão é assíncrona.\\
+\bottomrule
+\end{tabularx}
+\caption{Rotas principais implementadas. Não há autenticação HTTP adicional; certas ações de Wi-Fi têm permissão adicional no Mestre.}\label{tab:apis-web}
+\end{table}
+
+As consultas GET do encaminhamento incluem \texttt{ping}, \texttt{versao}, \texttt{saude}, \texttt{telemetria}, \texttt{uart}, \texttt{ota}, \texttt{sincronizacao}, \texttt{wifi}, \texttt{diagnostico\_mestre}, \texttt{configuracao}, \texttt{simulador}, \texttt{rede\_wifi\_salva} com índice de 1 a 5, além de \texttt{ping} e \texttt{versao} para cada satélite. Uma consulta inválida ou método inadequado recebe HTTP 400/405, conforme o caso.
+
+As ações POST abrangem \texttt{verificar\_ota}, \texttt{autorizar\_mestre}, \texttt{autorizar\_equipe}, \texttt{autorizar\_visitantes}, \texttt{autorizar\_todos}, \texttt{cancelar\_ota}, \texttt{resumo\_terminal}, \texttt{alternar\_relatorios}, \texttt{zerar\_percurso}, \texttt{sincronizar\_google}, \texttt{intervalo\_relatorio}, \texttt{intervalo\_ota}, \texttt{intervalo\_telemetria\_ota}, \texttt{simulador\_telemetria}, \texttt{wifi\_preparar}, \texttt{wifi\_conectar\_preparada}, \texttt{wifi\_salvar\_preparada}, \texttt{wifi\_conectar\_salva}, \texttt{wifi\_excluir\_salva}, \texttt{wifi\_automatico}, \texttt{wifi\_alterar\_principal}, \texttt{wifi\_restaurar\_principal} e \texttt{wifi\_politica}. A carga exata e os limites devem ser conferidos no despachante e em \path{documentacao/satelites.md} antes de automatizar chamadas.
+
+Para \texttt{wifi\_preparar}, o corpo informa SSID e senha em linhas separadas. Ações sobre perfil salvo usam índice de 1 a 5. Alternâncias, como simulador e busca automática, usam 0/1; ações protegidas acrescentam a permissão do Mestre. \texttt{wifi\_politica} transmite quantidade de tentativas, duração por tentativa, intervalo, sessão máxima e permissão, nessa ordem. O formulário do painel reduz erros de formato. A resposta \texttt{ok:true} de um POST significa que o pedido foi aceito, não que rede, sincronização ou OTA terminou. Consultar \texttt{wifi}, \texttt{sincronizacao} ou \texttt{ota} depois da ação. Uma conexão Wi-Fi pode levar aproximadamente 185 s em cenário de esgotamento de tentativas.
+
+O servidor admite no máximo duas consultas simultâneas ao Mestre e uma ação. Excesso pode receber HTTP 503 (\emph{Service Unavailable}); aguardar e repetir uma consulta, sem reenviar cegamente uma ação talvez já aceita. Erros de UART, idade da amostra e falha de conexão externa precisam ser lidos nos diagnósticos próprios, não deduzidos apenas de um cartão vazio.
+
+\section{Painel Visitantes e validade da amostra}\label{sec:painel-visitantes}
+O Visitantes oferece somente \texttt{GET /} e \texttt{GET /api/telemetria}. Não há página pública de comandos, diagnóstico detalhado ou gerenciamento da rede externa. O público recebe velocidade, movimento, gráficos e energia estimada apenas quando os campos necessários existem. O velocímetro usa escala visual fixa de 0 a 35 km/h; essa escala não define limite do veículo. O histórico gráfico começa quando a aba é aberta.
+
+O navegador consulta a API a cada 500 ms (2 Hz); o Mestre publica telemetria aos satélites a 4 Hz. Nem toda publicação vira um ponto no gráfico. O JSON inclui \texttt{valid}, idade, sequência e marca de simulação. Um campo indisponível é \texttt{null}, não zero. Após mais de 2,5 s sem amostra nova, a página insere lacuna no gráfico para não inventar continuidade durante perda de UART ou parada do emissor. Distinguir último valor recebido, valor válido e valor atual ao interpretar uma captura.
+
+\section{Manutenção e diagnóstico dos painéis}\label{sec:qr-paineis}
+Os PNG/SVG em \path{artefatos/qr_visitantes} incluem um QR de associação Wi-Fi e outro com a URL do painel. O primeiro contém a senha do AP e deve ser tratado como material de acesso, inclusive em fotos e impressões. Se SSID, senha ou IP mudar, executar \path{ferramentas/gerar_qr_visitantes.py}, validar com um telefone e substituir impressos antigos. Regenerar um QR não altera o ESP: também é preciso compilar, gravar e verificar o firmware.
+
+Para revisar a interface no computador, há \path{ferramentas/visualizar_painel_equipe.py} (porta 8766 com \texttt{--rede}) e \path{ferramentas/visualizar_painel_visitantes.py} (porta 8765). Eles usam APIs locais simuladas. A prévia testa layout e navegação, mas não valida UART, temporização real, alcance Wi-Fi nem sensores. Depois de editar as fontes web, executar o gerador, compilar, gravar e testar pelo AP físico. O serial confirma SSID/canal, IP, falhas do DNS, potência efetiva e início do HTTP.
+
+\subsection{Diagnóstico por sintoma}\label{sec:diagnostico-wifi}
+\begin{table}[htbp]\centering\small
+\begin{tabularx}{\textwidth}{>{\bfseries}p{4.4cm}X}
+\toprule
+Sintoma & Sequência de verificação\\
+\midrule
+SSID não aparece & Confirmar alimentação e serial; conferir firmware do satélite correto, antena, distância, canal e falha do driver Wi-Fi.\\
+Conecta, mas o portal não abre & Permanecer no AP apesar do aviso de ausência de Internet; abrir \url{http://192.168.4.1/}; conferir DHCP e rota da interface ativa.\\
+Rede externa sem senha falha & Confirmar que a rede é realmente aberta e deixar a senha vazia; consultar o estado Wi-Fi do Mestre e a mensagem de erro.\\
+Equipe não abre após OTA & Verificar serial, inicialização do AP/HTTP, autoexame e possível rollback; depois IP do AP.\\
+HTTP 503 ou ação sem resultado & Reduzir consultas concorrentes, consultar estado após POST e verificar UART. Evitar repetir ação apenas porque a página demorou.\\
+Gráfico parado ou com lacuna & Conferir idade, sequência e validade; verificar UART e publicação do Mestre. No Visitantes, 2,5 s sem amostra gera lacuna intencional.\\
+OTA/Google não conectam & Consultar perfil e política do Mestre, autorização, associação, prazo, DNS/Internet e credenciais do serviço. O AP local não fornece essa rota.\\
+Cliente cai após 15 min & Conferir \texttt{limite\_min}; é a política padrão do AP e o cliente pode se associar de novo.\\
+\bottomrule
+\end{tabularx}
+\caption{Primeiros passos. A interpretação final exige registros dos ESPs e confirmação no hardware montado.}\label{tab:diagnostico-wifi}
+\end{table}
+
+\paragraph{Limites desta configuração.}
+Este capítulo descreve os valores e rotas identificados no firmware e na documentação do repositório. A escolha dos canais como forma de reduzir interferência é uma inferência técnica a validar no local. A abertura automática do portal, potência efetiva, comportamento com muitos telefones, alcance e conclusão de OTA/Google em uma rede específica exigem ensaio no hardware montado. A integração de código do INA228 não substitui conferência da instalação elétrica e calibração com instrumento de referência.

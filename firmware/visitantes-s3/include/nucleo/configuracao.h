@@ -6,7 +6,7 @@
 #include "driver/uart.h"
 #include "configuracao_enlace_uart.h"
 
-#define WIFI_SSID "UFSM-Carro-Visitantes"
+#define WIFI_SSID "NEXUS-Visitantes"
 #define WIFI_SENHA "telemetria2026"
 #ifndef WIFI_CANAL
 #define WIFI_CANAL 1

@@ -15,17 +15,17 @@ multibyte dos quadros compactados usam little-endian, ordem nativa dos ESP32-S3.
 
 | Família | Sentido usual | Integridade | Uso |
 |---|---|---|---|
-| Telemetria v4 | Mestre → satélites | CRC-16/CCITT-FALSE | Retrato periódico do veículo. |
+| Telemetria v5 | Mestre → satélites | CRC-16/CCITT-FALSE | Retrato periódico do veículo e detalhes do INA228. |
 | ACK de telemetria | Satélites → mestre | CRC-16/CCITT-FALSE | Sequência, versão e saúde do enlace. |
 | Comandos v1 | Bidirecional | CRC-32 | Consultas, ações e respostas. |
 | OTA de satélite v1 | Bidirecional | CRC-32 e SHA-256 final | Início, blocos, finalização e cancelamento. |
 
 ## Telemetria e ACK
 
-`protocolo_telemetria.h` define o quadro v4 de 105 bytes, com versão, tipo,
+`protocolo_telemetria.h` define o quadro v5 de 122 bytes, com versão, tipo,
 tamanho da carga e CRC-16/CCITT-FALSE. Os três firmwares devem usar a mesma
 revisão deste arquivo.
-Além dos valores brutos, a versão 4 transporta aceleração em g, giroscópio em
+Além dos valores brutos, a versão 5 transporta aceleração em g, giroscópio em
 graus por segundo, aceleração longitudinal filtrada, temperatura e o estado de
 calibração/eixo do MPU6050.
 Qualquer alteração no formato deve ser aplicada primeiro neste arquivo.
@@ -38,8 +38,24 @@ os bits 0 a 6 carregam a marcha. As escalas fazem parte dos nomes dos campos:
 `*_centesimos_kmh`, `*_milesimos_ms2`, `*_decimos_percentual`, `*_mv`,
 `*_centesimos_a`, `*_micrograus`, `*_cm`, `*_milesimos_g` e
 `*_centesimos_graus_s`. A estrutura `pacote_telemetria_t` é a referência para
-ordem e tipos. Um campo no protocolo pode não ter sensor no modo real atual;
-zero não comprova medição física.
+ordem e tipos. O bit 7 de `estado_mpu`, antes livre, indica que tensão do
+barramento, corrente e potência contêm uma medição elétrica válida do INA228
+ou dados simulados; os outros bits continuam descrevendo o MPU6050. Sem esse
+bit, os três campos elétricos não são leitura
+física, mesmo que estejam zerados. Carga percentual e autonomia continuam
+indisponíveis no modo real.
+
+A versão 5 acrescenta queda de tensão no shunt (µV), temperatura do chip
+(centésimos de °C), energia acumulada (mWh), carga acumulada com sinal (mAh),
+diagnóstico bruto e `estado_ina`. Neste último, bit 0 marca INA presente, bit 1
+marca energia válida e bit 2 marca carga válida. Os acumuladores começam no
+reset do sensor e podem ficar indisponíveis por transbordamento. Esses campos
+são zerados quando a leitura física falha ou a aquisição é pausada; em
+simulação, só os campos elétricos gerais são simulados.
+
+Atualize os dois satélites junto com o mestre ao instalar esta versão: firmwares
+anteriores não interpretam o novo tamanho/versão do quadro. Uma mistura de
+versões interrompe a recepção de telemetria.
 
 Cada satélite responde a um quadro válido com uma confirmação de 20 bytes. Ela
 repete a sequência e o tempo do mestre para permitir a medição do tempo de ida

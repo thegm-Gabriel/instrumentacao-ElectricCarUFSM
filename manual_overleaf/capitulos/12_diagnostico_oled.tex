@@ -1,0 +1,49 @@
+\chapter{Diagnóstico, supervisão e apresentação local}\label{cap:diagnostico}
+\section{Diagnóstico e causas de falha}
+Um valor aparentemente plausível pode estar antigo, vir de um sensor sem calibração ou sobreviver na tela após a perda de um cabo. Por isso, o mestre acompanha a origem e a idade dos dados, erros de drivers, respostas UART, memória, tarefas e falhas de armazenamento. O diagnóstico junta fatos coletados pelos módulos e publica estado \emph{saudável}, \emph{atenção}, \emph{falha} ou \emph{recuperando}. A interface web, o terminal, os LEDs e a OLED leem esse retrato em vez de consultar drivers diretamente. Contadores históricos permanecem úteis mesmo quando uma causa ativa desaparece.
+
+\subsection{Falhas que o mestre identifica}
+O ciclo de saúde é atualizado a cada segundo. Os serviços de MPU, encoders e INA228 informam seus resultados; três erros consecutivos de um serviço de sensor abrem uma causa de atenção. O gerenciador I\textsuperscript{2}C conta transações bem-sucedidas, falhas e endereços ausentes. Uma rajada de três erros em aproximadamente 15\,s mantém aviso I\textsuperscript{2}C por dez segundos. UART mantém erros de transmissão e recepção e descartes; rajada de três erros ou novo descarte produz aviso por cinco segundos. Falha OTA recente aparece por dez segundos. Os contadores históricos permanecem disponíveis após a causa ativa desaparecer.
+
+Uma confirmação de satélite é considerada recente quando sua idade não supera três vezes o intervalo atual de telemetria mais 500\,ms. Depois de ao menos dez pacotes gerados e três ciclos de diagnóstico sem resposta, surge a causa Equipe ou Visitantes sem resposta. Isso evita alarme durante a primeira partida e adapta o prazo ao intervalo mais lento de OTA. RTT atual, idade da última confirmação, perdas, duplicatas e versões ajudam a diferenciar satélite desligado, fio interrompido, parser incompatível e congestionamento.
+
+O mestre mede sinal da rede externa apenas quando conectado. RSSI abaixo de --85\,dBm por dez amostras gera aviso; acima de --80\,dBm por cinco amostras limpa o aviso. A faixa intermediária produz histerese para evitar alternância perto do limiar. RSSI é potência recebida aproximada, não taxa de dados nem prova de acesso à Internet. A telemetria UART independe dessa conexão.
+
+\begin{table}[htbp]\centering\small
+\caption{Causas de saúde e observações relacionadas}\label{tab:causas-saude}
+\begin{tabularx}{\textwidth}{@{}l X X@{}}\toprule
+Causa & Detecção no código & Verificação útil\\\midrule
+Sensor & Erros consecutivos de MPU ou encoder. & Alimentação, endereço, cabo, eixo, contador e último erro.\\
+I\textsuperscript{2}C & Rajada de erros no barramento. & Pull-ups, nível alto, cabos, endereços e forma de onda.\\
+UART & Erros recentes ou novo descarte. & TX/RX/GND, baud, versão, CRC e fila.\\
+Satélite sem resposta & ACK ausente após início do fluxo. & Energia do satélite, idade, RTT e UART exclusiva.\\
+Supervisão & Tarefa atrasada ou em recuperação. & Fase, último pulso, pilha, fila e serviço bloqueante.\\
+Memória/pilha & Limiar de RAM, PSRAM, maior bloco ou pilha. & Uso sob TLS/OTA/SD e maior alocação exigida.\\
+Wi-Fi fraco & RSSI persistentemente baixo na sessão. & Distância e obstáculos; manter registro do canal.\\
+OTA recente & Falha da última operação. & Alvo, etapa, erro, versão que voltou e manifesto.\\
+Persistência & Falha ao guardar odômetro/estado. & NVS, cartão e contadores; validar a classificação ativa em bancada.\\\bottomrule
+\end{tabularx}\end{table}
+
+\subsection{RAM, maior bloco livre e margem de pilha}
+O mestre mede RAM interna e PSRAM livres, além do maior bloco contíguo alocável. Uma soma alta de bytes livres não garante que exista um bloco grande para TLS, buffer ou driver. A atenção por RAM interna exige 15 amostras com menos de 24\,KiB livres ou maior bloco abaixo de 8\,KiB; falha exige três amostras abaixo de 16\,KiB ou 4\,KiB. Abaixo de 8\,KiB livres ou 2\,KiB de bloco, a falha é imediata. Para PSRAM presente, os limiares correspondentes são atenção abaixo de 256\,KiB livres ou bloco de 32\,KiB; falha abaixo de 128\,KiB ou bloco de 16\,KiB; emergência abaixo de 64\,KiB ou bloco de 8\,KiB. Cinco amostras fora da faixa limpam o alerta. Essa persistência evita alarmes causados por uso temporário legítimo durante HTTPS.
+
+A margem mínima de pilha de tarefa do aplicativo abaixo de 256 bytes é causa crítica. O sistema coleta uma tabela de tarefas a cada cinco segundos, com prioridade, afinidade, estado, uso de CPU por janela e menor margem observada. A primeira janela de CPU não possui base para comparação. Uma CPU de 100\% representa um núcleo; afinidade não informa em qual núcleo a tarefa executou naquele instante. Tarefas do SDK aparecem para diagnóstico, mas a classificação de pilha crítica usa a política das tarefas do projeto. As pilhas do \texttt{main} e da tarefa de eventos do ESP-IDF foram ajustadas na configuração para 6\,144 e 4\,096 bytes após margens pequenas observadas em bancada; alterações futuras devem se apoiar em novas medições.
+
+\subsection{Supervisão e recuperação}
+Serviços alimentam pulsos de progresso e informam fase e prazo. Uma tarefa de alta prioridade detecta atraso e enfileira recuperação; uma tarefa separada executa ações que podem bloquear. Cada UART tem recuperação independente de filas, buffers, pinos e velocidade. Para telemetria atrasada, o supervisor antecipa o próximo ciclo por notificação, sem apagar à força uma tarefa que pode estar usando um driver. SD, aquisição, upload e OTA também têm fases observáveis; a espera ociosa usa prazo zero. O objetivo é tornar travamentos localizáveis e preservar os módulos que continuam funcionais.
+
+\section{O que a OLED mostra}
+A SSD1306 de 128$\times$64 pixels usa o mesmo I\textsuperscript{2}C do MPU. A tela reserva até oito linhas curtas; quando há progresso, a última faixa vira barra gráfica. Na partida, apresenta etapa e percentual (NVS, supervisão, sensores/enlaces, cartão, telemetria, rede, OTA, terminal e diagnóstico), inclusive aviso de etapa degradada. Depois, em operação saudável, alterna aproximadamente a cada seis segundos entre três páginas: estado/tempo ativo/RAM/PSRAM/versão; telemetria (velocidade, bateria, tensão, potência, marcha, sequência e origem real ou simulada); e comunicação (resposta Equipe/Visitantes, RTT e Wi-Fi).
+
+\begin{nota}{Limite importante da página de telemetria local}
+O estado de carga da bateria não decorre automaticamente da leitura do INA228. A tensão e a potência vêm do sensor apenas quando a medição é válida; módulo ausente, erro de barramento ou simulador mudam a origem e a disponibilidade. A OLED tem pouco espaço para sinalizar validade individual e pode exibir um zero de campo não medido: \textbf{zero isolado não comprova bateria vazia, tensão zero ou potência zero}. Conferir origem e validade no painel técnico ou no terminal antes de usar a tela para uma decisão operacional.
+\end{nota}
+
+Durante uma sessão Wi-Fi, a OLED mostra rede ativa, RSSI, canal, tentativas, prazos e último erro; quando o rádio está parado, a página normal informa repouso. Na verificação OTA, mostra fase de conexão e consulta HTTPS, rede e versão. Com atualização disponível, lista versões de mestre, equipe e visitantes e a necessidade de autorização. Na transferência, mostra alvo, versão, bytes/porcentagem, taxa e tempo restante; durante upload ao Google, arquivo atual, progresso, velocidade, prazo e confirmação. Após upload, apresenta resumo por cerca de oito segundos. Avisos alternam causa a cada três segundos quando há várias e recomendam consultar o terminal.
+
+Uma fila fixa guarda mensagens curtas de sucesso, atenção ou erro. Eventos importantes reservam a tela; mensagens adiadas são mostradas depois, sem alocação dinâmica por aviso. Atualização disponível e falhas reaparecem em janelas, mas devolvem a tela às páginas normais entre lembretes. A tarefa só envia novo quadro ao SSD1306 quando o conteúdo muda; falha de atualização é contada e tentada novamente. Ausência da OLED não interrompe aquisição nem UART.
+
+\section{LEDs, buzzer, logs e onde investigar}
+Quatro LEDs e um buzzer passivo dão sinais mesmo sem navegador. Verde contínuo representa saúde; amarelo periódico, atenção; vermelho quase contínuo com breve pausa, falha crítica. Azul indica partida, Wi-Fi ou OTA por combinações distintas. O serviço escolhe prioridade entre saúde, operação, Google e atualização; a máquina de tons avança a cada 50\,ms sem travar a aquisição. Sons marcam transições, como sistema pronto, oferta OTA, conclusão ou erro. Wi-Fi de rotina e verificações periódicas silenciosas evitam alarmes repetitivos.
+
+O terminal serial traz o detalhe que não cabe na OLED. O menu de sensores permite pausar todas as leituras ou fontes individuais para depuração, inclusive o INA228; consultar o estado de pausa antes de atribuir ausência de dado a uma falha elétrica. O menu de logs ajusta o nível global e por serviço, incluindo a opção de silenciar avisos no terminal e de ligar ou desligar cores ANSI. Essas preferências de apresentação não apagam os contadores de falha nem substituem os registros do SD. O painel técnico consulta retratos compactos de CPU, memória, temperatura, tarefas e causas do mestre, além da saúde local da Equipe e da resposta de Visitantes. O SD guarda logs estruturados e uma janela de histórico pré-falha em PSRAM quando disponível; sem cartão, essa janela pode permanecer apenas em memória volátil. Em diagnóstico, anotar hora relativa ao boot, versão, estado dos três enlaces, últimos erros, causas ativas e arquivos brutos. Uma causa que desapareceu pode continuar no contador histórico, e um contador crescente não significa necessariamente falha presente.

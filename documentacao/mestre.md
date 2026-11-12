@@ -6,7 +6,7 @@ Este guia descreve o comportamento implementado em `firmware/mestre-s3` no estad
 
 ## Escopo e fluxo de dados
 
-O alvo é o ESP32-S3-WROOM-1-N16R8, com 16 MiB de flash e 8 MiB de PSRAM Octal. O mestre lê tensão por ADC, movimento pelo MPU6050 e deslocamento de dois encoders. A tarefa `telemetria` reúne as leituras em `DadosTelemetriaVeiculo`, publica os quadros para os dois satélites, entrega uma cópia aos relatórios e enfileira amostras para o histórico em cartão SD. A fonte padrão é definida no firmware e pode ser trocada temporariamente pelo painel da equipe. Consulte [a composição em `main.cpp`](../firmware/mestre-s3/src/main.cpp), [o modelo compartilhado](../firmware/compartilhado/telemetria/dados_telemetria_veiculo.h) e [a configuração da placa](../firmware/mestre-s3/include/nucleo/configuracao_placa.h).
+O alvo é o ESP32-S3-WROOM-1-N16R8, com 16 MiB de flash e 8 MiB de PSRAM Octal. O mestre lê a contagem bruta do ADC, tensão e corrente pelo INA228, movimento pelo MPU6050 e deslocamento de dois encoders. A tarefa `telemetria` reúne as leituras em `DadosTelemetriaVeiculo`, publica os quadros para os dois satélites, entrega uma cópia aos relatórios e enfileira amostras para o histórico em cartão SD. A fonte padrão é definida no firmware e pode ser trocada temporariamente pelo painel da equipe. Consulte [a composição em `main.cpp`](../firmware/mestre-s3/src/main.cpp), [o modelo compartilhado](../firmware/compartilhado/telemetria/dados_telemetria_veiculo.h) e [a configuração da placa](../firmware/mestre-s3/include/nucleo/configuracao_placa.h).
 
 | Camada | Responsabilidade | Localização |
 |---|---|---|
@@ -23,7 +23,7 @@ O alvo é o ESP32-S3-WROOM-1-N16R8, com 16 MiB de flash e 8 MiB de PSRAM Octal. 
 | Entrada | `main.cpp` | Inicialização, composição dos serviços e ciclo principal. |
 | Gerenciadores | `gerenciador_uart`, `gerenciador_i2c`, `gerenciador_contador_pulsos` | Drivers dos enlaces e barramentos de aquisição. |
 | Gerenciadores | `gerenciador_cartao_sd`, `gerenciador_wifi`, `gerenciador_ota`, `gerenciador_indicadores` | FAT/SPI, rádio, partição OTA local, LEDs e PWM. |
-| Dispositivos | `leitor_tensao`, `mpu6050`, `encoder_incremental`, `tela_ssd1306` | ADC bruto e regras específicas dos componentes físicos. |
+| Dispositivos | `leitor_tensao`, `ina228`, `mpu6050`, `encoder_incremental`, `tela_ssd1306` | ADC bruto e regras específicas dos componentes físicos. |
 | Aquisição | `servico_aceleracao`, `servico_odometro`, `servico_telemetria`, `servico_simulador_telemetria` | Filtragem do MPU, geometria das rodas, quadro ao vivo e fonte simulada. |
 | Enlaces | `servico_enlace_satelites`, `servico_comandos` | Recepção de ACK/respostas e execução de consultas ou ações. |
 | Armazenamento | `servico_registro_telemetria`, `servico_gravador_audio_treinamento` | CSV/logs/upload e WAV temporário para treinamento. |
@@ -44,7 +44,7 @@ Fonte canônica dos GPIOs: [`configuracao_placa.h`](../firmware/mestre-s3/includ
 | Leitura de tensão | ADC | 4 | A entrada deve respeitar o limite do ADC; o condicionamento externo é necessário para tensões maiores. |
 | Encoder esquerdo A/B | PCNT | 5 / 6 | Saídas NPN exigem pull-ups externos para **3,3 V**. |
 | Encoder direito A/B | PCNT | 7 / 21 | Mesma exigência de pull-ups. |
-| MPU6050 e SSD1306 SDA/SCL | I²C0 | 8 / 9 | 400 kHz; MPU em `0x68`, tela em `0x3C` ou `0x3D`. |
+| MPU6050, INA228 e SSD1306 SDA/SCL | I²C0 | 8 / 9 | 400 kHz; MPU em `0x68`, INA em `0x40` e tela em `0x3C` ou `0x3D`. |
 | LEDs verde/amarelo/vermelho/azul | GPIO | 10 / 11 / 12 / 13 | Ativos em nível alto, cada LED com resistor em série. |
 | Buzzer passivo | PWM/LEDC | 14 | Acionamento externo recomendado na pinagem geral. |
 | UART2 visitantes TX/RX | UART | 15 / 16 | Cruzar TX com RX do satélite. |
@@ -58,11 +58,19 @@ Os GPIOs 33 a 37 ficam reservados para a PSRAM Octal do módulo N16R8. O INMP441
 
 [`app_main`](../firmware/mestre-s3/src/main.cpp) verifica primeiro a flash de 16 MiB. Flash incompatível interrompe a partida; PSRAM ausente ou com tamanho inesperado gera aviso e os recursos opcionais tentam RAM interna. Inicializa sinalização e tela, depois NVS, supervisão, enlaces e aquisição, registro SD, tarefa de telemetria, Wi-Fi, OTA, terminal, relatórios e diagnóstico. A NVS não é apagada automaticamente quando precisa de manutenção, pois contém odômetro e perfis Wi-Fi.
 
-Falhas de NVS, inicialização do núcleo da aplicação, criação/supervisão da tarefa de telemetria ou confirmação da imagem OTA pendente provocam rejeição da imagem e reinício. Falhas isoladas de ADC, MPU6050, odômetro, SD, tela, LEDs, Wi-Fi, terminal, relatórios e diagnóstico permitem operação degradada com aviso. Sem cartão, a telemetria ao vivo continua e o registro é tentado novamente a cada 30 s. Uma imagem OTA pendente permanece em observação por 2 min depois de os serviços iniciarem; reinício antes da confirmação aciona o rollback do bootloader. Até 5 min após o primeiro boot, três reinícios por panic ou watchdog também solicitam rollback. A contagem usa memória RTC e se perde após corte total de energia. Fonte: [`main.cpp`](../firmware/mestre-s3/src/main.cpp) e [`guarda_rollback_ota.h`](../firmware/compartilhado/ota/guarda_rollback_ota.h).
+Falhas de NVS, inicialização do núcleo da aplicação, criação/supervisão da tarefa de telemetria ou confirmação da imagem OTA pendente provocam rejeição da imagem e reinício. Falhas isoladas de ADC, INA228, MPU6050, odômetro, SD, tela, LEDs, Wi-Fi, terminal, relatórios e diagnóstico permitem operação degradada com aviso. Sem cartão, a telemetria ao vivo continua e o registro é tentado novamente a cada 30 s. Uma imagem OTA pendente permanece em observação por 2 min depois de os serviços iniciarem; reinício antes da confirmação aciona o rollback do bootloader. Até 5 min após o primeiro boot, três reinícios por panic ou watchdog também solicitam rollback. A contagem usa memória RTC e se perde após corte total de energia. Fonte: [`main.cpp`](../firmware/mestre-s3/src/main.cpp) e [`guarda_rollback_ota.h`](../firmware/compartilhado/ota/guarda_rollback_ota.h).
 
 ## Aquisição e telemetria
 
-`USAR_TELEMETRIA_SIMULADA=false` seleciona os sensores reais na partida; `true` usa [`servico_simulador_telemetria.cpp`](../firmware/mestre-s3/src/servicos/servico_simulador_telemetria.cpp). O painel da equipe permite ativar ou desativar a simulação durante a sessão; ao reiniciar, retorna ao valor definido no código. A consulta remota informa fonte atual, padrão, dinâmica e amostras geradas. O ciclo normal é de 250 ms (4 Hz). ADC indisponível, leitura MPU inválida e falha no odômetro são contabilizados ou sinalizados; uma falha pontual não derruba o restante do ciclo. O MPU é amostrado por serviço próprio a 100 Hz, com calibração, compensação de gravidade, filtro e histerese para o sentido longitudinal. A montagem codificada assume X vertical e Y longitudinal positivo para frente. Fontes: [`main.cpp`](../firmware/mestre-s3/src/main.cpp), [`servico_aceleracao.cpp`](../firmware/mestre-s3/src/servicos/servico_aceleracao.cpp).
+`USAR_TELEMETRIA_SIMULADA=false` seleciona os sensores reais na partida; `true` usa [`servico_simulador_telemetria.cpp`](../firmware/mestre-s3/src/servicos/servico_simulador_telemetria.cpp). O painel da equipe permite ativar ou desativar a simulação durante a sessão; ao reiniciar, retorna ao valor definido no código. A consulta remota informa fonte atual, padrão, dinâmica e amostras geradas. O ciclo normal é de 250 ms (4 Hz). ADC indisponível, leitura INA228 ou MPU inválida e falha no odômetro são contabilizados ou sinalizados; uma falha pontual não derruba o restante do ciclo. O MPU é amostrado por serviço próprio a 100 Hz, com calibração, compensação de gravidade, filtro e histerese para o sentido longitudinal. A montagem codificada assume X vertical e Y longitudinal positivo para frente. Fontes: [`main.cpp`](../firmware/mestre-s3/src/main.cpp), [`servico_aceleracao.cpp`](../firmware/mestre-s3/src/servicos/servico_aceleracao.cpp).
+
+### Monitor elétrico INA228
+
+[`ina228.cpp`](../firmware/mestre-s3/src/dispositivos/ina228.cpp) usa o mesmo I²C do MPU6050 e da OLED, no endereço `0x40` (A0 e A1 em GND). Confere os identificadores da TI e do dispositivo, configura o shunt de **1 mΩ** e a corrente máxima esperada de **75 A**, grava `SHUNT_CAL` e verifica a leitura de volta. A faixa diferencial é de ±163,84 mV. O ADC interno mede continuamente barramento, shunt e temperatura, com conversões de 540 µs e média de 16; a tarefa de telemetria consulta os resultados a 4 Hz. O sentido positivo da corrente significa consumo; se a instalação do shunt inverter esse sinal, ajuste `SINAL_CORRENTE_INA228` na [configuração da placa](../firmware/mestre-s3/include/nucleo/configuracao_placa.h).
+
+O driver disponibiliza tensão de barramento, queda no shunt, corrente, temperatura do chip, potência, energia acumulada e carga acumulada. A potência enviada aos painéis é `VBUS × corrente`, com sinal, porque o registrador `POWER` do INA228 é **sem sinal**; corrente e potência negativas indicam regeneração. O acumulador de energia do chip também é sem sinal, enquanto o de carga é assinado. Ambos começam no reset do INA228, não persistem em desligamentos e deixam de ser considerados válidos após sinalização de transbordamento. A tela serial **Sensores → INA228** mostra também a idade da leitura e a potência sem sinal do registrador; a página de telemetria da equipe mostra queda no shunt, temperatura do chip, acumuladores e diagnóstico. Essas grandezas não são estimativas da carga restante da bateria nem da autonomia.
+
+Uma leitura elétrica só é publicada quando a identificação, calibração, conversão pronta e dados são válidos. O bit `TELEMETRIA_ELETRICA_VALIDA` do protocolo distingue **zero medido** de valor indisponível; as páginas da equipe e de visitantes mostram tensão, corrente e potência reais apenas com esse bit. Em falha, o mestre limpa as três grandezas daquele ciclo, conta o erro no diagnóstico e, após três erros seguidos, tenta reinicializar o INA228 a cada 5 s. A telemetria de movimento continua. O protocolo transporta tensão até 65,535 V; leituras acima disso são rejeitadas para evitar saturação silenciosa. A instalação deve confirmar que `VBUS` está ligado ao ponto cuja tensão se deseja mostrar, que o shunt tem de fato 1 mΩ e que a corrente máxima esperada corresponde ao circuito.
 
 O simulador sorteia uma semente por inicialização. Cada episódio de 45 s tem
 seis trechos de duração e velocidade alvo variáveis: pode acelerar ou desacelerar
@@ -87,7 +95,7 @@ rodas. `percurso_km` recomeça no boot; `odometro_km` é recuperado da NVS e
 persistido a cada 100 m. Ajuste esses valores à mecânica real em
 [`configuracao_placa.h`](../firmware/mestre-s3/include/nucleo/configuracao_placa.h).
 
-[`servico_telemetria.cpp`](../firmware/mestre-s3/src/servicos/servico_telemetria.cpp) envia o mesmo retrato a equipe e visitantes, com fila de transmissão por UART. O [protocolo v4](../firmware/compartilhado/protocolos/protocolo_telemetria.h) define pacote de 105 bytes, carga de 98 bytes, CRC-16/CCITT-FALSE e confirmação de 20 bytes. Os retornos permitem medir RTT e idade da última resposta de cada satélite. [`servico_enlace_satelites.cpp`](../firmware/mestre-s3/src/servicos/servico_enlace_satelites.cpp) é o consumidor dos quadros de retorno e os encaminha para telemetria, comandos ou OTA. O [parser do enlace](../firmware/compartilhado/protocolos/protocolo_enlace_uart.h) distingue as três famílias de quadro.
+[`servico_telemetria.cpp`](../firmware/mestre-s3/src/servicos/servico_telemetria.cpp) envia o mesmo retrato a equipe e visitantes, com fila de transmissão por UART. O [protocolo v5](../firmware/compartilhado/protocolos/protocolo_telemetria.h) define pacote de 122 bytes, carga de 115 bytes, CRC-16/CCITT-FALSE e confirmação de 20 bytes. Os retornos permitem medir RTT e idade da última resposta de cada satélite. [`servico_enlace_satelites.cpp`](../firmware/mestre-s3/src/servicos/servico_enlace_satelites.cpp) é o consumidor dos quadros de retorno e os encaminha para telemetria, comandos ou OTA. O [parser do enlace](../firmware/compartilhado/protocolos/protocolo_enlace_uart.h) distingue as três famílias de quadro.
 
 Durante OTA de satélite, o intervalo da telemetria passa, por padrão, a 2 s e pode ser alterado entre 500 ms e 10 s; a mudança mantém um canal de observação enquanto a UART transporta o firmware. Fonte: [`configuracao_placa.h`](../firmware/mestre-s3/include/nucleo/configuracao_placa.h), [`servico_telemetria.cpp`](../firmware/mestre-s3/src/servicos/servico_telemetria.cpp).
 
@@ -131,8 +139,14 @@ A opção temporária de áudio lê o INMP441 e cria `/sdcard/audio_ia/<nome>.wa
 O rádio opera como estação sob sessões temporárias. [`servico_wifi.cpp`](../firmware/mestre-s3/src/servicos/servico_wifi.cpp) tenta primeiro a rede principal, administra até cinco redes secundárias salvas na NVS e exige autorização para tentativas secundárias salvo quando o modo automático foi habilitado. Trocar/restaurar rede principal ou mudar o modo automático requer `WIFI_SENHA_PERMISSAO` (com fallback para `OTA_WIFI_SENHA`). Canal preferencial, largura e potência estão em [`configuracao_wifi.h`](../firmware/mestre-s3/include/nucleo/configuracao_wifi.h). Senhas privadas pertencem ao arquivo local `include/nucleo/segredos_ota.h`, criado a partir do exemplo e ignorado pelo Git.
 
 No menu serial, a opção 5 permite testar uma rede informada, salvá-la, conectar
-uma rede salva ou excluí-la. A rede principal é tentada primeiro; redes
-secundárias exigem confirmação, salvo no modo automático protegido por senha.
+uma rede salva ou excluí-la. A senha pode ficar vazia para uma rede aberta;
+redes protegidas exigem 8 a 63 caracteres. Antes de abrir uma sessão OTA ou
+Google, o mestre faz uma varredura única e tenta apenas redes autorizadas que
+aparecem nela. Se a varredura falhar, houver mais pontos de acesso do que o
+limite da leitura ou apenas redes ocultas não identificáveis, tenta os perfis
+na ordem normal; se
+nenhuma rede autorizada for vista, registra o motivo e encerra a tentativa.
+Redes secundárias exigem confirmação, salvo no modo automático protegido por senha.
 As credenciais e preferências ficam na NVS e não aparecem em relatórios ou logs.
 `WIFI_CANAL_PREFERENCIAL` vale somente para o início da busca em modo estação:
 o roteador determina o canal após a associação, e `0` aceita qualquer canal.
@@ -151,6 +165,7 @@ O [menu serial](../firmware/mestre-s3/src/servicos/servico_terminal.cpp) apresen
 | Opção | Ação |
 |---:|---|
 | 1 | Resumo completo de diagnóstico e tarefas. |
+| 11 | Estado rápido: saúde, memória, Wi-Fi, OTA, cartão SD e satélites. |
 | 2 | Consultar estado OTA, verificar versão, autorizar mestre/equipe/visitantes/todos, cancelar e ajustar intervalos. |
 | 3 / 4 | Configurar intervalos dos relatórios; pausar ou retomar os relatórios periódicos. |
 | 5 | Gerenciar redes e política Wi-Fi. |
@@ -158,7 +173,32 @@ O [menu serial](../firmware/mestre-s3/src/servicos/servico_terminal.cpp) apresen
 | 7 | Consultar sensores, odômetro, enlace e falhas. |
 | 8 | Enviar CSVs pendentes ao Google. |
 | 9 | Gravar WAV temporário para treinamento. |
+| 10 | Ajustar logs por serviço, nível geral e cores do menu. |
 | 0 | Redesenhar o menu. |
+
+Em **10**, pode-se mostrar informações, apenas avisos e erros, apenas erros,
+ou silenciar todos os logs serial. Cada serviço listado pode alternar seu nível
+individualmente. A escolha é temporária e não apaga os registros estruturados
+no cartão SD. As cores ANSI do menu podem ser desligadas se o monitor serial
+não as interpretar. Senhas de redes não mostram caracteres durante a digitação;
+somente a senha de permissão das ações protegidas mostra `*`.
+
+Em **7 → 9**, o terminal permite pausar ou retomar individualmente ADC,
+MPU6050, encoders, INA228, microfone e sensor interno de temperatura do ESP,
+ou todos juntos. O controle é volátil:
+na próxima partida, todas as leituras voltam a ser permitidas. A pausa suspende
+as chamadas de aquisição, sem desligar a alimentação dos componentes nem a
+contagem física do PCNT. Enquanto os encoders estão pausados, a velocidade
+publicada é zero **sem indicar que o veículo está parado**, e o percurso fica no último valor; ao retomar, as contagens
+acumuladas são incorporadas ao odômetro. O MPU6050 refaz a calibração após a
+retomada. Tensão/corrente/potência e dados do MPU não reaproveitam a última
+amostra ao serem pausados; falhas anteriores continuam nos contadores, mas um
+sensor pausado não mantém o alerta de saúde dos sensores. A gravação WAV fica
+bloqueada quando o microfone está pausado. A temperatura interna deixa de ser
+publicada como leitura válida enquanto seu sensor estiver pausado. Se um sensor falhou ao inicializar,
+habilitá-lo no menu não substitui a inicialização: reinicie o mestre após
+corrigir a ligação. A simulação continua produzindo dados enquanto a aquisição
+física estiver pausada; os controles não atuam sobre o veículo.
 
 [`servico_diagnostico.cpp`](../firmware/mestre-s3/src/servicos/servico_diagnostico.cpp) reúne contadores de sensores, UART, Wi-Fi, memória, CPU por núcleo, tarefas, menor margem de pilha e causas de saúde. [`servico_relatorios.cpp`](../firmware/mestre-s3/src/servicos/servico_relatorios.cpp) controla a apresentação periódica e sob demanda. [`servico_supervisao.cpp`](../firmware/mestre-s3/src/servicos/servico_supervisao.cpp) acompanha pulsos e fases; a tarefa de alta prioridade detecta a necessidade de recuperação, enquanto outra tarefa executa ações que podem bloquear. Um atraso na telemetria provoca notificação para antecipar o próximo ciclo, sem apagar a tarefa durante acesso a driver. Os canais UART podem ser recuperados individualmente.
 
@@ -170,20 +210,25 @@ para evitar alarmes por quedas breves durante TLS e OTA; margem mínima de pilha
 abaixo de 256 bytes é classificada como falha. Os limiares e prazos detalhados
 estão na [arquitetura interna](arquitetura.md).
 
-A [sinalização](../firmware/mestre-s3/src/servicos/servico_sinalizacao.cpp) mapeia partida, saúde, Wi-Fi e OTA para quatro LEDs e melodias no buzzer sem bloquear tarefas. O [painel local](../firmware/mestre-s3/src/servicos/servico_painel_local.cpp) usa SSD1306 de 128×64 pixels, detecta `0x3C`/`0x3D`, apresenta progresso de partida, estados e avisos em fila. Um painel ausente não interrompe a telemetria. Os padrões estão na tabela abaixo.
+A [sinalização](../firmware/mestre-s3/src/servicos/servico_sinalizacao.cpp) usa quatro LEDs e um buzzer passivo, com tarefa própria de 50 ms: os tons não bloqueiam aquisição, rádio ou gravação. O [painel local](../firmware/mestre-s3/src/servicos/servico_painel_local.cpp) usa SSD1306 de 128×64 pixels, detecta `0x3C`/`0x3D`, apresenta progresso de partida, estados e avisos em fila. Um painel ausente não interrompe a telemetria. Os padrões dos LEDs são:
 
 | Indicação | Significado |
 |---|---|
-| Azul e amarelo em animação | Inicialização. |
+| Pulso azul lento | Inicialização. |
 | Verde contínuo | Sistema saudável. |
-| Verde com pulso azul duplo | Sessão Wi-Fi ativa. |
-| Azul e amarelo alternados | Verificação OTA. |
-| Azul contínuo com pulso amarelo duplo | Atualização aguardando autorização. |
-| Azul com animação verde e amarela | Firmware OTA sendo baixado. |
-| Sequência verde, azul e amarela | Atualização concluída. |
-| Amarelo duplo | Atenção na saúde do sistema. |
-| Amarelo contínuo com vermelho duplo | Falha OTA; alarme a cada 15 s. |
-| Vermelho em SOS | Falha crítica; alarme a cada 8 s. |
+| Verde contínuo com um pulso azul a cada 3 s | Sessão Wi-Fi ativa. |
+| Verde contínuo com dois pulsos azuis a cada 1,5 s | Sincronização com o Google em andamento, se não houver alerta de maior prioridade. |
+| Azul piscando lentamente | Consulta OTA em andamento. |
+| Azul contínuo com dois pulsos amarelos a cada 3 s | Atualização aguardando autorização. |
+| Azul contínuo com um pulso amarelo a cada 1,5 s | Firmware OTA sendo baixado. |
+| Verde contínuo com dois pulsos azuis a cada 3 s | Atualização concluída. |
+| Um pulso amarelo a cada 2 s | Atenção na saúde do sistema. |
+| Amarelo contínuo com um pulso vermelho a cada 3 s | Falha OTA. |
+| Vermelho quase contínuo, com breve pausa a cada 2 s | Falha crítica; a pausa distingue o indicador aceso de um LED travado. |
+
+O som identifica **transições**, não cada amostra: duas notas discretas na partida e na confirmação de uma operação, três notas ascendentes quando o sistema fica pronto ou conclui uma OTA; dois tons específicos quando uma OTA fica disponível, começa a instalação ou quando o envio ao Google começa e termina. Avisos e falhas usam notas descendentes. O envio ao Google com erro tem som próprio. Entrar no Wi-Fi e consultar OTA periodicamente não emite som. Uma falha OTA persistente repete o aviso após 2 min; uma falha crítica, após 45 s. Os LEDs continuam mostrando o estado entre avisos sonoros.
+
+Sons de menor prioridade não interrompem falhas críticas, falhas OTA nem a sinalização de uma atualização em curso. O estado de Google é consultado a cada 500 ms pelos contadores de início e conclusão; uma sincronização muito rápida pode produzir apenas o som do resultado. O buzzer é acionado por PWM do periférico LEDC, respeitando o limite de intensidade configurado na placa. Essa intensidade define a razão do sinal PWM e não representa um volume acústico calibrado; o resultado deve ser ouvido e ajustado no buzzer instalado. Se um comando de LED falhar, a tarefa tenta novamente após 500 ms e contabiliza o erro.
 
 Os avisos de partida entram em uma fila fixa e aparecem após a inicialização.
 Estados persistentes, como atualização disponível, retornam em janelas curtas;

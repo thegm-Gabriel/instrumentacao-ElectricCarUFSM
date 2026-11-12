@@ -1,0 +1,79 @@
+\chapter{Firmware e processamento}\label{cap:firmware}
+\section{Projetos e responsabilidades do código}
+O NEXUS tem três projetos PlatformIO/ESP-IDF independentes: mestre, Equipe e Visitantes. Cada ESP executa sua própria aplicação; o código de estruturas e protocolos compartilhados fica em \path{firmware/compartilhado}. O ambiente do mestre é \texttt{mestre-s3-n16r8} e fixa \texttt{espressif32@6.13.0}; os satélites usam \texttt{esp32-s3-devkitm-1}, sem fixar essa versão nos respectivos \texttt{platformio.ini}. Para reproduzir um ensaio, registrar também a versão efetivamente instalada das dependências dos satélites.
+
+\begin{table}[htbp]\centering\small
+\caption{Quem define e executa cada responsabilidade no mestre}\label{tab:camadas}
+\begin{tabularx}{\textwidth}{@{}p{3.1cm}X@{}}\toprule
+Parte do projeto & Responsabilidade e limite\\\midrule
+\texttt{include/nucleo} & Define pinos, constantes, limites e política das tarefas. É a configuração usada pelos módulos, não um driver nem registro de teste da placa.\\
+\texttt{src/gerenciadores} & Controla recursos do ESP-IDF e oferece operações de UART, I\textsuperscript{2}C, PCNT, SPI/cartão, Wi-Fi, OTA local e sinalização. Devolve erros para que a aplicação decida o que fazer.\\
+\texttt{src/dispositivos} & Interpreta os sinais e registradores dos componentes conectados, como MPU6050, encoders e SSD1306. Uma leitura de dispositivo não decide sozinha o estado de saúde do sistema.\\
+\texttt{src/servicos} & Combina dispositivos e gerenciadores para formar aceleração, odômetro, telemetria, histórico, comandos, atualização, supervisão e diagnóstico; cada serviço mantém seu estado e suas regras.\\
+\texttt{src/main.cpp} & Compõe os serviços na partida, classifica falha essencial ou degradável, cria o ciclo de telemetria e coordena a observação da imagem OTA.\\
+\texttt{firmware/compartilhado} & Define tipos de dados e contratos binários que mestre e satélites precisam interpretar do mesmo modo.\\\bottomrule
+\end{tabularx}\end{table}
+
+Nos satélites, \texttt{main.c} prepara os serviços locais; o receptor UART valida e distribui quadros; o servidor HTTP entrega páginas e respostas JSON aos navegadores. A Equipe encaminha consultas e ações ao mestre e dispõe de diagnóstico mais amplo. Visitantes oferece leitura pública. O servidor HTTP constitui uma API de rede nas rotas \texttt{/api/...}; uma função interna do firmware ou um quadro UART não é, por si só, uma API HTTP.
+
+\section{Sequência de partida do mestre}
+Ao ligar, o \emph{bootloader} escolhe uma partição de aplicação e transfere o controle a \texttt{app\_main}. O aplicativo registra a nova partida para a guarda de rollback e confere se a flash detectada corresponde ao alvo N16R8. Flash incompatível impede a execução. A PSRAM é verificada separadamente: ausência ou tamanho inesperado gera aviso e caminhos que a usam podem tentar RAM interna, com menos margem para buffers e histórico.
+
+A sequência seguinte é intencional. Primeiro iniciam LEDs/buzzer e OLED, para informar as etapas já durante a partida. Em seguida abre-se a NVS, que contém odômetro e perfis de rede; se ela exigir manutenção ou estiver inacessível, o firmware não a apaga automaticamente para evitar perder dados. Depois inicia a supervisão, que acompanha o progresso das tarefas, e o núcleo da aplicação: serviço de telemetria, enlaces exclusivos com Equipe e Visitantes, simulador, MPU6050, encoders e odômetro. Falha de um dispositivo de medição pode deixar apenas aquela grandeza indisponível. Se os encoders não iniciarem, o odômetro não é iniciado; outros serviços podem continuar.
+
+O programa tenta montar o microSD e iniciar o histórico, cria a tarefa de telemetria e a registra na supervisão. Sem a tarefa ou sem a supervisão essencial, reinicia para evitar um sistema parcialmente ativo. Com ela pronta, inicia Wi-Fi externo, OTA, menu serial, relatórios e diagnóstico. Falha de cartão, tela, sinalização ou serviço opcional é comunicada e permite continuar o que estiver funcional. Wi-Fi e OTA têm uma condição adicional: se uma imagem recém-atualizada ainda estiver em autoexame, falha em qualquer um desses serviços impede confirmá-la, pois eles integram o caminho de recuperação remota. O aplicativo então solicita retorno à versão anterior. O procedimento completo de validação e rollback está no Capítulo~\ref{cap:ota}.
+
+O ciclo de telemetria acorda normalmente a cada 250\,ms. A tarefa do MPU6050 amostra a 100\,Hz; filas deixam transmissão UART e gravação no SD avançarem em tarefas próprias. A política fixa aquisição e enlaces principais no núcleo 1, enquanto OTA, CSV e upload ficam no núcleo 0; algumas tarefas não têm afinidade. São escolhas de escalonamento, não garantia de prazo absoluto. O diagnóstico mede atrasos, CPU, memória e margem de pilha durante cargas simultâneas.
+
+\section{Formação da telemetria}
+O ciclo do mestre monta um retrato \texttt{DadosTelemetriaVeiculo}. Na fonte real, obtém do serviço inercial as componentes, o estado de calibração e a aceleração longitudinal; atualiza odômetro e velocidade com os dois encoders; incorpora as grandezas elétricas do INA228 quando sua leitura é válida. Na fonte simulada, um gerador preenche o mesmo tipo de retrato e marca a origem como simulada. A troca de fonte limpa o retrato anterior para evitar misturar valores das duas origens. O padrão após reiniciar vem da configuração compilada; a Equipe pode alterá-lo temporariamente durante a sessão.
+
+Antes do envio, o serviço rejeita valores não finitos e campos fora dos limites de plausibilidade definidos no código. Converte números do retrato em inteiros escalonados para manter um pacote binário de tamanho fixo. Exemplos do contrato são centésimos de km/h para velocidade, milésimos de m/s\textsuperscript{2} para aceleração e milivolts ou centésimos de ampère para campos elétricos quando estes tiverem fonte válida. O formato também reserva pedais, estado de bateria, localização, distâncias e autonomia. A presença desses campos no pacote não significa que os respectivos sensores estejam instalados ou integrados; sem origem real, a interface deve indicar indisponibilidade. A marcha solicitada pelo controle preparatório é um estado separado da marcha publicada.
+
+O pacote recebe sequência crescente e tempo relativo ao início do mestre. Uma cópia segue por cada UART dedicada, outra alimenta relatórios e o registro histórico seleciona amostras a 1\,Hz. O bit mais alto do campo de marcha identifica telemetria simulada para os receptores. A ordem, a escala e a verificação dos bytes são um \emph{protocolo binário} compartilhado, não uma chamada HTTP. A seção seguinte detalha como o receptor distingue mensagens e confirma a chegada.
+
+\section{Filtragem, odômetro e calibração}
+O MPU6050 entrega aceleração e rotação. Durante a partida, o serviço só acumula amostras para calibração quando a intensidade da aceleração é compatível com a gravidade e o giroscópio indica repouso. Essa fase estima gravidade e desvio do giroscópio na orientação instalada. Se o eixo escolhido para representar o sentido longitudinal estiver quase alinhado à gravidade, a calibração não deve mascarar o erro de montagem. Em operação, o giroscópio acompanha mudanças de orientação, o vetor estimado de gravidade é retirado da aceleração medida e o componente longitudinal passa por filtro passa-baixas de 3\,Hz. Uma histerese com tempo de confirmação evita que pequenas oscilações troquem continuamente a indicação de aceleração/frenagem. O valor filtrado é uma estimativa de movimento longitudinal, sujeita à fixação, orientação, vibração e calibração em repouso.
+
+Cada encoder fornece pulsos que o PCNT conta por hardware. O serviço lê a diferença desde a atualização anterior, converte contagens em giro de roda usando resolução, diâmetro e relação mecânica configurados e calcula distância e velocidade de cada lado. A velocidade e o percurso divulgados usam as duas rodas, com tratamento de saltos e divergência persistente; um salto que implicaria velocidade superior ao limite diagnóstico de 200\,km/h é rejeitado. O código atual soma bordas sem inferir o sentido de rotação: marcha à ré também aumenta distância acumulada. O percurso de sessão recomeça após o boot, enquanto o odômetro total é recuperado da NVS e persistido a cada 100\,m. Uma queda de energia pode perder a distância ainda não persistida. Diâmetro efetivo e relação encoder/roda registrados no firmware são hipóteses até a medição no veículo; o capítulo~\ref{cap:hardware} mostra como conferir esses parâmetros.
+
+\section{Enlaces, confirmações e interfaces}
+Mestre--Equipe e mestre--Visitantes são enlaces UART exclusivos, bidirecionais, em lógica de 3,3\,V, 1\,000\,000 baud e formato 8N1. Ambos transportam várias famílias de quadros. Um analisador comum reconhece o marcador, confere versão, tamanho e CRC antes de entregar o conteúdo ao serviço responsável. Bytes de números com mais de uma posição seguem a ordem \emph{little-endian}. Esse enquadramento evita que um bloco OTA seja interpretado como telemetria ou que uma confirmação de recebimento pareça resposta de comando.
+
+\begin{table}[htbp]\centering\small
+\caption{Famílias do protocolo UART entre mestre e satélites}\label{tab:familias}
+\begin{tabularx}{\textwidth}{@{}p{2.6cm}p{2.4cm}X@{}}\toprule
+Família e início & Sentido usual & O que o receptor verifica e confirma\\\midrule
+Telemetria v4, \texttt{AA 55} & Mestre para cada satélite & Pacote fixo de 105 bytes, com carga de 98 bytes e CRC-16/CCITT-FALSE; após validar conteúdo, atualiza o retrato e sua sequência.\\
+ACK v4, \texttt{AA 56} & Cada satélite para mestre & Confirmação de 20 bytes com sequência e tempo do mestre. Permite acompanhar recebimento e tempo de ida e volta (RTT).\\
+Comando v1, \texttt{C7 7C} & Solicitação e resposta & Identificador, origem, destino, resultado e CRC-32. A resposta memorizada para ID repetido evita executar uma mesma ação duas vezes.\\
+OTA UART v1, \texttt{A5 5A} & Mestre e satélite alvo & Sessão, sequência, deslocamento, CRC-32 por quadro e SHA-256 da imagem completa; cada bloco é confirmado antes de avançar.\\\bottomrule
+\end{tabularx}\end{table}
+
+O satélite distingue uma sequência nova, perdida, repetida ou fora de ordem. Uma repetição pode receber novo ACK sem criar uma segunda amostra. O tempo relativo do mestre ajuda a reconhecer um reinício e retomar a sequência. CRC detecta alteração acidental, mas não autentica o emissor. O ACK comprova recepção de telemetria pelo satélite; o resultado de um comando, de um upload ou de uma instalação OTA é acompanhado por seus estados próprios. Os campos de versão e capacidades permitem que firmwares de datas diferentes rejeitem operações não suportadas em vez de interpretar cargas incompatíveis.
+
+O navegador não participa do barramento UART. Ele chama rotas HTTP do ESP da Equipe ou de Visitantes, por exemplo \texttt{GET /api/telemetria}. Essas rotas formam a API HTTP dos painéis. A Equipe transforma algumas consultas e ações HTTP em comandos do protocolo UART e devolve um resultado ao navegador. A arquitetura, o acesso local e as páginas são detalhados nos capítulos~\ref{cap:comandos} e~\ref{cap:wifi-paineis}.
+
+\section{Histórico e armazenamento}
+O serviço de registro escolhe uma amostra por segundo do retrato que circula a 4\,Hz, usa fila de 24 posições e deixa uma tarefa proprietária da escrita no cartão. O arquivo ativo é sincronizado aproximadamente a cada 10\,s e fechado após uma hora ou 8\,MiB. Uma fila cheia aparece em contadores de perda; ela não atrasa diretamente a aquisição. Se o cartão não montar, o ciclo UART continua e a aplicação tenta novamente após 30\,s.
+
+Logs estruturados usam uma área distinta do CSV. O serviço mantém uma janela de saúde em PSRAM, ou menor em RAM interna, para registrar o contexto anterior a uma falha quando o cartão estiver disponível. O tempo civil só passa a acompanhar os registros depois de uma referência UTC obtida de resposta HTTPS válida; antes disso há tempo relativo ao boot. NVS guarda odômetro e preferências. O arquivo \path{/sdcard/configuracao_atual.txt} salva uma cópia seletiva com sequência e checksum aproximadamente a cada minuto, sem senhas. O capítulo~\ref{cap:memorias_google} descreve recuperação de arquivos, política de backup e confirmação dos envios ao Google.
+
+\section{Diagnóstico, sinalização e recuperação}
+O diagnóstico reúne resultados de dispositivos, erros I\textsuperscript{2}C e UART, idade das confirmações dos satélites, progresso das tarefas, RAM interna, PSRAM, margem de pilha, Wi-Fi e falhas OTA. Atualiza o resumo de saúde a cada segundo e conserva contadores para distinguir uma causa presente de um erro que já cessou. A supervisão usa pulsos de progresso e prazos para detectar tarefas atrasadas; recuperações potencialmente bloqueantes executam fora da tarefa de alta prioridade. Cada enlace UART tem recuperação própria, sem reiniciar necessariamente o outro satélite.
+
+\begin{table}[htbp]\centering\small
+\caption{Estados publicados pela saúde do mestre e indicação ao operador}\label{tab:estados-saude-firmware}
+\begin{tabularx}{\textwidth}{@{}p{2.4cm}X p{4.4cm}@{}}\toprule
+Estado & Significado no resumo de diagnóstico & Sinalização local típica\\\midrule
+Saudável & Nenhuma causa ativa no ciclo de avaliação. & LED verde contínuo; OLED nas páginas normais.\\
+Atenção & Uma causa ativa não classificada como crítica, por exemplo sensor, barramento, enlace, supervisão, Wi-Fi fraco ou falha OTA recente. As funções que não dependem da causa podem continuar. & LED amarelo periódico; OLED mostra a causa e alterna com as páginas usuais.\\
+Falha & Memória interna/PSRAM em nível crítico ou margem de pilha crítica; também pode haver falha de partida tratada pela aplicação antes de existir um resumo normal. & LED vermelho predominante com breve pausa; tela e serial exibem detalhe quando disponíveis.\\
+Recuperando & A causa ativa desapareceu, mas o sistema conserva por cerca de 2\,s uma indicação de transição. & Indicação de aviso amarelo durante a transição, antes de voltar ao verde.\\\bottomrule
+\end{tabularx}\end{table}
+
+\emph{Operação degradada} descreve uma função indisponível enquanto outras continuam: por exemplo, sem microSD há telemetria ao vivo mas não há CSV persistente; sem OLED restam serial, LEDs e painéis; sem um satélite o outro pode seguir recebendo quadros. Esse termo não equivale automaticamente ao estado \emph{Falha} da tabela, que tem regras próprias de classificação. Já uma falha essencial de NVS, inicialização do núcleo, criação ou supervisão da tarefa de telemetria leva a rejeição da imagem OTA pendente e reinício para evitar execução incompleta.
+
+Os quatro LEDs, o buzzer passivo e a OLED apresentam níveis diferentes de detalhe. Azul identifica partida, sessão Wi-Fi ou fase OTA; padrões de verde, amarelo e vermelho mostram saúde ou atualização. Sons curtos marcam eventos e transições, com prioridade para falhas; não são um alarme contínuo para cada tentativa Wi-Fi. A OLED apresenta progresso, páginas de telemetria e comunicação, mensagens e causas resumidas. O terminal serial e a API HTTP de diagnóstico do painel Equipe oferecem contadores e últimos erros, úteis para determinar o componente responsável. Um sensor não medido ou um campo reservado deve aparecer como indisponível na interface, não como diagnóstico inferido de um valor zero. O capítulo~\ref{cap:diagnostico} detalha condições, limiares e apresentação de cada causa.
+
+Os pedidos de marcha, limites e parada disponíveis na página Controle pertencem a um estado preparatório em RAM. Eles não acionam GPIO, relé, motor ou freio no firmware examinado. Regras, limites e implicações de segurança estão concentrados no capítulo~\ref{cap:comandos}, para evitar duas descrições divergentes do mesmo controle.

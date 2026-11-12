@@ -1,0 +1,86 @@
+\chapter{Hardware, sensores e ligações}\label{cap:hardware}
+\section{Placas ESP32-S3 e restrições de pinos}
+O Mestre usa um ESP32-S3-WROOM-1-N16R8, configurado para 16\,MiB de flash e 8\,MiB de PSRAM Octal. Os satélites usam placas ESP32-S3 SuperMini com flash configurada para 4\,MiB. Os três processadores possuem dois núcleos Xtensa LX7; o chip admite até 240\,MHz, e os três projetos fixam 160\,MHz nos respectivos arquivos \texttt{sdkconfig}. Clock do processador, capacidade da flash e memória externa são propriedades diferentes: aumentar a primeira não cria espaço para programa ou histórico.
+
+\begin{table}[htbp]\centering\small
+\caption{Placas e recursos usados pelos três programas}\label{tab:modelos-esp}
+\begin{tabularx}{\textwidth}{@{}p{2.5cm}p{4.2cm}X@{}}\toprule
+Unidade & Placa/módulo previsto & Recursos e conferência necessária\\\midrule
+Mestre & ESP32-S3-WROOM-1-N16R8 & Dois núcleos a 160\,MHz; flash de 16\,MiB e PSRAM Octal de 8\,MiB. Conferir o módulo soldado e a entrada de alimentação da placa.\\
+Equipe e Visitantes & ESP32-S3 SuperMini & Dois núcleos a 160\,MHz e flash configurada para 4\,MiB em cada placa. Confirmar fabricante, pinagem e capacidade física da variante adquirida.\\\bottomrule
+\end{tabularx}\end{table}
+
+O repositório contém mais de uma revisão de circuito e não identifica de forma inequívoca a PCB montada. A tabela de GPIO abaixo descreve \textbf{a atribuição no firmware}, que deve ser comparada com conectores e trilhas da placa real. Antes de energizar, conferir polaridade e tensão dos trilhos, continuidade do GND, proteções e ausência de curto. Não aplicar 12 ou 24\,V diretamente aos GPIOs: UART, I\textsuperscript{2}C, entradas dos encoders e demais sinais lógicos do ESP trabalham em 3,3\,V.
+
+\begin{table}[htbp]\centering\small
+\caption{GPIOs que exigem reserva ou cuidado no ESP32-S3}\label{tab:pinos-especiais}
+\begin{tabularx}{\textwidth}{@{}p{2.6cm}X@{}}\toprule
+GPIO & Motivo e decisão de projeto\\\midrule
+26--32 & Normalmente ligados à flash e à PSRAM pelo módulo; não destiná-los ao chicote.\\
+33--37 no N16R8 & Ocupados pela interface da PSRAM Octal do Mestre; não destiná-los a periféricos externos. Em outra variante de placa, consultar seu esquema.\\
+0, 3, 45 e 46 & Pinos de configuração de partida (\emph{strapping}); níveis externos indevidos durante reset podem alterar o modo de boot. Usar somente após analisar a placa e os resistores de polarização.\\
+19 e 20 & Usados pelo USB nativo/Serial-JTAG; reaproveitá-los como GPIO pode impedir gravação ou diagnóstico por essa porta.\\\bottomrule
+\end{tabularx}\end{table}
+
+Essas restrições vêm da \href{https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-reference/peripherals/gpio.html}{documentação de GPIO do ESP32-S3}; pinos de \emph{strapping} e USB não são universalmente proibidos, mas devem preservar a função de partida e manutenção exigida na placa. O clock máximo e os dois núcleos constam da \href{https://www.espressif.com/sites/default/files/documentation/esp32-s3-wroom-1_wroom-1u_datasheet_en.pdf}{folha de dados do módulo}.
+
+\section{Mapa de pinos do mestre}
+\begin{table}[htbp]\centering\small
+\caption{Interfaces do mestre definidas no firmware}\label{tab:pinos-mestre}
+\begin{tabularx}{\textwidth}{@{}p{3.0cm}p{2.4cm}X@{}}\toprule
+Interface & GPIO do Mestre & Ligação e função\\\midrule
+Encoder esquerdo & 5 (A), 6 (B) & Entradas de pulsos do lado esquerdo; cada canal recebe pull-up externo a 3,3\,V.\\
+Encoder direito & 7 (A), 21 (B) & Entradas independentes do lado direito, com a mesma referência GND e pull-ups.\\
+I\textsuperscript{2}C & 8 (SDA), 9 (SCL) & Barramento compartilhado por MPU6050, OLED e INA228, configurado a 400\,kHz; confirmar no esquema e na montagem o conector efetivamente usado pelo INA228.\\
+LEDs & 10, 11, 12, 13 & Verde, amarelo, vermelho e azul, respectivamente; saídas ativas em alto e resistor em série por LED.\\
+Buzzer passivo & 14 & Saída de tons por PWM; dimensionar o estágio de acionamento para o buzzer instalado.\\
+UART Visitantes & 15 (TX), 16 (RX) & Canal dedicado ao satélite público; cruzar TX com RX do outro ESP.\\
+UART Equipe & 17 (TX), 18 (RX) & Canal dedicado ao satélite técnico; não unir as duas UARTs.\\
+microSD SPI2 & 38 (CLK), 39 (MOSI), 40 (MISO), 41 (CS) & Barramento do cartão, configurado a 10\,MHz; conferir alimentação e nível lógico do módulo.\\\bottomrule
+\end{tabularx}\end{table}
+
+\section{Encoders e medição do movimento}
+O projeto prevê um encoder incremental E38S6G5-600B-G24N em cada lado do veículo. Cada unidade fornece dois sinais de pulsos, A e B, defasados no tempo. O modelo documentado tem 600 pulsos por volta do próprio eixo. A defasagem permitiria deduzir o sentido de rotação com decodificação em quadratura; nesta revisão, o firmware conta as bordas dos dois canais para melhorar a resolução, mas \textbf{não calcula o sentido}. Por isso, recuar a roda também aumenta o percurso acumulado.
+
+As saídas são NPN de \emph{coletor aberto}. O transistor interno do encoder apenas liga a saída ao GND quando conduz; desligado, ele deixa a saída eletricamente aberta. Sem um resistor de \emph{pull-up}, esse estado aberto ficaria indefinido. Cada canal A e B recebe, portanto, um resistor externo de 4,7\,k$\Omega$ até 3,3\,V: quando o transistor está aberto, o ESP lê alto; quando conduz, ele drena a pequena corrente do resistor e o ESP lê baixo. A alimentação do corpo do encoder é separada da tensão dos sinais. A documentação do modelo recomenda alimentação externa de 12\,V, mas o conector da revisão de esquema analisada sugere outra linha; conferir etiqueta, folha de dados e montagem antes de ligar. \textbf{Nunca ligar o pull-up dos sinais à alimentação de 12 V.} O GND dessa fonte e o GND do Mestre precisam ser comuns para que alto e baixo tenham referência definida.
+
+O uso de \emph{dois encoders}, um em cada lado, permite estimar a distância média mesmo quando as rodas não percorrem exatamente o mesmo caminho em uma curva. Também permite comparar os lados: diferença persistente pode indicar deslizamento, geometria incorreta, interrupção de um cabo ou falha de um sensor. Essa comparação é diagnóstica e não identifica sozinha a causa. Cabos de sinal devem ser afastados dos de potência; confirmar blindagem, retorno de GND, forma de onda e ausência de contagem com rodas paradas.
+
+O periférico PCNT conta as quatro bordas dos canais A e B de cada lado. Assim, 600 P/R produzem 2\,400 contagens por volta do eixo do encoder. O filtro de pulsos curtos configurado é de 1\,000\,ns. O odômetro é distância acumulada sem sinal, não posição orientada; tampouco decide a marcha do veículo.
+
+Para cada lado $j$, a distância estimada é
+\begin{equation}
+d_j=\frac{n_j}{4P_j\,i_j}\,\pi D_j ,
+\qquad
+v_j=\frac{\Delta d_j}{\Delta t}\,3{,}6 ,
+\label{eq:encoder}
+\end{equation}
+em que $n_j$ é a contagem acumulada, $P_j$ os pulsos nominais por volta, $i_j$ as voltas do encoder por volta da roda, $D_j$ o diâmetro efetivo em metros e $\Delta t$ o intervalo em segundos. O fator 3,6 converte m/s em km/h. O firmware configura $D=0{,}300$\,m e $i=1{,}0$ para cada lado; são valores a medir na montagem. O serviço usa a média das distâncias esquerda e direita, rejeita saltos acima do limite diagnóstico de 200\,km/h e alerta sobre divergência persistente. Esse limite é filtro de plausibilidade, \textbf{não} velocidade certificada do carro.
+
+O percurso da sessão reinicia no boot. O odômetro total é recuperado da NVS e persistido a cada 100\,m, compromisso entre desgaste de flash e perda potencial após corte de energia. Medir circunferência efetiva com o pneu carregado, confirmar relação de transmissão e comparar ambos os lados com uma referência independente antes de usar distância ou velocidade em análise quantitativa.
+
+\section{MPU6050: aceleração e rotação}
+O MPU6050 reúne um \emph{acelerômetro}, que responde à aceleração e à gravidade, e um \emph{giroscópio}, que mede a velocidade de rotação. Ele conversa com o Mestre por I\textsuperscript{2}C no endereço \texttt{0x68}; SDA vai ao GPIO 8 e SCL ao GPIO 9. A placa do sensor deve ficar rigidamente fixada ao chassi. O firmware foi parametrizado para X vertical positivo para cima e Y longitudinal positivo para frente. Se a montagem girar ou inverter o módulo, é preciso ajustar eixo e sinal em \path{firmware/mestre-s3/include/nucleo/configuracao_placa.h} e repetir a calibração.
+
+O acelerômetro não distingue sozinho a aceleração do veículo da componente da gravidade produzida por inclinação da placa. O serviço amostra a 100\,Hz, usa o giroscópio para acompanhar mudanças rápidas de orientação e corrige lentamente a estimativa de gravidade quando o movimento permite. Subtrai então a gravidade projetada no eixo longitudinal, filtra ruído e usa dois limiares com confirmação temporal para classificar aceleração, desaceleração ou condição próxima do repouso sem alternar a cada vibração. O valor em \emph{g} é convertido nominalmente por $a_{\mathrm{m/s^2}}=9{,}80665\,a_g$.
+
+Ao iniciar, o veículo deve permanecer parado: o firmware usa 100 amostras para estimar os desvios e rejeita calibração com giro, intensidade de gravidade implausível ou eixo longitudinal quase vertical. Uma calibração aceita não corrige uma fixação que depois se moveu. A velocidade principal vem dos encoders, pois integrar a aceleração inercial para obter velocidade acumularia erro de inclinação, ruído e viés. Telemetria e diagnóstico distinguem sensor presente, calibração concluída e dado válido; conferir esses estados antes de comparar aceleração com outro instrumento.
+
+\section{Tela, sinalização e armazenamento}
+A OLED SSD1306 de 0,96\,pol e 128$\times$64 pixels usa SDA/SCL do mesmo barramento I\textsuperscript{2}C que atende o MPU6050. O firmware procura os endereços \texttt{0x3C} e \texttt{0x3D}; isso permite encontrar variantes comuns sem alterar o programa. Conferir alimentação e nível dos pull-ups no módulo adquirido: o barramento precisa permanecer compatível com 3,3\,V, e resistores de módulos em paralelo alteram sua resistência equivalente. O capítulo~\ref{cap:eletronica} explica o dimensionamento. A tela apresenta etapas de partida, estado, medições disponíveis e progresso de operações; sua ausência é reportada, mas não impede as UARTs nem o registro. As páginas e os avisos são detalhados no capítulo~\ref{cap:diagnostico}.
+
+Os quatro LEDs externos mostram estados resumidos sem exigir telefone ou terminal: verde para condição normal, amarelo para atenção, vermelho para falha crítica e azul para fases como partida, Wi-Fi e OTA. Cada um precisa de resistor em série dimensionado para a corrente e luminosidade do componente instalado; o esquema/fiação deve confirmar sua polaridade. O buzzer passivo recebe tons por PWM no GPIO 14. Como o GPIO não deve alimentar uma carga acima de sua capacidade, prever transistor e resistor de base conforme o buzzer escolhido, com retorno em GND; se a carga for indutiva, prever proteção contra o pulso de desligamento. A porcentagem de PWM configurada não equivale a um nível acústico medido.
+
+O microSD usa SPI2, com CLK, MOSI, MISO e CS nos GPIOs 38, 39, 40 e 41. Ele armazena CSV, logs e cópia de ajustes; uma tarefa de gravação recebe amostras por fila para que o tempo de escrita do cartão não dite o ritmo da aquisição. A falta do cartão elimina esses arquivos persistentes enquanto durar a falha, embora o fluxo ao vivo possa continuar. Confirmar alimentação, nível lógico, desacoplamento e pinagem no módulo comprado; um módulo com regulador ou conversores de nível pode ter requisitos diferentes de um encaixe de cartão simples. O capítulo~\ref{cap:memorias_google} descreve arquivos e recuperação.
+
+\section{UART e referência elétrica entre os três ESPs}
+\begin{table}[htbp]\centering\small
+\caption{Ligações bidirecionais entre os três ESP32-S3}\label{tab:uart-fios}
+\begin{tabularx}{\textwidth}{@{}p{2.2cm}X X p{1.8cm}@{}}\toprule
+Enlace & Mestre TX $\to$ satélite RX & Satélite TX $\to$ mestre RX & Referência\\\midrule
+Equipe & GPIO 17 $\to$ GPIO 5 & GPIO 6 $\to$ GPIO 18 & GND comum\\
+Visitantes & GPIO 15 $\to$ GPIO 5 & GPIO 6 $\to$ GPIO 16 & GND comum\\\bottomrule
+\end{tabularx}\end{table}
+Cada satélite tem um par TX/RX exclusivo do Mestre. TX transmite e deve chegar ao RX da outra placa; unir TX com TX impede a comunicação. Os três GNDs precisam compartilhar uma referência elétrica para que cada receptor interprete corretamente os níveis dos sinais. \textbf{Não é necessário interligar as linhas de 3,3\,V das três placas}: cada uma pode receber alimentação pelo seu ramo previsto, desde que os sinais e retornos respeitem os limites elétricos. Aterramento comum não significa usar o fio fino da UART como caminho de retorno da corrente de potência.
+
+Ambos os enlaces usam 1\,000\,000 baud, oito bits de dados, sem paridade e um bit de parada (8N1). O Mestre envia telemetria e recebe confirmações; a Equipe também encaminha solicitações, e os satélites podem receber imagens OTA pelo mesmo enlace. Antes de interpretar erro de protocolo, conferir alimentação de cada placa, continuidade do GND, cruzamento TX/RX, nível alto de 3,3\,V e integridade do cabo. Se as placas estiverem fisicamente afastadas ou em ambiente ruidoso, verificar a forma de onda e o aterramento na montagem real.

@@ -34,6 +34,8 @@ static esp_err_t responder_telemetria(httpd_req_t *requisicao)
                                : agora - dados.ultimo_recebimento_ms;
     const bool aceleracao_disponivel = dados.valido &&
         (dados.simulado || (dados.estado_mpu & TELEMETRIA_MPU_ATIVO) != 0);
+    const bool eletrica_disponivel = dados.valido &&
+        (dados.simulado || (dados.estado_mpu & TELEMETRIA_ELETRICA_VALIDA) != 0);
     char aceleracao[24] = "null";
     char tensao[24] = "null";
     char corrente[24] = "null";
@@ -46,15 +48,16 @@ static esp_err_t responder_telemetria(httpd_req_t *requisicao)
         snprintf(aceleracao, sizeof(aceleracao), "%d",
                  dados.aceleracao_milesimos_ms2);
     }
-    // O modo real atual não adquire grandezas elétricas. Zero não é medição.
-    if (dados.valido && dados.simulado) {
-        // Os percentuais dos pedais também só são adquiridos pelo simulador atual.
-        snprintf(acelerador, sizeof(acelerador), "%u", (unsigned)dados.acelerador_decimos_percentual);
-        snprintf(freio, sizeof(freio), "%u", (unsigned)dados.freio_decimos_percentual);
+    if (eletrica_disponivel) {
         snprintf(tensao, sizeof(tensao), "%u", (unsigned)dados.tensao_pacote_mv);
         snprintf(corrente, sizeof(corrente), "%d", dados.corrente_centesimos_a);
-        snprintf(carga, sizeof(carga), "%u", (unsigned)dados.carga_decimos_percentual);
         snprintf(potencia, sizeof(potencia), "%d", dados.potencia_w);
+    }
+    if (dados.valido && dados.simulado) {
+        // Pedais, carga e autonomia ainda dependem do simulador.
+        snprintf(acelerador, sizeof(acelerador), "%u", (unsigned)dados.acelerador_decimos_percentual);
+        snprintf(freio, sizeof(freio), "%u", (unsigned)dados.freio_decimos_percentual);
+        snprintf(carga, sizeof(carga), "%u", (unsigned)dados.carga_decimos_percentual);
         snprintf(autonomia, sizeof(autonomia), "%u", (unsigned)dados.autonomia_decimos_km);
     }
     char json[768];
@@ -64,6 +67,7 @@ static esp_err_t responder_telemetria(httpd_req_t *requisicao)
         "\"simulado\":%s,\"velocidade_centesimos_kmh\":%u,"
         "\"acelerador_decimos_percentual\":%s,\"freio_decimos_percentual\":%s,"
         "\"aceleracao_disponivel\":%s,\"aceleracao_milesimos_ms2\":%s,"
+        "\"eletrica_disponivel\":%s,"
         "\"tensao_pacote_mv\":%s,\"corrente_centesimos_a\":%s,"
         "\"carga_decimos_percentual\":%s,\"potencia_w\":%s,"
         "\"autonomia_decimos_km\":%s,\"percurso_metros\":%lu}",
@@ -72,6 +76,7 @@ static esp_err_t responder_telemetria(httpd_req_t *requisicao)
         (unsigned)dados.velocidade_centesimos_kmh,
         acelerador, freio,
         aceleracao_disponivel ? "true" : "false", aceleracao,
+        eletrica_disponivel ? "true" : "false",
         tensao, corrente, carga, potencia,
         autonomia, (unsigned long)dados.percurso_metros);
     if (tamanho < 0 || tamanho >= (int)sizeof(json)) {

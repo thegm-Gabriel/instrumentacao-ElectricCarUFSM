@@ -231,6 +231,7 @@ esp_err_t servico_simulador_telemetria_gerar(DadosTelemetriaVeiculo* dados) {
     dados->tensao_pacote_v = 13.10f - (100.0f - dados->carga_percentual) * 0.006f -
                              dados->corrente_a * 0.004f;
     dados->potencia_w = dados->tensao_pacote_v * dados->corrente_a;
+    dados->eletrica_valida = true;
     dados->autonomia_km = dados->carga_percentual * 0.62f;
     dados->percurso_km = percurso_km;
     dados->odometro_km = 1250.0f + percurso_km;

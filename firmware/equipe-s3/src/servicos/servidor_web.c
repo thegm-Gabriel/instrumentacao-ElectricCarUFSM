@@ -8,7 +8,6 @@
 
 #include "nucleo/configuracao.h"
 #include "servicos/diagnostico_sistema.h"
-#include "servicos/autenticacao_comandos.h"
 #include "esp_check.h"
 #include "esp_http_server.h"
 #include "esp_app_desc.h"
@@ -78,7 +77,6 @@ static esp_err_t ler_corpo_wifi(httpd_req_t *requisicao, char corpo[128])
 
 static esp_err_t responder_limite_wifi(httpd_req_t *requisicao)
 {
-    if (!autenticacao_comandos_autorizar(requisicao)) return ESP_OK;
     char corpo[128];
     if (ler_corpo_wifi(requisicao, corpo) != ESP_OK)
         return httpd_resp_send_err(requisicao, HTTPD_400_BAD_REQUEST, "corpo invalido");
@@ -103,7 +101,6 @@ static esp_err_t responder_limite_wifi(httpd_req_t *requisicao)
 
 static esp_err_t responder_desconexao_wifi(httpd_req_t *requisicao)
 {
-    if (!autenticacao_comandos_autorizar(requisicao)) return ESP_OK;
     char corpo[128];
     if (ler_corpo_wifi(requisicao, corpo) != ESP_OK)
         return httpd_resp_send_err(requisicao, HTTPD_400_BAD_REQUEST, "corpo invalido");
@@ -127,15 +124,6 @@ static esp_err_t responder_desconexao_wifi(httpd_req_t *requisicao)
     httpd_resp_set_type(requisicao, "application/json");
     return httpd_resp_send(requisicao, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
 }
-
-static esp_err_t responder_acesso_comandos(httpd_req_t *requisicao)
-{
-    if (!autenticacao_comandos_autorizar(requisicao)) return ESP_OK;
-    httpd_resp_set_hdr(requisicao, "Cache-Control", "no-store");
-    httpd_resp_set_type(requisicao, "application/json");
-    return httpd_resp_send(requisicao, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
-}
-
 
 static esp_err_t responder_painel(httpd_req_t *requisicao)
 {
@@ -1205,8 +1193,6 @@ static void tarefa_responder_mestre_api(void *argumento)
 
 static esp_err_t responder_mestre_api(httpd_req_t *requisicao)
 {
-    if (requisicao->method == HTTP_POST &&
-        !autenticacao_comandos_autorizar(requisicao)) return ESP_OK;
     SemaphoreHandle_t vagas = requisicao->method == HTTP_POST
                                   ? vaga_api_mestre_acao
                                   : vagas_api_mestre_consultas;
@@ -1250,7 +1236,8 @@ static esp_err_t responder_telemetria(httpd_req_t *requisicao)
         "\"tensoes_celulas_mv\":[%u,%u,%u,%u],\"latitude_micrograus\":%ld,\"longitude_micrograus\":%ld,\"rumo_decimos_grau\":%u,"
         "\"distancias_cm\":[%u,%u,%u,%u,%u,%u,%u,%u],\"potencia_w\":%d,\"autonomia_decimos_km\":%u,\"percurso_metros\":%lu,\"odometro_metros\":%lu,"
         "\"falhas_crc\":%lu,\"falhas_cabecalho\":%lu,\"falhas_conteudo\":%lu,\"pacotes_perdidos\":%lu,\"pacotes_duplicados\":%lu,\"reinicios_mestre\":%lu,"
-        "\"intervalo_medio_ms\":%lu,\"jitter_medio_ms\":%lu,\"latencia_relativa_ms\":%lu,\"taxa_pacotes_centesimos_hz\":%lu,\"taxa_perda_centesimos_percentual\":%lu}",
+        "\"intervalo_medio_ms\":%lu,\"jitter_medio_ms\":%lu,\"latencia_relativa_ms\":%lu,\"taxa_pacotes_centesimos_hz\":%lu,\"taxa_perda_centesimos_percentual\":%lu,"
+        "\"ina_shunt_microvolts\":%ld,\"ina_temperatura_centesimos_c\":%d,\"ina_energia_mwh\":%lu,\"ina_carga_mah\":%ld,\"ina_diagnostico\":%u,\"estado_ina\":%u}",
         dados.valido ? "true" : "false", (unsigned long)idade_ms,
         (unsigned)dados.sequencia,
         (unsigned long)dados.tempo_mestre_ms, (unsigned)dados.tensao_adc_bruta,
@@ -1289,7 +1276,13 @@ static esp_err_t responder_telemetria(httpd_req_t *requisicao)
         (unsigned long)dados.jitter_medio_ms,
         (unsigned long)dados.latencia_relativa_ms,
         (unsigned long)dados.taxa_pacotes_centesimos_hz,
-        (unsigned long)dados.taxa_perda_centesimos_percentual);
+        (unsigned long)dados.taxa_perda_centesimos_percentual,
+        (long)dados.ina_shunt_microvolts,
+        dados.ina_temperatura_centesimos_c,
+        (unsigned long)dados.ina_energia_mwh,
+        (long)dados.ina_carga_mah,
+        (unsigned)dados.ina_diagnostico,
+        (unsigned)dados.estado_ina);
     if (tamanho < 0 || tamanho >= (int)sizeof(json)) {
         ESP_LOGE(TAG, "JSON de telemetria excedeu o buffer interno");
         return httpd_resp_send_err(requisicao, HTTPD_500_INTERNAL_SERVER_ERROR,
@@ -1450,12 +1443,6 @@ static esp_err_t responder_redirecionamento_cativo(
 
 esp_err_t servidor_web_iniciar(void)
 {
-    const esp_err_t erro_autenticacao = autenticacao_comandos_iniciar();
-    if (erro_autenticacao != ESP_OK) {
-        ESP_LOGE(TAG, "Autenticacao dos comandos indisponivel: %s",
-                 esp_err_to_name(erro_autenticacao));
-        return erro_autenticacao;
-    }
     if (vagas_api_mestre_consultas == NULL)
         vagas_api_mestre_consultas = xSemaphoreCreateCounting(
             MAXIMO_CONSULTAS_MESTRE_SIMULTANEAS,
@@ -1467,7 +1454,7 @@ esp_err_t servidor_web_iniciar(void)
     httpd_handle_t servidor = NULL;
     httpd_config_t configuracao = HTTPD_DEFAULT_CONFIG();
     configuracao.server_port = PORTA_HTTP;
-    configuracao.max_uri_handlers = 12;
+    configuracao.max_uri_handlers = 11;
     // Reserva descritores para as demais tarefas de rede do ESP.
     configuracao.max_open_sockets = 10;
     configuracao.lru_purge_enable = true;
@@ -1492,7 +1479,6 @@ esp_err_t servidor_web_iniciar(void)
     const httpd_uri_t rota_clientes_wifi = { .uri = "/api/wifi/clientes", .method = HTTP_GET, .handler = responder_clientes_wifi };
     const httpd_uri_t rota_limite_wifi = { .uri = "/api/wifi/limite", .method = HTTP_POST, .handler = responder_limite_wifi };
     const httpd_uri_t rota_desconexao_wifi = { .uri = "/api/wifi/desconectar", .method = HTTP_POST, .handler = responder_desconexao_wifi };
-    const httpd_uri_t rota_acesso_comandos = { .uri = "/api/comandos/acesso", .method = HTTP_GET, .handler = responder_acesso_comandos };
     erro = httpd_register_err_handler(servidor, HTTPD_404_NOT_FOUND,
                                       responder_redirecionamento_cativo);
     if (erro == ESP_OK) erro = httpd_register_uri_handler(servidor, &rota_painel);
@@ -1506,7 +1492,6 @@ esp_err_t servidor_web_iniciar(void)
     if (erro == ESP_OK) erro = httpd_register_uri_handler(servidor, &rota_clientes_wifi);
     if (erro == ESP_OK) erro = httpd_register_uri_handler(servidor, &rota_limite_wifi);
     if (erro == ESP_OK) erro = httpd_register_uri_handler(servidor, &rota_desconexao_wifi);
-    if (erro == ESP_OK) erro = httpd_register_uri_handler(servidor, &rota_acesso_comandos);
     if (erro != ESP_OK) {
         httpd_stop(servidor);
         ESP_LOGE(TAG, "Inicialização web incompleta; servidor encerrado: %s",

@@ -520,65 +520,58 @@ esp_err_t servico_wifi_abrir_sessao(FinalidadeSessaoWifi finalidade) {
     existe_perfil_autorizado_uma_vez = false;
     perfil_autorizado_uma_vez = {};
 
-    esp_err_t ultimo_erro =
-        aplicar_perfil(principal, copia.politica, instante_limite);
-    if (ultimo_erro == ESP_OK) {
-        ESP_LOGI(ETIQUETA, "Sessão de rede aberta pela rede principal '%s'",
-                 principal.ssid);
-        return ESP_OK;
-    }
-
+    std::array<PerfilWifi, configuracao::MAXIMO_REDES_WIFI_USUARIO + 2> candidatos{};
+    size_t quantidade = 0;
+    candidatos[quantidade++] = principal;
     if (usar_autorizacao &&
-        std::strcmp(principal.ssid, perfil_autorizado.ssid) != 0) {
-        ESP_LOGI(ETIQUETA, "Usando autorização única para a rede '%s'",
-                 perfil_autorizado.ssid);
-        ultimo_erro =
-            aplicar_perfil(perfil_autorizado, copia.politica, instante_limite);
-        if (ultimo_erro == ESP_OK) return ESP_OK;
-    }
+        std::strcmp(principal.ssid, perfil_autorizado.ssid) != 0)
+        candidatos[quantidade++] = perfil_autorizado;
+    if (copia.automatico)
+        for (uint8_t indice = 0; indice < copia.quantidade; ++indice) {
+            const PerfilWifi& perfil = copia.redes[indice];
+            bool repetida = false;
+            for (size_t anterior = 0; anterior < quantidade; ++anterior)
+                repetida |= std::strcmp(candidatos[anterior].ssid, perfil.ssid) == 0;
+            if (!repetida) candidatos[quantidade++] = perfil;
+        }
 
-    if (!copia.automatico || copia.quantidade == 0) {
-        const bool aguardar = copia.quantidade > 0;
-        definir_sessao(false, aguardar);
-        const esp_err_t erro_desligar =
-            gerenciador_wifi_desativar(TEMPO_DESLIGAMENTO);
-        if (erro_desligar != ESP_OK) {
-            ESP_LOGW(ETIQUETA, "Falha ao desligar rádio após conexão recusada: %s",
-                     esp_err_to_name(erro_desligar));
-        }
-        if (aguardar) {
-            ESP_LOGW(ETIQUETA,
-                     "Rede principal indisponível; redes secundárias aguardam autorização");
-        }
-        return ultimo_erro;
-    }
+    std::array<const char*, configuracao::MAXIMO_REDES_WIFI_USUARIO + 2> nomes{};
+    std::array<bool, configuracao::MAXIMO_REDES_WIFI_USUARIO + 2> vistas{};
+    for (size_t indice = 0; indice < quantidade; ++indice)
+        nomes[indice] = candidatos[indice].ssid;
+    const esp_err_t resultado_busca = gerenciador_wifi_procurar_redes(
+        nomes.data(), quantidade, vistas.data(), pdMS_TO_TICKS(15000));
+    if (resultado_busca != ESP_OK)
+        ESP_LOGW(ETIQUETA, "Varredura indisponível (%s); tentando perfis salvos na ordem normal",
+                 esp_err_to_name(resultado_busca));
 
-    ESP_LOGW(ETIQUETA,
-             "Rede principal indisponível; tentando %u rede(s) secundária(s)",
-             static_cast<unsigned>(copia.quantidade));
-    for (uint8_t indice = 0; indice < copia.quantidade; ++indice) {
-        if ((usar_autorizacao &&
-             std::strcmp(copia.redes[indice].ssid, perfil_autorizado.ssid) == 0) ||
-            std::strcmp(copia.redes[indice].ssid, principal.ssid) == 0) {
-            continue;
-        }
-        ultimo_erro =
-            aplicar_perfil(copia.redes[indice], copia.politica, instante_limite);
+    esp_err_t ultimo_erro = ESP_ERR_NOT_FOUND;
+    bool alguma_vista = false;
+    for (size_t indice = 0; indice < quantidade; ++indice) {
+        if (resultado_busca == ESP_OK && !vistas[indice]) continue;
+        alguma_vista = true;
+        ultimo_erro = aplicar_perfil(candidatos[indice], copia.politica,
+                                    instante_limite);
         if (ultimo_erro == ESP_OK) {
             ESP_LOGI(ETIQUETA, "Sessão de rede aberta por '%s'",
-                     copia.redes[indice].ssid);
+                     candidatos[indice].ssid);
             return ESP_OK;
         }
         if (agora_ms() >= instante_limite) break;
     }
-
-    definir_sessao(false, false);
+    if (resultado_busca == ESP_OK && !alguma_vista)
+        ESP_LOGW(ETIQUETA, "Nenhuma rede Wi-Fi salva/autorizada foi encontrada na varredura");
+    const bool aguardar_autorizacao = !copia.automatico && copia.quantidade > 0;
+    definir_sessao(false, aguardar_autorizacao);
     const esp_err_t erro_desligar = gerenciador_wifi_desativar(TEMPO_DESLIGAMENTO);
     if (erro_desligar != ESP_OK) {
         ESP_LOGW(ETIQUETA, "Falha ao desligar rádio após tentativas: %s",
                  esp_err_to_name(erro_desligar));
     }
-    ESP_LOGE(ETIQUETA, "Nenhuma rede Wi-Fi autorizada está disponível");
+    if (aguardar_autorizacao)
+        ESP_LOGW(ETIQUETA, "Redes secundárias salvas aguardam autorização ou conexão automática");
+    ESP_LOGE(ETIQUETA, "Nenhuma rede Wi-Fi autorizada conectou; último erro: %s",
+             esp_err_to_name(ultimo_erro));
     return ultimo_erro;
 }
 

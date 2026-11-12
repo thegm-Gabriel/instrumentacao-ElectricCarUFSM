@@ -224,6 +224,13 @@ static resultado_validacao_t validar_e_salvar_pacote(const pacote_telemetria_t *
     dados_compartilhados.temperatura_mpu_centesimos_c =
         pacote->temperatura_mpu_centesimos_c;
     dados_compartilhados.estado_mpu = pacote->estado_mpu;
+    dados_compartilhados.ina_shunt_microvolts = pacote->ina_shunt_microvolts;
+    dados_compartilhados.ina_temperatura_centesimos_c =
+        pacote->ina_temperatura_centesimos_c;
+    dados_compartilhados.ina_energia_mwh = pacote->ina_energia_mwh;
+    dados_compartilhados.ina_carga_mah = pacote->ina_carga_mah;
+    dados_compartilhados.ina_diagnostico = pacote->ina_diagnostico;
+    dados_compartilhados.estado_ina = pacote->estado_ina;
     dados_compartilhados.pacotes_validos++;
     const uint64_t total_esperado = (uint64_t)dados_compartilhados.pacotes_validos +
                                     dados_compartilhados.pacotes_perdidos;

@@ -106,7 +106,7 @@ cartão volta a estar disponível; consulte [diagnóstico e recuperação](mestr
    aparecem no diagnóstico da Equipe.
 2. No terminal serial do mestre, a 115200 baud, escolha a operação de enviar
    CSVs pendentes ao Google. Como alternativa, conecte-se à rede da Equipe,
-   abra `http://192.168.4.1/`, prepare o acesso com a chave administrativa e,
+   abra `http://192.168.4.1/` e,
    em **Comandos → Sincronização com Google**, clique **Sincronizar arquivos
    pendentes**. O botão **Atualizar estado** apenas consulta; não inicia envio.
 3. A resposta inicial confirma que o pedido foi aceito ou recusado; **não**
@@ -152,7 +152,7 @@ automaticamente.
 
 | Sinal observado | O que conferir |
 |---|---|
-| Botão indisponível ou pedido recusado | Estado do mestre, cartão e serviço de registro; sincronização ou outra sessão Wi-Fi já em andamento; chave administrativa da Equipe. |
+| Botão indisponível ou pedido recusado | Estado do mestre, cartão e serviço de registro; sincronização ou outra sessão Wi-Fi já em andamento. |
 | Nenhum progresso e zero pendentes | A execução não encontrou CSVs com amostras para enviar. Consulte o resultado final e o contador de registro antes de tentar novamente. |
 | Falha de rede, DNS ou TLS | Credenciais da rede externa, acesso à internet, sinal Wi-Fi e estado da sessão no diagnóstico/serial do mestre. |
 | `ERRO:configuracao` | Falta `ID_PASTA_TELEMETRIA` ou `TOKEN_TELEMETRIA` nas propriedades do script. |

@@ -2,6 +2,7 @@
 #include "nucleo/configuracao_tarefas.h"
 #include "servicos/servico_supervisao.h"
 #include "servicos/servico_aceleracao.h"
+#include "servicos/servico_controle_sensores.h"
 
 #include <algorithm>
 #include <cmath>
@@ -186,8 +187,52 @@ void tarefa_aquisicao(void*) {
     SentidoAceleracaoLongitudinal sentido_confirmado =
         SentidoAceleracaoLongitudinal::Neutro;
     SentidoAceleracaoLongitudinal candidato_sentido = sentido_confirmado;
+    bool estava_pausado = false;
 
     while (true) {
+        if (!servico_controle_sensores_ativo(SensorControlado::Mpu6050)) {
+            if (!estava_pausado) {
+                portENTER_CRITICAL(&trava_estado);
+                estado.leitura = {};
+                estado.calibrado = false;
+                estado.amostras_calibracao_coletadas = 0;
+                estado.aceleracao_longitudinal_g = 0.0f;
+                estado.aceleracao_longitudinal_ms2 = 0.0f;
+                estado.sentido = SentidoAceleracaoLongitudinal::Neutro;
+                estado.ultimo_erro = ESP_ERR_INVALID_STATE;
+                portEXIT_CRITICAL(&trava_estado);
+            }
+            estava_pausado = true;
+            instante_anterior_us = esp_timer_get_time();
+            // A tarefa continua ativa para o supervisor, sem transações I²C.
+            servico_supervisao_informar_atividade(ModuloSupervisionado::Aceleracao,
+                "aceleracao", "leitura MPU6050 pausada pelo terminal", 2000);
+            vTaskDelayUntil(&proximo_ciclo, periodo);
+            continue;
+        }
+        if (estava_pausado) {
+            soma_aceleracao_calibracao = {};
+            soma_giroscopio_calibracao = {};
+            gravidade_estimada = {};
+            desvio_giroscopio = {};
+            modulo_gravidade_calibrada = 1.0f;
+            amostras_calibracao = 0;
+            aceleracao_filtrada_g = 0.0f;
+            calibrado_local = false;
+            eixo_compativel_local = false;
+            sentido_confirmado = SentidoAceleracaoLongitudinal::Neutro;
+            candidato_sentido = sentido_confirmado;
+            inicio_candidato_sentido_us = esp_timer_get_time();
+            instante_anterior_us = inicio_candidato_sentido_us;
+            portENTER_CRITICAL(&trava_estado);
+            estado.calibrado = false;
+            estado.leitura = {};
+            estado.sentido = SentidoAceleracaoLongitudinal::Neutro;
+            estado.aceleracao_longitudinal_g = 0.0f;
+            estado.aceleracao_longitudinal_ms2 = 0.0f;
+            portEXIT_CRITICAL(&trava_estado);
+            estava_pausado = false;
+        }
         LeituraMpu6050 leitura{};
         servico_supervisao_informar_atividade(ModuloSupervisionado::Aceleracao,
             "aceleracao", "aquisicao MPU6050", 2000);

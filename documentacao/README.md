@@ -37,7 +37,7 @@ flowchart LR
     E <-->|Wi-Fi / HTTP| PE["Navegador · painel técnico"]
     V <-->|Wi-Fi / HTTP| PV["Navegador · painel público"]
     M <-->|SPI2| SD["microSD · CSV e logs"]
-    M <-->|I²C| IO["MPU6050 e OLED"]
+    M <-->|I²C| IO["MPU6050, INA228 e OLED"]
     M <-->|Wi-Fi / HTTPS| REDE["Releases OTA e Google"]
 ```
 
@@ -109,33 +109,30 @@ o cabeçalho local de credenciais.
 
 ## Acesso aos painéis
 
-- Na rede `UFSM-Carro-Equipe`, abra `http://192.168.4.1/` por HTTP. As rotas
+- Na rede `NEXUS-Equipe`, abra `http://192.168.4.1/` por HTTP. As rotas
   `/painel`, `/diagnostico` e `/mestre` entregam a mesma interface com sete
   páginas: **Telemetria, Comandos, Controle, ESP32 — Mestre, ESP32 — Equipe,
   ESP32 — Visitantes e Sobre**. Comandos reúne Wi-Fi, OTA e Google; Controle
   apresenta os pedidos de marcha, limites e parada remota, ainda sem atuação
   física. As páginas dos ESPs apresentam diagnóstico. O AP da Equipe não
   oferece DNS local; o anúncio do portal pelo DHCP depende do cliente.
-- Na rede `UFSM-Carro-Visitantes`, abra `http://192.168.4.1/`. O DNS cativo
+- Na rede `NEXUS-Visitantes`, abra `http://192.168.4.1/`. O DNS cativo
   responde consultas IPv4 com esse IP quando a tarefa DNS está disponível. A
   página pública apresenta telemetria, histórico da sessão e Sobre, sem
   controles remotos do mestre.
 
 Cada `192.168.4.1` pertence ao AP conectado naquele momento. As APIs e as
 limitações dos dados reais e simulados estão no [guia dos satélites](satelites.md).
-No painel da Equipe, as consultas são abertas para quem está no AP. Para
-enviar comandos, use **Preparar acesso** e a chave administrativa exibida no
-serial do satélite da Equipe (115200 baud). A chave é gerada na primeira
-partida e permanece na NVS; a senha do Wi-Fi continua separada. Consulte
-[acesso administrativo e endpoints](satelites.md).
+No painel da Equipe, consultas e comandos ficam disponíveis aos clientes
+conectados ao AP. Alterações protegidas do Wi-Fi do mestre ainda exigem sua
+permissão própria. Consulte [APIs e comandos](satelites.md).
 
 ## Uso durante um teste
 
 1. Ligue o mestre e os satélites com GND e enlaces UART conforme
    [pinagem](pinagem.md). Observe no terminal do mestre (115200 baud) se a
    partida informou falha ou operação degradada.
-2. Conecte o computador à rede da Equipe e abra o painel pelo IP acima. Antes
-   de enviar ações, obtenha a chave no serial da Equipe e prepare o acesso.
+2. Conecte o computador à rede da Equipe e abra o painel pelo IP acima.
    Em **Telemetria**, confira origem real/simulada, idade da amostra e estado dos
    enlaces antes de interpretar um número. Uma leitura antiga não representa o
    instante atual.

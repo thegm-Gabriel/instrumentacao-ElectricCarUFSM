@@ -48,7 +48,8 @@ struct ResumoWifi {
     PoliticaConexaoWifi politica;
 };
 
-// Carrega os perfis da NVS já inicializada e tenta primeiro a rede principal.
+// Carrega os perfis da NVS já inicializada; na sessão, procura redes disponíveis
+// e preserva a prioridade da principal entre as redes autorizadas encontradas.
 esp_err_t servico_wifi_iniciar();
 esp_err_t servico_wifi_abrir_sessao(FinalidadeSessaoWifi finalidade);
 esp_err_t servico_wifi_encerrar_sessao(FinalidadeSessaoWifi finalidade);

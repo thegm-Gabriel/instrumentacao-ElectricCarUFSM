@@ -110,10 +110,8 @@ compartilham esse estado.
 Use nomes e senhas fictícios nos formulários. A ferramenta não acessa ESPs,
 Google ou redes Wi-Fi, não atualiza firmware e descarta as senhas recebidas.
 A permissão administrativa do **mestre** na prévia aceita um texto fictício não
-vazio. Para preparar o acesso aos comandos HTTP da Equipe, use a chave de teste
-`00000000000000000000000000000000`, mostrada na barra da prévia e no terminal.
-Ela só vale no simulador; no ESP, a chave real aparece no terminal serial do
-satélite da equipe e permanece guardada na NVS.
+vazio. Os demais comandos da Equipe não exigem chave adicional. A prévia aceita
+senha vazia para simular uma rede aberta.
 O simulador serve para avaliar a interface e seus estados; UART, SD, tempos
 reais de transmissão e reconexões físicas ainda precisam de teste em bancada.
 

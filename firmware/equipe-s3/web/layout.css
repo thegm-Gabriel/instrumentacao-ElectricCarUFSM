@@ -415,15 +415,37 @@ dialog { background: var(--card); }
 .command-grid > .command-card:nth-child(3) { border-color: #566e62; box-shadow: inset 3px 0 #80b99f; }
 .command-grid > .command-card:nth-child(4) { border-color: #5e6d7b; box-shadow: inset 3px 0 #93abc3; }
 .command-card[open] > summary { background: #ffffff07; }
-.chart-signal-pair { display: flex; align-items: flex-end; gap: 8px; }
+.chart-signal-pair { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
 .chart-signal-control { display: grid; gap: 3px; color: var(--muted); font-size: 11px; }
 .chart-signal-control select { min-width: 112px; max-width: 130px; min-height: 36px; }
 .chart-legend-row { justify-content: flex-end; margin-top: 8px; }
 .electric-primary-key, .electric-secondary-key { background: var(--series-color, var(--accent)); }
+.electric-extra-legend .legend-key { width: 13px; height: 3px; border-radius: 2px; }
+.electric-extra-legend { flex-wrap: wrap; white-space: normal !important; }
+#electric-tertiary-label { overflow-wrap: anywhere; white-space: normal; }
+.sensor-card .bars { margin: 16px 0 19px; }
+.sensor-readings { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 20px; }
+.sensor-group { min-width: 0; border-top: 1px solid #527080; padding-top: 12px; }
+.sensor-group-electric { border-top-color: #6a968e; }
+.sensor-group h4 { margin: 0; font-size: 13px; color: #e9f4f6; }
+.sensor-group h4 small { margin-left: 5px; color: #9db6bf; font-size: 11px; font-weight: 500; }
+.sensor-group-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.sensor-group .badge { padding: 3px 8px; font-size: 10px; }
+.sensor-group dl { margin-top: 8px; }
+.sensor-group dl > div { align-items: flex-start; gap: 8px; }
+.sensor-group dd { overflow-wrap: anywhere; min-width: 0; }
+.sensor-card .context-note { margin-top: 18px; }
+@media (max-width: 1200px) and (min-width: 761px) { .sensor-readings { grid-template-columns: 1fr; gap: 15px; } }
+@media (max-width: 510px) { .sensor-readings { grid-template-columns: 1fr; gap: 15px; } }
 .electric-chart-card .chart-wrap { margin-top: 5px; }
 .chart-card .chart-wrap { border-top: 1px solid #334e60; padding-top: 8px; }
 .electric-chart-card .chart-wrap { border-top-color: #5d6559; }
-.chart-tip { border-radius: 9px; padding: 8px 11px; }
+.chart-tip { display: grid; gap: 5px; min-width: 185px; max-width: min(340px,calc(100vw - 48px)); border-radius: 9px; padding: 9px 11px; white-space: normal; }
+.chart-tip-time { display: block; padding-bottom: 4px; border-bottom: 1px solid #43576b; color: #dceaf2; font-size: 11px; }
+.chart-tip-reading { display: grid; grid-template-columns: 7px minmax(0,1fr) auto; align-items: center; gap: 7px; line-height: 1.35; }
+.chart-tip-reading span { min-width: 0; overflow-wrap: anywhere; color: #c4d4df; }
+.chart-tip-reading b { padding-left: 6px; color: #f3f8fb; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.chart-tip-key { width: 7px; height: 7px; border-radius: 50%; }
 
 /* Paginas dos ESPs: resumo e comunicacao lado a lado, historico em largura total. */
 #mestre .device-details, #equipe .device-details, #visitantes .device-details {
@@ -1150,7 +1172,3 @@ body::before{opacity:.56;background:radial-gradient(circle,#87cce01a .8px,transp
 @media(max-width:760px){.tabs{padding:0;gap:1px;margin-bottom:7px;border-top:1px solid #47677770}.tab{min-height:43px;padding:10px 13px}.speed-card .card-label{flex-wrap:wrap}.metrics>.metric-card{padding:18px 19px}.chart-card,.detail-card{padding:18px 19px}body::before{opacity:.35}}
 @media(max-width:510px){.brand strong{font-size:17px}.brand small{font-size:9px}.speed-peak-label{font-size:10px}.metrics>.metric-card{min-height:117px}.metrics>.metric-card .metric-value strong{font-size:34px}.connection-count{padding:15px 17px}.quick-strip>div{padding:12px 13px}.speed-tick-label{font-size:8.2px}.speed-tick-label.major{font-size:9.5px}}
 @media(prefers-reduced-motion:reduce){.speed-peak-label,.speed-readout strong,.power-rail-regen,.power-rail-consume,.power-peak-marker,.fold-panel>summary,.command-card>summary{transition:none}}
-.admin-access{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:0 0 20px;padding:13px 16px;border:1px solid #48738a80;border-radius:14px;background:linear-gradient(110deg,#17384a99,#142c3a77)}
-.admin-access p{margin:0;color:#c2d8e4;font-size:13px;line-height:1.45}
-.admin-access .button{flex:none;white-space:nowrap}
-@media(max-width:600px){.admin-access{align-items:stretch;flex-direction:column;gap:10px}.admin-access .button{align-self:flex-start}}

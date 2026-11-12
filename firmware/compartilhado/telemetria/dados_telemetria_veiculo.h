@@ -46,6 +46,14 @@ struct DadosTelemetriaVeiculo {
     float freio_percentual = 0.0f;
     float tensao_pacote_v = 0.0f;
     float corrente_a = 0.0f;
+    bool eletrica_valida = false;
+    float ina_tensao_shunt_mv = 0.0f;
+    float ina_temperatura_c = 0.0f;
+    double ina_energia_wh = 0.0;
+    double ina_carga_ah = 0.0;
+    uint16_t ina_diagnostico = 0;
+    bool ina_energia_valida = false;
+    bool ina_carga_valida = false;
     float carga_percentual = 0.0f;
     float tensoes_celulas_v[4] = {};
     double latitude = 0.0;

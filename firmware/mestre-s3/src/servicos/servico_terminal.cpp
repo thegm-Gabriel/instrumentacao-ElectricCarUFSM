@@ -14,9 +14,11 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "gerenciadores/gerenciador_i2c.h"
+#include "dispositivos/ina228.h"
 #include "nucleo/configuracao_placa.h"
 #include "servicos/servico_aceleracao.h"
 #include "servicos/servico_comandos.h"
+#include "servicos/servico_controle_sensores.h"
 #include "servicos/servico_diagnostico.h"
 #include "servicos/servico_gravador_audio_treinamento.h"
 #include "servicos/servico_odometro.h"
@@ -34,11 +36,14 @@ bool iniciado = false;
 
 enum class TelaTerminal : uint8_t {
     Principal,
+    Logs,
     Sensores,
+    ControleSensores,
     SensorAdc,
     SensorMpu6050,
     SensorEncoders,
     SensorI2c,
+    SensorIna228,
     Ota,
     OtaIntervalo,
     OtaIntervaloTelemetria,
@@ -96,6 +101,7 @@ enum class ResultadoLeituraLinha : uint8_t {
 
 constexpr OpcaoMenu OPCOES_PRINCIPAL_MONITORAMENTO[] = {
     {1, "Mostrar resumo completo agora"},
+    {11, "Ver estado rápido do sistema"},
     {3, "Configurar intervalos dos relatórios"},
     {4, "Pausar ou retomar relatórios periódicos"},
     {7, "Sensores e diagnóstico"},
@@ -110,7 +116,46 @@ constexpr OpcaoMenu OPCOES_PRINCIPAL_CONECTIVIDADE[] = {
 
 constexpr OpcaoMenu OPCOES_PRINCIPAL_FERRAMENTAS[] = {
     {9, "Gravar áudio WAV para treinamento de IA (temporário)"},
+    {10, "Avisos, logs e aparência do terminal"},
 };
+
+struct FonteLogTerminal {
+    const char* nome;
+    const char* etiqueta;
+    esp_log_level_t nivel;
+};
+
+FonteLogTerminal fontes_log[] = {
+    {"Wi-Fi", "servico_wifi", ESP_LOG_INFO},
+    {"Rádio Wi-Fi", "gerenciador_wifi", ESP_LOG_INFO},
+    {"OTA", "servico_ota", ESP_LOG_INFO},
+    {"Transporte OTA", "ota_uart", ESP_LOG_INFO},
+    {"Google e SD", "registro_telemetria", ESP_LOG_INFO},
+    {"Telemetria", "servico_telemetria", ESP_LOG_INFO},
+    {"Sensores", "diagnostico", ESP_LOG_INFO},
+    {"Comunicação UART", "enlace_satelites", ESP_LOG_INFO},
+    {"Comandos", "servico_comandos", ESP_LOG_INFO},
+    {"Supervisão", "supervisao", ESP_LOG_INFO},
+    {"Sinalização", "sinalizacao", ESP_LOG_INFO},
+    {"Relatórios", "relatorios", ESP_LOG_INFO},
+    {"Cartão SD", "gerenciador_sd", ESP_LOG_INFO},
+    {"Odômetro", "servico_odometro", ESP_LOG_INFO},
+    {"Aceleração", "servico_aceleracao", ESP_LOG_INFO},
+    {"I²C", "gerenciador_i2c", ESP_LOG_INFO},
+    {"Simulador", "simulador_telemetria", ESP_LOG_INFO},
+    {"Terminal", "terminal", ESP_LOG_INFO},
+};
+bool terminal_cores = true;
+esp_log_level_t nivel_global_logs = ESP_LOG_INFO;
+
+const char* nome_nivel_log(esp_log_level_t nivel) {
+    switch (nivel) {
+        case ESP_LOG_NONE: return "silenciado";
+        case ESP_LOG_ERROR: return "erros";
+        case ESP_LOG_WARN: return "avisos";
+        default: return "informações";
+    }
+}
 
 constexpr OpcaoMenu OPCOES_SATELITES[] = {
     {1, "Ping do satélite da equipe"},
@@ -181,8 +226,89 @@ void imprimir_linha() {
 
 void imprimir_titulo(const char* titulo) {
     imprimir_linha();
-    std::printf("  %s\r\n", titulo);
+    std::printf("  %s%s%s\r\n", terminal_cores ? "\033[1;36m" : "",
+                titulo, terminal_cores ? "\033[0m" : "");
     std::printf("============================================================\r\n");
+}
+
+void mostrar_menu_principal();
+
+void mostrar_menu_logs() {
+    imprimir_titulo("NEXUS | AVISOS E TERMINAL");
+    std::printf("\r\n  Nível geral: %s | cores: %s\r\n",
+                nome_nivel_log(nivel_global_logs), terminal_cores ? "ligadas" : "desligadas");
+    std::printf("  [1] Mostrar informações, avisos e erros\r\n");
+    std::printf("  [2] Mostrar só avisos e erros\r\n");
+    std::printf("  [3] Mostrar só erros\r\n");
+    std::printf("  [4] Silenciar todos os logs\r\n");
+    std::printf("  [5] Ligar/desligar cores do menu\r\n");
+    std::printf("\r\n  Serviço específico: selecione para alternar o nível\r\n");
+    for (size_t i = 0; i < sizeof(fontes_log) / sizeof(fontes_log[0]); ++i)
+        std::printf("  [%u] %-20s %s\r\n", static_cast<unsigned>(i + 10),
+                    fontes_log[i].nome, nome_nivel_log(fontes_log[i].nivel));
+    std::printf("  [0] Voltar ao menu principal\r\n");
+    imprimir_prompt("Mudanças temporárias: reiniciar restaura os níveis do firmware.");
+}
+
+void tratar_menu_logs(unsigned long opcao) {
+    if (opcao == 0) {
+        tela_atual = TelaTerminal::Principal;
+        mostrar_menu_principal();
+        return;
+    }
+    if (opcao >= 1 && opcao <= 4) {
+        constexpr esp_log_level_t niveis[] = {
+            ESP_LOG_INFO, ESP_LOG_WARN, ESP_LOG_ERROR, ESP_LOG_NONE};
+        nivel_global_logs = niveis[opcao - 1];
+        esp_log_level_set("*", nivel_global_logs);
+        for (auto& fonte : fontes_log) fonte.nivel = nivel_global_logs;
+    } else if (opcao == 5) {
+        terminal_cores = !terminal_cores;
+    } else if (opcao >= 10 && opcao < 10 + sizeof(fontes_log) / sizeof(fontes_log[0])) {
+        auto& fonte = fontes_log[opcao - 10];
+        fonte.nivel = fonte.nivel == ESP_LOG_INFO ? ESP_LOG_WARN :
+                      fonte.nivel == ESP_LOG_WARN ? ESP_LOG_ERROR :
+                      fonte.nivel == ESP_LOG_ERROR ? ESP_LOG_NONE : ESP_LOG_INFO;
+        esp_log_level_set(fonte.etiqueta, fonte.nivel);
+    } else {
+        std::printf("\r\nOpção inválida.\r\n");
+    }
+    mostrar_menu_logs();
+}
+
+void mostrar_estado_rapido() {
+    const ResumoSaudeSistema saude = servico_diagnostico_obter_resumo();
+    const ResumoWifi wifi = servico_wifi_obter_resumo();
+    const SituacaoOta ota = servico_ota_obter_situacao();
+    const EstadoRegistroTelemetria sd =
+        servico_registro_telemetria_obter_estado();
+    const char* estado_saude = saude.estado == EstadoSaudeSistema::Saudavel ? "normal" :
+        saude.estado == EstadoSaudeSistema::Recuperando ? "recuperando" :
+        saude.estado == EstadoSaudeSistema::Atencao ? "degradado" : "falha";
+    imprimir_titulo("ESTADO RÁPIDO DO MESTRE");
+    std::printf("  Saúde: %s | causas: 0x%08lX | ativo: %llu s\r\n",
+                saude.valido ? estado_saude : "ainda sem leitura",
+                static_cast<unsigned long>(saude.causas_ativas),
+                static_cast<unsigned long long>(saude.tempo_ativo_ms / 1000));
+    std::printf("  Memória interna: %lu KiB livres | maior bloco: %lu KiB\r\n",
+                static_cast<unsigned long>(saude.heap_interno_livre / 1024),
+                static_cast<unsigned long>(saude.maior_bloco_heap_interno / 1024));
+    std::printf("  PSRAM: %lu KiB livres | pilha mínima: %lu B (%s)\r\n",
+                static_cast<unsigned long>(saude.psram_livre / 1024),
+                static_cast<unsigned long>(saude.bytes_pilha_livres),
+                saude.tarefa_menor_pilha[0] ? saude.tarefa_menor_pilha : "indisponível");
+    std::printf("  Wi-Fi: %s | principal: %s | %u rede(s) salva(s)\r\n",
+                wifi.conectado ? "conectado" : wifi.sessao_em_andamento ?
+                    "em sessão" : "em repouso",
+                wifi.rede_principal[0] ? wifi.rede_principal : "não definida",
+                static_cast<unsigned>(wifi.quantidade_redes_usuario));
+    std::printf("  OTA: %s | SD: %s | CSV pendentes: %lu\r\n",
+                servico_ota_nome_estado(ota.estado),
+                sd.cartao_disponivel ? "pronto" : "indisponível",
+                static_cast<unsigned long>(sd.arquivos_pendentes));
+    std::printf("  Satélites: equipe %s, visitantes %s\r\n",
+                saude.equipe_respondendo ? "respondendo" : "sem resposta",
+                saude.visitantes_respondendo ? "respondendo" : "sem resposta");
 }
 
 void mostrar_menu_principal() {
@@ -191,7 +317,7 @@ void mostrar_menu_principal() {
     imprimir_opcoes(OPCOES_PRINCIPAL_MONITORAMENTO, "    ");
     std::printf("\r\n  CONECTIVIDADE E MANUTENÇÃO\r\n");
     imprimir_opcoes(OPCOES_PRINCIPAL_CONECTIVIDADE, "    ");
-    std::printf("\r\n  FERRAMENTA TEMPORÁRIA\r\n");
+    std::printf("\r\n  FERRAMENTAS E TERMINAL\r\n");
     imprimir_opcoes(OPCOES_PRINCIPAL_FERRAMENTAS, "    ");
     std::printf("\r\n    [0] Redesenhar este menu\r\n");
     imprimir_prompt("Digite uma opção e pressione Enter. Enter vazio redesenha o menu.");
@@ -220,6 +346,14 @@ void mostrar_menu_sensores() {
                 servico_simulador_telemetria_esta_ativo()
                     ? "simulador"
                     : "sensores reais");
+    std::printf("Leitura permitida : ADC=%s | MPU=%s | encoders=%s | INA=%s\r\n",
+                servico_controle_sensores_ativo(SensorControlado::Adc) ? "sim" : "não",
+                servico_controle_sensores_ativo(SensorControlado::Mpu6050) ? "sim" : "não",
+                servico_controle_sensores_ativo(SensorControlado::Encoders) ? "sim" : "não",
+                servico_controle_sensores_ativo(SensorControlado::Ina228) ? "sim" : "não");
+    std::printf("                   Microfone=%s | temperatura ESP=%s\r\n",
+                servico_controle_sensores_ativo(SensorControlado::Microfone) ? "sim" : "não",
+                servico_controle_sensores_ativo(SensorControlado::TemperaturaEsp) ? "sim" : "não");
     std::printf("Saúde do mestre   : %s | causas=0x%03lX\r\n",
                 servico_diagnostico_nome_estado(saude.estado),
                 static_cast<unsigned long>(saude.causas_ativas));
@@ -230,8 +364,12 @@ void mostrar_menu_sensores() {
         std::printf("LEITURAS: aguardando a primeira amostra de telemetria.\r\n\r\n");
     } else {
         std::printf("LEITURAS MAIS RECENTES\r\n");
-        std::printf("  ADC tensão       : %u de 4095\r\n",
-                    static_cast<unsigned>(dados.tensao_adc_bruta));
+        if (servico_controle_sensores_ativo(SensorControlado::Adc))
+            std::printf("  ADC tensão       : %u de 4095\r\n",
+                        static_cast<unsigned>(dados.tensao_adc_bruta));
+        else
+            std::printf("  ADC tensão       : PAUSADO\r\n");
+        if (servico_controle_sensores_ativo(SensorControlado::Mpu6050)) {
         std::printf("  Acelerômetro XYZ : %d, %d, %d\r\n",
                     dados.aceleracao_x, dados.aceleracao_y, dados.aceleracao_z);
         std::printf("  Aceleração XYZ   : %.3f, %.3f, %.3f g\r\n",
@@ -248,13 +386,31 @@ void mostrar_menu_sensores() {
                         configuracao::AMOSTRAS_CALIBRACAO_MPU6050));
         std::printf("  Giroscópio XYZ   : %d, %d, %d\r\n",
                     dados.giroscopio_x, dados.giroscopio_y, dados.giroscopio_z);
-        std::printf("  Velocidade       : %.2f km/h\r\n",
-                    dados.velocidade_kmh);
+        } else {
+            std::printf("  MPU6050          : PAUSADO\r\n");
+        }
+        if (servico_controle_sensores_ativo(SensorControlado::Encoders))
+            std::printf("  Velocidade       : %.2f km/h\r\n", dados.velocidade_kmh);
+        else
+            std::printf("  Velocidade       : leitura dos encoders PAUSADA\r\n");
         std::printf("  Percurso         : %.3f km\r\n", dados.percurso_km);
         std::printf("  Odômetro         : %.3f km\r\n\r\n", dados.odometro_km);
+        if (dados.simulado) {
+            std::printf("  Elétrica         : %.2f V | %+.3f A | %+.1f W (simulação)\r\n\r\n",
+                        dados.tensao_pacote_v, dados.corrente_a, dados.potencia_w);
+        } else if (!servico_controle_sensores_ativo(SensorControlado::Ina228)) {
+            std::printf("  INA228           : PAUSADO\r\n\r\n");
+        } else if (dados.eletrica_valida) {
+            std::printf("  INA228            : %.2f V | %+.3f A | %+.1f W\r\n\r\n",
+                        dados.tensao_pacote_v, dados.corrente_a, dados.potencia_w);
+        } else {
+            std::printf("  INA228            : sem leitura elétrica válida\r\n\r\n");
+        }
     }
 
     std::printf("ENCODERS / PCNT\r\n");
+    if (!servico_controle_sensores_ativo(SensorControlado::Encoders))
+        std::printf("  Leitura pausada: valores abaixo são o último retrato; PCNT continua contando.\r\n");
     std::printf("  Esquerdo         : %s | GPIO A=%d B=%d | PCNT=%llu\r\n",
                 encoder_esquerdo.inicializado ? "ativo" : "inativo",
                 encoder_esquerdo.pino_a, encoder_esquerdo.pino_b,
@@ -303,6 +459,9 @@ void mostrar_menu_sensores() {
     std::printf("  Encoder          : erros=%lu | último=%s\r\n",
                 static_cast<unsigned long>(sensores.encoder.total),
                 esp_err_to_name(sensores.encoder.ultimo_erro));
+    std::printf("  INA228           : erros=%lu | último=%s\r\n",
+                static_cast<unsigned long>(sensores.ina228.total),
+                esp_err_to_name(sensores.ina228.ultimo_erro));
     std::printf("  Barramento I2C   : operações=%lu | erros=%lu | último=%s\r\n\r\n",
                 static_cast<unsigned long>(i2c.operacoes_ok),
                 static_cast<unsigned long>(i2c.erros),
@@ -315,13 +474,42 @@ void mostrar_menu_sensores() {
     std::printf("  [5] Ver somente o MPU6050\r\n");
     std::printf("  [6] Ver somente encoders e odômetro\r\n");
     std::printf("  [7] Ver somente o barramento I2C\r\n");
+    std::printf("  [8] Ver somente o INA228\r\n");
+    std::printf("  [9] Pausar ou retomar leituras dos sensores\r\n");
     imprimir_prompt("[Enter] Voltar ao menu principal");
+}
+
+void mostrar_controle_sensores() {
+    imprimir_titulo("CONTROLE DE LEITURAS | DIAGNÓSTICO");
+    std::printf("  Escolha um sensor para alternar seu estado:\r\n");
+    constexpr SensorControlado lista[] = {
+        SensorControlado::Adc, SensorControlado::Mpu6050,
+        SensorControlado::Encoders, SensorControlado::Ina228,
+        SensorControlado::Microfone, SensorControlado::TemperaturaEsp};
+    constexpr const char* nomes[] = {"ADC", "MPU6050", "Encoders", "INA228", "Microfone", "Temperatura ESP"};
+    for (size_t indice = 0; indice < 6; ++indice) {
+        std::printf("  [%u] %-10s : %s\r\n", static_cast<unsigned>(indice + 3),
+                    nomes[indice],
+                    servico_controle_sensores_ativo(lista[indice]) ? "leitura permitida" : "PAUSADO");
+    }
+    std::printf("\r\n  [1] Pausar todas as leituras\r\n");
+    std::printf("  [2] Retomar todas as leituras\r\n");
+    std::printf("\r\nA escolha vale até reiniciar o mestre. Na simulação, os dados continuam\r\n");
+    std::printf("simulados. O PCNT continua contando enquanto a leitura dos encoders está\r\n");
+    std::printf("pausada; a velocidade publicada vira zero, sem indicar que o carro parou.\r\n");
+    std::printf("O MPU6050 refaz a calibração ao voltar.\r\n");
+    imprimir_prompt("[Enter] Voltar a sensores e diagnóstico");
 }
 
 void mostrar_leitura_adc() {
     const RetratoDiagnosticoSistema retrato =
         servico_diagnostico_obter_retrato();
     imprimir_titulo("LEITOR DE TENSÃO | ADC");
+    if (!servico_controle_sensores_ativo(SensorControlado::Adc)) {
+        std::printf("Aquisição pausada pelo terminal. O valor anterior não é mostrado.\r\n");
+        imprimir_rodape_monitor_sensor();
+        return;
+    }
     std::printf("GPIO              : %d\r\n", configuracao::PINO_LEITURA_TENSAO);
     std::printf("Leitura bruta     : %u de 4095 (%.1f%% da escala)\r\n",
                 static_cast<unsigned>(retrato.telemetria_atual.tensao_adc_bruta),
@@ -334,12 +522,69 @@ void mostrar_leitura_adc() {
     imprimir_rodape_monitor_sensor();
 }
 
+void mostrar_leitura_ina228() {
+    const EstadoIna228 sensor = ina228_obter_estado();
+    const LeituraIna228& leitura = sensor.ultima_leitura;
+    imprimir_titulo("INA228 | MEDIÇÃO ELÉTRICA");
+    if (servico_simulador_telemetria_esta_ativo())
+        std::printf("Simulador ativo: o INA228 não recebe novas leituras; dados abaixo são históricos.\r\n");
+    if (!servico_controle_sensores_ativo(SensorControlado::Ina228)) {
+        std::printf("Aquisição pausada pelo terminal. O valor anterior não é mostrado.\r\n");
+        imprimir_rodape_monitor_sensor();
+        return;
+    }
+    std::printf("Estado            : %s | último=%s\r\n",
+                sensor.inicializado ? "ativo" : "indisponível",
+                esp_err_to_name(sensor.ultimo_erro));
+    std::printf("Endereço / ID     : 0x%02X / 0x%04X | calibração=%u\r\n",
+                configuracao::ENDERECO_INA228, sensor.identificacao,
+                sensor.calibracao);
+    std::printf("Shunt / limite    : %.3f mΩ / %.1f A\r\n",
+                configuracao::RESISTENCIA_SHUNT_INA228_OHM * 1000.0f,
+                configuracao::CORRENTE_MAXIMA_INA228_A);
+    std::printf("Leituras / erros  : %lu / %lu (consecutivos=%lu)\r\n",
+                static_cast<unsigned long>(sensor.leituras_ok),
+                static_cast<unsigned long>(sensor.erros_leitura),
+                static_cast<unsigned long>(sensor.erros_consecutivos));
+    if (leitura.valida) {
+        std::printf("Idade da leitura  : %llu ms\r\n",
+                    static_cast<unsigned long long>(
+                        esp_timer_get_time() / 1000 - leitura.instante_ms));
+        std::printf("VBUS / VSHUNT     : %.3f V / %+.4f mV\r\n",
+                    leitura.tensao_barramento_v, leitura.tensao_shunt_mv);
+        std::printf("Corrente / potência: %+.3f A / %+.1f W\r\n",
+                    leitura.corrente_a, leitura.potencia_w);
+        std::printf("Potência interna  : %.1f W (magnitude sem sinal)\r\n",
+                    leitura.potencia_chip_w);
+        std::printf("Temperatura chip  : %.2f °C\r\n", leitura.temperatura_chip_c);
+        if (leitura.energia_valida)
+            std::printf("Energia acumulada : %.2f Wh (desde reset do INA)\r\n",
+                        leitura.energia_j / 3600.0);
+        else
+            std::printf("Energia acumulada : indisponível (transbordamento)\r\n");
+        if (leitura.carga_valida)
+            std::printf("Carga acumulada   : %+.3f Ah (desde reset do INA)\r\n",
+                        leitura.carga_c / 3600.0);
+        else
+            std::printf("Carga acumulada   : indisponível (transbordamento)\r\n");
+        std::printf("Diagnóstico bruto : 0x%04X\r\n", leitura.diagnostico);
+    } else {
+        std::printf("Leitura           : indisponível; zero não é medição\r\n");
+    }
+    imprimir_rodape_monitor_sensor();
+}
+
 void mostrar_leitura_mpu6050() {
     const EstadoMpu6050 sensor = mpu6050_obter_estado();
     const EstadoServicoAceleracao aceleracao =
         servico_aceleracao_obter_estado();
     const LeituraMpu6050& leitura = aceleracao.leitura;
     imprimir_titulo("MPU6050 | LEITURA DETALHADA");
+    if (!servico_controle_sensores_ativo(SensorControlado::Mpu6050)) {
+        std::printf("Aquisição pausada pelo terminal. Ao retomar, a calibração será refeita.\r\n");
+        imprimir_rodape_monitor_sensor();
+        return;
+    }
     std::printf("Estado            : %s\r\n",
                 sensor.inicializado ? "ativo" : "INATIVO");
     std::printf("WHO_AM_I          : 0x%02X (%s)\r\n",
@@ -427,6 +672,11 @@ void mostrar_leitura_encoders() {
     const auto& direito = retrato.encoder_direito;
     const auto& odometro = retrato.odometro;
     imprimir_titulo("ENCODERS E ODÔMETRO | LEITURA DETALHADA");
+    if (!servico_controle_sensores_ativo(SensorControlado::Encoders)) {
+        std::printf("Leitura pausada pelo terminal; PCNT continua contando os pulsos.\r\n");
+        imprimir_rodape_monitor_sensor();
+        return;
+    }
     std::printf("Esquerdo          : %s | contagem=%llu | giros=%.3f\r\n",
                 esquerdo.inicializado ? "ativo" : "INATIVO",
                 static_cast<unsigned long long>(esquerdo.contagem_atual),
@@ -667,8 +917,8 @@ void solicitar_ssid_nova_rede() {
 
 void solicitar_senha_rede(const char* titulo) {
     std::printf("\r\n%s\r\n", titulo);
-    std::printf("Digite a senha (8 a 63 caracteres) e pressione Enter para enviar.\r\n");
-    std::printf("A entrada será mascarada com '*'. Enter vazio cancela.\r\n> ");
+    std::printf("Senha vazia para rede aberta; caso contrário, 8 a 63 caracteres.\r\n");
+    std::printf("A entrada não aparece no terminal.\r\n> ");
     std::fflush(stdout);
 }
 
@@ -850,6 +1100,11 @@ void alternar_pausa() {
 }
 
 void solicitar_nome_audio_treinamento() {
+    if (!servico_controle_sensores_ativo(SensorControlado::Microfone)) {
+        std::printf("\r\n[AVISO] Microfone pausado. Retome a leitura em Sensores e diagnóstico.\r\n");
+        mostrar_menu_principal();
+        return;
+    }
     tela_atual = TelaTerminal::AudioTreinamentoNome;
     std::memset(&contexto_audio, 0, sizeof(contexto_audio));
     imprimir_titulo("GRAVAÇÃO DO INMP441 | TREINAMENTO DE IA");
@@ -994,6 +1249,14 @@ void tratar_menu_principal(unsigned long opcao) {
         case 9:
             solicitar_nome_audio_treinamento();
             break;
+        case 10:
+            tela_atual = TelaTerminal::Logs;
+            mostrar_menu_logs();
+            break;
+        case 11:
+            mostrar_estado_rapido();
+            mostrar_menu_principal();
+            break;
         default:
             std::printf("\r\nOpção inválida. Escolha um número do menu.\r\n> ");
             std::fflush(stdout);
@@ -1030,6 +1293,13 @@ void tratar_menu_sensores(unsigned long opcao) {
         case 7:
             tela_atual = TelaTerminal::SensorI2c;
             return;
+        case 8:
+            tela_atual = TelaTerminal::SensorIna228;
+            return;
+        case 9:
+            tela_atual = TelaTerminal::ControleSensores;
+            mostrar_controle_sensores();
+            return;
         default:
             std::printf("\r\nOpção inválida. Escolha um número do menu.\r\n");
             break;
@@ -1037,11 +1307,30 @@ void tratar_menu_sensores(unsigned long opcao) {
     mostrar_menu_sensores();
 }
 
+void tratar_controle_sensores(unsigned long opcao) {
+    if (opcao == 1 || opcao == 2) {
+        servico_controle_sensores_definir_todos(opcao == 2);
+        ESP_LOGI(ETIQUETA, "Aquisição de todos os sensores %s pelo terminal",
+                 opcao == 2 ? "retomada" : "pausada");
+    } else if (opcao >= 3 && opcao <= 8) {
+        const SensorControlado sensor =
+            static_cast<SensorControlado>(opcao - 3);
+        const bool ativar = !servico_controle_sensores_ativo(sensor);
+        servico_controle_sensores_definir(sensor, ativar);
+        ESP_LOGI(ETIQUETA, "Aquisição do sensor %lu %s pelo terminal",
+                 opcao - 3, ativar ? "retomada" : "pausada");
+    } else {
+        std::printf("\r\nOpção inválida.\r\n");
+    }
+    mostrar_controle_sensores();
+}
+
 bool tela_monitora_sensor() {
     return tela_atual == TelaTerminal::SensorAdc ||
            tela_atual == TelaTerminal::SensorMpu6050 ||
            tela_atual == TelaTerminal::SensorEncoders ||
-           tela_atual == TelaTerminal::SensorI2c;
+           tela_atual == TelaTerminal::SensorI2c ||
+           tela_atual == TelaTerminal::SensorIna228;
 }
 
 void mostrar_monitor_sensor_atual() {
@@ -1060,6 +1349,9 @@ void mostrar_monitor_sensor_atual() {
             break;
         case TelaTerminal::SensorI2c:
             mostrar_leitura_i2c();
+            break;
+        case TelaTerminal::SensorIna228:
+            mostrar_leitura_ina228();
             break;
         default:
             break;
@@ -1528,10 +1820,8 @@ bool tela_recebe_texto_wifi() {
 }
 
 bool tela_oculta_entrada() {
-    return tela_atual == TelaTerminal::WifiNovaSenha ||
-           tela_atual == TelaTerminal::WifiSenhaAutomatico ||
+    return tela_atual == TelaTerminal::WifiSenhaAutomatico ||
            tela_atual == TelaTerminal::WifiSenhaPrincipal ||
-           tela_atual == TelaTerminal::WifiPrincipalSenha ||
            tela_atual == TelaTerminal::WifiSenhaRestaurar ||
            tela_atual == TelaTerminal::WifiSenhaPolitica;
 }
@@ -1602,6 +1892,8 @@ ResultadoLeituraLinha ler_linha_interativa(char* linha, size_t capacidade,
     size_t tamanho = 0;
     size_t caracteres_excedentes = 0;
     uint8_t caracteres_escape_restantes = 0;
+    const bool silenciosa = tela_atual == TelaTerminal::WifiNovaSenha ||
+                            tela_atual == TelaTerminal::WifiPrincipalSenha;
     linha[0] = '\0';
 
     while (true) {
@@ -1641,7 +1933,7 @@ ResultadoLeituraLinha ler_linha_interativa(char* linha, size_t capacidade,
         if (caractere == 0x15) {
             // Ctrl+U apaga toda a linha sem depender do programa de terminal.
             while (tamanho != 0) {
-                std::printf("\b \b");
+                if (!silenciosa) std::printf("\b \b");
                 tamanho--;
             }
             caracteres_excedentes = 0;
@@ -1657,7 +1949,7 @@ ResultadoLeituraLinha ler_linha_interativa(char* linha, size_t capacidade,
             if (tamanho != 0) {
                 tamanho--;
                 linha[tamanho] = '\0';
-                std::printf("\b \b");
+                if (!silenciosa) std::printf("\b \b");
                 std::fflush(stdout);
             }
             continue;
@@ -1675,7 +1967,7 @@ ResultadoLeituraLinha ler_linha_interativa(char* linha, size_t capacidade,
 
         linha[tamanho++] = static_cast<char>(caractere);
         linha[tamanho] = '\0';
-        std::putchar(ocultar ? '*' : static_cast<char>(caractere));
+        if (!silenciosa) std::putchar(ocultar ? '*' : static_cast<char>(caractere));
         std::fflush(stdout);
     }
 }
@@ -1702,8 +1994,8 @@ void tratar_texto_wifi(const char* texto) {
 
     if (tela_atual == TelaTerminal::WifiNovaSenha ||
         tela_atual == TelaTerminal::WifiPrincipalSenha) {
-        if (tamanho < 8 || tamanho > 63) {
-            std::printf("\r\nA senha deve ter entre 8 e 63 caracteres.\r\n> ");
+        if ((tamanho != 0 && tamanho < 8) || tamanho > 63) {
+            std::printf("\r\nUse senha vazia para rede aberta ou 8 a 63 caracteres.\r\n> ");
             std::fflush(stdout);
             return;
         }
@@ -1771,14 +2063,19 @@ void voltar_uma_tela() {
     } else if (tela_atual == TelaTerminal::SensorAdc ||
                tela_atual == TelaTerminal::SensorMpu6050 ||
                tela_atual == TelaTerminal::SensorEncoders ||
-               tela_atual == TelaTerminal::SensorI2c) {
+               tela_atual == TelaTerminal::SensorI2c ||
+               tela_atual == TelaTerminal::SensorIna228) {
+        tela_atual = TelaTerminal::Sensores;
+        mostrar_menu_sensores();
+    } else if (tela_atual == TelaTerminal::ControleSensores) {
         tela_atual = TelaTerminal::Sensores;
         mostrar_menu_sensores();
     } else if (tela_atual == TelaTerminal::AudioTreinamentoNome ||
                tela_atual == TelaTerminal::AudioTreinamentoDuracao) {
         tela_atual = TelaTerminal::Principal;
         mostrar_menu_principal();
-    } else if (tela_atual == TelaTerminal::Ota ||
+    } else if (tela_atual == TelaTerminal::Logs ||
+               tela_atual == TelaTerminal::Ota ||
                tela_atual == TelaTerminal::Sensores ||
                tela_atual == TelaTerminal::Intervalos ||
                tela_atual == TelaTerminal::ComandosSatelites ||
@@ -1814,7 +2111,9 @@ void tratar_confirmacao_exclusao(unsigned long opcao) {
 
 constexpr RotaTerminal ROTAS_TERMINAL[] = {
     {TelaTerminal::Principal, tratar_menu_principal},
+    {TelaTerminal::Logs, tratar_menu_logs},
     {TelaTerminal::Sensores, tratar_menu_sensores},
+    {TelaTerminal::ControleSensores, tratar_controle_sensores},
     {TelaTerminal::Ota, tratar_menu_ota},
     {TelaTerminal::OtaIntervalo, tratar_intervalo_ota},
     {TelaTerminal::OtaIntervaloTelemetria,
@@ -1876,7 +2175,8 @@ void tarefa_terminal(void*) {
             voltar_uma_tela();
             continue;
         }
-        if (linha[0] == '\0') {
+        if (linha[0] == '\0' && tela_atual != TelaTerminal::WifiNovaSenha &&
+            tela_atual != TelaTerminal::WifiPrincipalSenha) {
             voltar_uma_tela();
             continue;
         }

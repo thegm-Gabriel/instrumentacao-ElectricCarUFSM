@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
@@ -27,6 +28,11 @@ esp_err_t gerenciador_wifi_iniciar(const char* ssid, const char* senha);
 bool gerenciador_wifi_credenciais_validas(const char* ssid, const char* senha);
 esp_err_t gerenciador_wifi_conectar(const char* ssid, const char* senha,
                                     TickType_t tempo_limite);
+// Faz uma única varredura antes da sessão; cada posição indica se o SSID foi visto.
+// Uma falha de varredura permite ao serviço voltar às tentativas normais.
+esp_err_t gerenciador_wifi_procurar_redes(const char* const* ssids,
+                                          size_t quantidade, bool* encontradas,
+                                          TickType_t tempo_limite);
 esp_err_t gerenciador_wifi_desativar(TickType_t tempo_limite);
 bool gerenciador_wifi_esta_conectado();
 // Getter puro: não consulta o driver nem aguarda mutexes de operação.

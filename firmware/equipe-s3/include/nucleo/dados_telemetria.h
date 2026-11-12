@@ -44,6 +44,12 @@ typedef struct {
     int16_t aceleracao_longitudinal_milesimos_g;
     int16_t temperatura_mpu_centesimos_c;
     uint8_t estado_mpu;
+    int32_t ina_shunt_microvolts;
+    int16_t ina_temperatura_centesimos_c;
+    uint32_t ina_energia_mwh;
+    int32_t ina_carga_mah;
+    uint16_t ina_diagnostico;
+    uint8_t estado_ina;
     uint32_t pacotes_validos;
     uint32_t pacotes_invalidos;
     uint32_t falhas_crc;

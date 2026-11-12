@@ -3,6 +3,8 @@
 #include <cstdio>
 
 #include "dispositivos/leitor_tensao.h"
+#include "dispositivos/ina228.h"
+#include "servicos/servico_controle_sensores.h"
 #include "dispositivos/encoder_incremental.h"
 #include "esp_flash.h"
 #include "esp_log.h"
@@ -38,6 +40,7 @@ TaskHandle_t tarefa_telemetria_handle = nullptr;
 
 struct DisponibilidadeAquisicao {
     bool adc = false;
+    bool ina228 = false;
     bool mpu6050 = false;
     bool odometro = false;
     bool registro_sd = false;
@@ -145,6 +148,21 @@ void aplicar_leitura_mpu(DadosTelemetriaVeiculo& dados,
     dados.aceleracao_ms2 = aceleracao.aceleracao_longitudinal_ms2;
 }
 
+void limpar_leitura_mpu(DadosTelemetriaVeiculo& dados) {
+    dados.aceleracao_x = dados.aceleracao_y = dados.aceleracao_z = 0;
+    dados.giroscopio_x = dados.giroscopio_y = dados.giroscopio_z = 0;
+    dados.aceleracao_x_g = dados.aceleracao_y_g = dados.aceleracao_z_g = 0.0f;
+    dados.aceleracao_x_ms2 = dados.aceleracao_y_ms2 = dados.aceleracao_z_ms2 = 0.0f;
+    dados.giroscopio_x_graus_s = dados.giroscopio_y_graus_s =
+        dados.giroscopio_z_graus_s = 0.0f;
+    dados.temperatura_mpu_c = 0.0f;
+    dados.mpu_ativo = dados.mpu_calibrado =
+        dados.eixo_longitudinal_compativel = false;
+    dados.eixo_longitudinal_mpu = 0;
+    dados.sentido_aceleracao_longitudinal = 0;
+    dados.aceleracao_g = dados.aceleracao_ms2 = 0.0f;
+}
+
 void tarefa_telemetria(void*) {
     uint16_t tensao_bruta = 0;
     DadosTelemetriaVeiculo ultimos_dados{};
@@ -152,6 +170,8 @@ void tarefa_telemetria(void*) {
     int64_t ultimo_log_erro_odometro_ms = -5000;
     int64_t ultimo_log_erro_registro_ms = -5000;
     int64_t proxima_tentativa_registro_sd_ms = 0;
+    int64_t proxima_tentativa_ina228_ms = aquisicao.ina228
+        ? 0 : esp_timer_get_time() / 1000 + 5000;
     while (true) {
         servico_supervisao_alimentar(ModuloSupervisionado::TarefaTelemetria);
         const bool usar_simulador = servico_simulador_telemetria_esta_ativo();
@@ -164,15 +184,69 @@ void tarefa_telemetria(void*) {
                          esp_err_to_name(erro_simulador));
             }
         } else {
-            if (aquisicao.adc) {
+            const uint32_t sensores_ativos = servico_controle_sensores_mascara();
+            const auto sensor_ativo = [sensores_ativos](SensorControlado sensor) {
+                return (sensores_ativos & (1u << static_cast<uint8_t>(sensor))) != 0;
+            };
+            const int64_t instante_ina_ms = esp_timer_get_time() / 1000;
+            if (sensor_ativo(SensorControlado::Ina228) && !aquisicao.ina228 &&
+                instante_ina_ms >= proxima_tentativa_ina228_ms) {
+                const esp_err_t erro = ina228_iniciar();
+                aquisicao.ina228 = erro == ESP_OK;
+                proxima_tentativa_ina228_ms = instante_ina_ms + 5000;
+                (void)servico_diagnostico_registrar_resultado(
+                    SensorDiagnosticado::Ina228, erro);
+                if (erro == ESP_OK) ESP_LOGI(ETIQUETA, "INA228 recuperado");
+            }
+            LeituraIna228 leitura_ina{};
+            const esp_err_t erro_ina = sensor_ativo(SensorControlado::Ina228) && aquisicao.ina228
+                ? ina228_ler(&leitura_ina) : ESP_ERR_INVALID_STATE;
+            if (sensor_ativo(SensorControlado::Ina228) && aquisicao.ina228) {
+                (void)servico_diagnostico_registrar_resultado(
+                    SensorDiagnosticado::Ina228, erro_ina);
+                if (erro_ina == ESP_OK) {
+                    ultimos_dados.tensao_pacote_v = leitura_ina.tensao_barramento_v;
+                    ultimos_dados.corrente_a = leitura_ina.corrente_a;
+                    ultimos_dados.potencia_w = leitura_ina.potencia_w;
+                    ultimos_dados.eletrica_valida = true;
+                    ultimos_dados.ina_tensao_shunt_mv = leitura_ina.tensao_shunt_mv;
+                    ultimos_dados.ina_temperatura_c = leitura_ina.temperatura_chip_c;
+                    ultimos_dados.ina_energia_wh = leitura_ina.energia_j / 3600.0;
+                    ultimos_dados.ina_carga_ah = leitura_ina.carga_c / 3600.0;
+                    ultimos_dados.ina_diagnostico = leitura_ina.diagnostico;
+                    ultimos_dados.ina_energia_valida = leitura_ina.energia_valida;
+                    ultimos_dados.ina_carga_valida = leitura_ina.carga_valida;
+                } else if (ina228_obter_estado().erros_consecutivos >= 3) {
+                    aquisicao.ina228 = false;
+                    proxima_tentativa_ina228_ms = instante_ina_ms + 5000;
+                    ESP_LOGW(ETIQUETA, "INA228 indisponível; nova tentativa em 5 s: %s",
+                             esp_err_to_name(erro_ina));
+                }
+            }
+            if (erro_ina != ESP_OK) {
+                ultimos_dados.tensao_pacote_v = 0.0f;
+                ultimos_dados.corrente_a = 0.0f;
+                ultimos_dados.potencia_w = 0.0f;
+                ultimos_dados.eletrica_valida = false;
+                ultimos_dados.ina_tensao_shunt_mv = 0.0f;
+                ultimos_dados.ina_temperatura_c = 0.0f;
+                ultimos_dados.ina_energia_wh = 0.0;
+                ultimos_dados.ina_carga_ah = 0.0;
+                ultimos_dados.ina_diagnostico = 0;
+                ultimos_dados.ina_energia_valida = false;
+                ultimos_dados.ina_carga_valida = false;
+            }
+            if (sensor_ativo(SensorControlado::Adc) && aquisicao.adc) {
                 const esp_err_t erro_adc = leitor_tensao_ler(&tensao_bruta);
                 (void)servico_diagnostico_registrar_resultado(
                     SensorDiagnosticado::Adc, erro_adc);
                 if (erro_adc == ESP_OK) {
                     ultimos_dados.tensao_adc_bruta = tensao_bruta;
                 }
+            } else {
+                ultimos_dados.tensao_adc_bruta = 0;
             }
-            if (aquisicao.mpu6050) {
+            if (sensor_ativo(SensorControlado::Mpu6050) && aquisicao.mpu6050) {
                 const EstadoServicoAceleracao estado_aceleracao =
                     servico_aceleracao_obter_estado();
                 const esp_err_t erro_mpu = estado_aceleracao.ultimo_erro;
@@ -188,10 +262,12 @@ void tarefa_telemetria(void*) {
                 if (erro_mpu == ESP_OK && estado_aceleracao.leituras_ok > 0) {
                     aplicar_leitura_mpu(ultimos_dados, estado_aceleracao);
                 } else {
-                    ultimos_dados.sentido_aceleracao_longitudinal = 0;
+                    limpar_leitura_mpu(ultimos_dados);
                 }
+            } else {
+                limpar_leitura_mpu(ultimos_dados);
             }
-            if (aquisicao.odometro) {
+            if (sensor_ativo(SensorControlado::Encoders) && aquisicao.odometro) {
                 const esp_err_t erro_odometro = servico_odometro_atualizar();
                 const EstadoOdometro odometro = servico_odometro_obter_estado();
                 ultimos_dados.velocidade_kmh = odometro.velocidade_kmh;
@@ -207,6 +283,8 @@ void tarefa_telemetria(void*) {
                         ultimo_log_erro_odometro_ms = agora_ms;
                     }
                 }
+            } else {
+                ultimos_dados.velocidade_kmh = 0.0f;
             }
             ultimos_dados.simulado = false;
         }
@@ -314,6 +392,15 @@ esp_err_t inicializar_aplicacao() {
     if (erro_adc != ESP_OK) {
         ESP_LOGW(ETIQUETA, "ADC indisponível; telemetria seguirá degradada: %s",
                  esp_err_to_name(erro_adc));
+    }
+
+    const esp_err_t erro_ina = ina228_iniciar();
+    aquisicao.ina228 = erro_ina == ESP_OK;
+    (void)servico_diagnostico_registrar_resultado(
+        SensorDiagnosticado::Ina228, erro_ina);
+    if (erro_ina != ESP_OK) {
+        ESP_LOGW(ETIQUETA, "INA228 indisponível; leituras elétricas suspensas: %s",
+                 esp_err_to_name(erro_ina));
     }
 
     ConfiguracaoServicoAceleracao configuracao_aceleracao{};

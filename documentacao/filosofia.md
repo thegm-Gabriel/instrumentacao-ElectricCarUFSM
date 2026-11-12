@@ -95,7 +95,7 @@ outro. Veja o significado dos termos no [glossário](conceitos.md).
 1. Encoders, ADC e MPU6050 produzem leituras no mestre. O odômetro calcula
    velocidade e percurso; a origem simulada, quando ativada, preenche o mesmo
    conjunto de leituras com as unidades usadas pelo painel.
-2. `servico_telemetria` compacta o modelo no quadro v4, identifica sequência e
+2. `servico_telemetria` compacta o modelo no quadro v5, identifica sequência e
    instante do mestre, aplica CRC-16 e entrega cópias às duas filas UART. O
    produtor não espera o TX físico ou a página web.
 3. Cada receptor separa telemetria, comandos e OTA pelo enquadramento. Só publica
@@ -123,11 +123,10 @@ outro. Veja o significado dos termos no [glossário](conceitos.md).
    conclusão: o painel consulta o estado posterior e mostra etapas, progresso
    e último resultado. Sem resposta, a interface indica o prazo esgotado.
 
-O AP da Equipe mantém a senha Wi-Fi compartilhada com o AP dos visitantes, mas
-as ações HTTP exigem uma chave administrativa própria, gerada na primeira
-partida e guardada na NVS. A chave aparece no terminal serial do ESP da Equipe;
-o navegador a guarda apenas durante a sessão. Consultas e telemetria continuam
-legíveis sem essa chave. As validações do mestre seguem aplicáveis. Consulte a
+O AP da Equipe mantém a senha Wi-Fi compartilhada com o AP dos visitantes.
+As ações HTTP ficam disponíveis a quem se conectar a esse AP. As validações do
+mestre, inclusive a permissão para alterações protegidas de Wi-Fi, continuam
+aplicáveis. Consulte a
 tabela de rotas e corpos em [satélites](satelites.md).
 
 ## Sequência: falha e observabilidade

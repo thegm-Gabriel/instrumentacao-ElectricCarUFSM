@@ -1,0 +1,31 @@
+NEXUS - MANUAL TECNICO PARA OVERLEAF
+
+Revisão documental 2.2. O manual contém arquitetura, pinagem, eletrônica da placa,
+instrumentação, protocolos, comandos, painéis, Wi-Fi, memórias, Google, OTA,
+rollback, diagnóstico, OLED e procedimentos de operação e verificação. Inclui
+diagramas e contas de projeto. O conteúdo foi confrontado com o repositório em
+11/11/2026. Montagem física, calibração e funções ainda não implementadas são
+identificadas como pontos a verificar.
+Algumas rotinas legadas do firmware ainda podem existir no repositório, mas ficaram
+fora do escopo desta revisao por decisao da equipe.
+
+IMPORTAÇÃO
+1. No Overleaf, use New Project > Upload Project e selecione o ZIP final.
+2. Se necessário, escolha main.tex como arquivo principal.
+3. Selecione XeLaTeX (como no projeto mostrado) ou pdfLaTeX e recompile duas
+   vezes para atualizar sumário, lista de figuras, tabelas e referências.
+
+ARQUIVOS
+main.tex: capa, controle do documento, siglas, sumário e fontes.
+configuracao.tex: identidade visual, margens, cabeçalhos e estilos.
+Marca d'agua: ajuste \nexusWatermarkOpacity em configuracao.tex (0 desativa;
+0.055 e o valor discreto inicial). \nexusWatermarkWidth controla o tamanho.
+capitulos/: capítulos técnicos da revisão 2.2.
+imagens/: símbolo do carro usado como marca d'água e espaço para figuras futuras.
+
+Não coloque credenciais Wi-Fi, senhas de permissão ou tokens do Google neste
+projeto. Antes de usar as tabelas de GPIO para fabricar ou alterar um chicote,
+confira a revisão da PCB montada e os níveis elétricos em bancada.
+
+O documento conserva a identidade visual do modelo recebido. Não declara
+conformidade ABNT nem aprovação institucional.
