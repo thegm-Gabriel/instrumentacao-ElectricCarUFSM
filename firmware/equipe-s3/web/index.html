@@ -11,36 +11,40 @@
 <body>
   <header class="topbar">
     <div class="topbar-inner">
-      <a class="brand" href="#telemetria" aria-label="NEXUS, abrir telemetria"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 40 40"><path d="M20 5 34 13v14L20 35 6 27V13Z"/><path d="M6 13 20 21 34 13M20 21v14M12 9l8 12 8-12"/><circle cx="20" cy="5" r="2.2"/><circle cx="34" cy="27" r="2.2"/><circle cx="6" cy="27" r="2.2"/><circle cx="20" cy="21" r="2.5"/></svg></span><span><strong>NEXUS</strong><small>Telemetria e Controle</small></span></a>
+      <a class="brand" href="#telemetria" aria-label="NEXUS, abrir telemetria"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 40 40" focusable="false"><path class="nexus-trace" d="M9 30V10l22 20V10"/><path class="nexus-underline" d="M14 30h4m4-20h4"/><circle cx="9" cy="10" r="2.8"/><circle cx="31" cy="10" r="2.8"/><circle cx="20" cy="20" r="2.8"/><circle cx="9" cy="30" r="2.8"/><circle cx="31" cy="30" r="2.8"/></svg></span><span><strong>NEXUS</strong><small>Telemetria e Controle</small></span></a>
       <nav class="tabs" role="tablist" aria-label="Páginas do painel">
         <button id="tab-telemetria" class="tab active" role="tab" data-tab="telemetria" aria-controls="telemetria" aria-selected="true">Telemetria</button>
-        <button id="tab-comandos" class="tab" role="tab" data-tab="comandos" aria-controls="comandos" aria-selected="false">Comandos</button>
         <button id="tab-controle" class="tab" role="tab" data-tab="controle" aria-controls="controle" aria-selected="false">Controle</button>
+        <button id="tab-comandos" class="tab" role="tab" data-tab="comandos" aria-controls="comandos" aria-selected="false">Comandos</button>
         <button id="tab-mestre" class="tab" role="tab" data-tab="mestre" aria-controls="mestre" aria-selected="false">Mestre</button>
         <button id="tab-equipe" class="tab" role="tab" data-tab="equipe" aria-controls="equipe" aria-selected="false">Equipe</button>
         <button id="tab-visitantes" class="tab" role="tab" data-tab="visitantes" aria-controls="visitantes" aria-selected="false">Visitantes</button>
         <button id="tab-sobre" class="tab" role="tab" data-tab="sobre" aria-controls="sobre" aria-selected="false">Sobre</button>
       </nav>
-      <a class="header-project" href="#sobre">Carro Elétrico UFSM-CS</a>
+      <div class="header-status">
+        <button id="health-shortcut" class="system-health message-state" type="button" title="Abrir diagnóstico do Mestre" data-tone="info">
+          <span class="health-indicator" aria-hidden="true"></span>
+          <span><small>Saúde do sistema</small><strong id="health-status">Aguardando</strong></span>
+        </button>
+        <a class="header-project" href="#sobre">Carro Elétrico <span>UFSM-CS</span></a>
+      </div>
     </div>
   </header>
-  <div class="statusbar" aria-label="Estado das conexões">
-    <div class="statusbar-shell">
-    <div class="statusbar-inner" id="statusbar-content">
-      <span class="status-item" title="Navegador conectado ao ESP da Equipe"><span id="browser-dot" class="dot neutral"></span><span>Navegador <b id="browser-status">Conectando</b></span></span>
-      <span class="status-item" title="Comunicação da Equipe com o mestre"><span id="master-dot" class="dot neutral"></span><span>Mestre <b id="master-status">Não consultado</b></span></span>
-      <span class="status-item" title="Comunicação do mestre com Visitantes"><span id="esp-dot" class="dot neutral"></span><span>Visitantes <b id="esp-status">Não consultado</b></span></span>
-      <span class="status-item sample-status" title="Idade da última amostra de telemetria"><span class="small-icon">↻</span><span>Amostra <b id="updated-status">Sem leitura</b></span></span>
-      <span class="status-item" title="Histórico desta sessão no navegador"><span class="small-icon">◉</span><span>Sessão <b id="record-status">Sem gravação</b></span></span>
-      <span class="status-item health-status" title="Estado de saúde informado pelo mestre"><span id="health-dot" class="dot neutral"></span><span>Saúde <b id="health-status">Aguardando consulta</b></span></span>
-    </div>
-    <button id="statusbar-toggle" class="statusbar-toggle" type="button" aria-controls="statusbar-content" aria-expanded="true" aria-label="Recolher faixa de estado" title="Recolher faixa de estado"><svg viewBox="0 0 18 18" aria-hidden="true"><path d="m4 8 5-4 5 4M4 13l5-4 5 4"/></svg></button>
-    </div>
-  </div>
   <main class="container">
-    <div id="health-notice-row" class="health-notice-row" hidden><div id="health-notice" class="health-notice" role="status" aria-live="polite" hidden><span class="health-symbol" aria-hidden="true">!</span><div><strong id="health-notice-title">Sistema em atenção</strong><p id="health-notice-detail"></p></div><button id="health-details" type="button">Ver diagnóstico</button></div><div id="statusbar-notice-slot" class="statusbar-notice-slot"></div></div>
     <section id="telemetria" class="page active" role="tabpanel" aria-labelledby="tab-telemetria">
-      <div class="page-heading"><div><p class="section-kicker">Veículo experimental</p><h1 id="title-telemetria">Telemetria do veículo</h1><p>Leituras, histórico e qualidade dos dados recebidos do mestre.</p></div><div class="command-heading-controls"><label for="command-refresh-rate">Atualizar dados</label><select id="command-refresh-rate" aria-label="Taxa de atualização da telemetria"><option value="1000">1 Hz</option><option value="500">2 Hz</option><option value="333">3 Hz</option><option value="250" selected>4 Hz</option></select><span id="data-badge" class="badge muted">Aguardando dados</span></div></div>
+      <div class="page-heading">
+        <h1 id="title-telemetria">Telemetria do veículo</h1>
+        <div class="command-heading-controls">
+          <div class="telemetry-refresh">
+            <label for="command-refresh-rate">Atualizar dados</label>
+            <select id="command-refresh-rate" aria-label="Taxa de atualização da telemetria">
+              <option value="1000">1 Hz</option><option value="500">2 Hz</option><option value="333">3 Hz</option><option value="250" selected>4 Hz</option>
+            </select>
+          </div>
+          <span id="vehicle-arm-badge" class="badge muted" role="status" aria-live="polite">Estado do carro indisponível</span>
+          <span id="data-badge" class="badge muted">Aguardando dados</span>
+        </div>
+      </div>
       <div class="section-heading"><h2>Indicadores principais</h2></div>
       <div class="metrics">
         <article id="speed-card" class="card speed-card">
@@ -54,21 +58,66 @@
           <div class="pedal-meters" aria-label="Acelerador e freio"><div class="pedal-meter"><div class="pedal-title"><span><i class="legend-key throttle-key"></i>Acelerador</span><strong id="throttle-arc-value">—</strong></div><div class="pedal-track"><span id="throttle-fill"></span></div></div><div class="pedal-meter"><div class="pedal-title"><span><i class="legend-key brake-key"></i>Freio</span><strong id="brake-arc-value">—</strong></div><div class="pedal-track"><span id="brake-fill"></span></div></div></div>
           </div>
         </article>
-        <article id="accel-card" class="card metric-card metric-accel"><div class="card-label">Aceleração longitudinal</div><div class="metric-value"><strong id="accel">—</strong><span>m/s²</span></div><small id="accel-context" class="metric-context">Aguardando leitura do sensor</small></article>
-        <article class="card metric-card metric-soc"><div class="card-label">Estado de carga</div><div class="metric-value"><strong id="soc">—</strong><span>%</span></div><div class="progress"><span id="soc-bar"></span></div><small id="soc-context" class="metric-context">Aguardando leitura</small></article>
-        <article id="power-card" class="card metric-card metric-power"><div class="card-label">Potência elétrica</div><div class="metric-value"><strong id="power">—</strong><span id="power-unit">W</span></div><small id="power-context" class="metric-context">Aguardando leitura</small><div id="power-rail" class="power-rail" role="img" aria-label="Potência elétrica sem leitura" hidden><div class="power-rail-track" aria-hidden="true"><span id="power-rail-regen" class="power-rail-regen"></span><span id="power-rail-consume" class="power-rail-consume"></span><i class="power-rail-zero"></i><i id="power-peak-marker" class="power-peak-marker"></i></div><div class="power-rail-scale"><span id="power-negative-limit">−500 W</span><span>0</span><span id="power-positive-limit">500 W</span></div></div></article>
+        <article id="soc-card" class="card metric-card metric-soc" data-charge-level="unavailable"><div class="card-label"><span>Estado de carga</span><span id="soc-notice" class="soc-notice" role="status" hidden><span id="soc-notice-icon" aria-hidden="true"></span><span id="soc-notice-label"></span></span></div><div class="metric-value"><strong id="soc">—</strong><span>%</span></div><div class="progress"><span id="soc-bar"></span></div><small id="soc-context" class="metric-context">Aguardando leitura</small></article>
+        <article id="power-card" class="card metric-card metric-power"><div class="card-label">Potência elétrica</div><span id="power-peak-label" class="meter-peak-label" aria-live="off"></span><div class="metric-value"><strong id="power">—</strong><span id="power-unit">W</span></div><small id="power-context" class="metric-context">Aguardando leitura</small><div id="power-rail" class="power-rail" role="img" aria-label="Potência elétrica sem leitura" hidden><div class="power-rail-track" aria-hidden="true"><span id="power-rail-fill" class="power-rail-fill"></span><i id="power-peak-marker" class="power-peak-marker"></i></div></div></article>
+        <article id="current-card" class="card metric-card metric-current"><div class="card-label">Corrente elétrica</div><span id="current-peak-label" class="meter-peak-label" aria-live="off"></span><div class="metric-value"><strong id="current-primary">—</strong></div><div class="current-meter" aria-hidden="true"><span id="current-meter-fill"></span><i id="current-peak-marker" class="meter-peak-marker"></i></div><small id="current-context" class="metric-context">Aguardando leitura</small></article>
       </div>
-      <div class="quick-strip card"><div><span>Marcha / sentido</span><strong id="gear">Não disponível</strong></div><div><span>Percurso informado</span><strong id="distance">Não disponível</strong></div><div><span>Tempo do mestre</span><strong id="master-time">Não disponível</strong></div><div><span>Fonte</span><strong id="source">Não disponível</strong></div></div>
+      <div class="quick-strip card"><div><span>Marcha / sentido</span><strong id="gear">Não disponível</strong></div><div><span>Odômetro</span><strong id="distance">Não disponível</strong></div><div><span>Tempo do mestre</span><strong id="master-time">Não disponível</strong></div><div><span>Fonte</span><strong id="source">Não disponível</strong></div></div>
       <div class="connection-strip"><article class="card connection-count equipo-count"><div><span>Dispositivos na rede da Equipe</span><strong id="equipe-client-count">—</strong></div><button type="button" class="connection-link" data-open-clients="equipe">Gerenciar conexões</button></article><article class="card connection-count visitor-count"><div><span>Dispositivos na rede de Visitantes</span><strong id="visitantes-client-count">—</strong></div><button type="button" class="connection-link" data-open-clients="visitantes">Gerenciar conexões</button></article></div>
       <div class="section-heading with-controls"><div><h2>Movimento e energia</h2><span>Histórico coletado neste navegador enquanto a página estiver aberta</span></div><div class="range-picker" aria-label="Intervalo do gráfico"><button class="range active" data-range="30">30 s</button><button class="range" data-range="120">2 min</button><button class="range" data-range="600">10 min</button></div></div>
       <div class="chart-grid">
-        <article class="card chart-card motion-chart-card"><div class="card-top"><div><span class="chart-eyebrow">DINÂMICA</span><h3>Movimento</h3></div><div class="chart-legend"><span><i class="legend-key speed-key"></i>Velocidade</span><span><i class="legend-key accel-key"></i>Aceleração</span></div></div><div class="chart-wrap"><canvas id="motion-chart" aria-label="Histórico de velocidade e aceleração" role="img"></canvas><div id="motion-tip" class="chart-tip" hidden></div></div><p class="chart-footnote"><span class="chart-footnote-label">Escala</span><span>A velocidade começa em 0–30 km/h e a escala se ajusta quando necessário.</span></p></article>
-        <article class="card chart-card electric-chart-card"><div class="card-top"><div><span class="chart-eyebrow">ENERGIA</span><h3>Sistema elétrico</h3></div><div class="chart-signal-pair"><label class="chart-signal-control" for="electric-signal"><span>Esquerda</span><select id="electric-signal" aria-label="Sinal no eixo esquerdo"><option value="power">Potência</option><option value="current">Corrente</option><option value="voltage">Tensão</option><option value="soc">SoC · simulado</option><option value="autonomy">Autonomia · simulada</option><option value="shunt">Queda no shunt · INA228</option><option value="inaTemp">Temperatura · INA228</option><option value="inaEnergy">Energia acumulada · INA228</option><option value="inaCharge">Carga acumulada · INA228</option></select></label><label class="chart-signal-control" for="electric-signal-2"><span>Direita</span><select id="electric-signal-2" aria-label="Sinal no eixo direito"><option value="current">Corrente</option><option value="power">Potência</option><option value="voltage">Tensão</option><option value="soc">SoC · simulado</option><option value="autonomy">Autonomia · simulada</option><option value="shunt">Queda no shunt · INA228</option><option value="inaTemp">Temperatura · INA228</option><option value="inaEnergy">Energia acumulada · INA228</option><option value="inaCharge">Carga acumulada · INA228</option></select></label><label class="chart-signal-control" for="electric-signal-3"><span>Curva extra</span><select id="electric-signal-3" aria-label="Terceira grandeza opcional"><option value="none">Nenhuma</option><option value="voltage">Tensão</option><option value="power">Potência</option><option value="current">Corrente</option><option value="soc">SoC · simulado</option><option value="autonomy">Autonomia · simulada</option><option value="shunt">Queda no shunt · INA228</option><option value="inaTemp">Temperatura · INA228</option><option value="inaEnergy">Energia acumulada · INA228</option><option value="inaCharge">Carga acumulada · INA228</option></select></label></div></div><div class="chart-legend chart-legend-row"><span id="electric-legend-primary"><i class="legend-key electric-primary-key"></i>Potência</span><span id="electric-legend-secondary"><i class="legend-key electric-secondary-key"></i>Corrente</span><span id="electric-legend-tertiary" class="electric-extra-legend" hidden><i class="legend-key electric-tertiary-key"></i><span id="electric-tertiary-label">Curva extra</span></span></div><div class="chart-wrap"><canvas id="electric-chart" aria-label="Histórico do sistema elétrico" role="img"></canvas><div id="electric-tip" class="chart-tip" hidden></div></div><p class="chart-footnote"><span class="chart-footnote-label">Eixos</span><span id="electric-caption">À esquerda, potência (W); à direita, corrente (A).</span></p></article>
+        <article class="card chart-card motion-chart-card"><div class="card-top"><div><span class="chart-eyebrow">DINÂMICA</span><h3>Movimento</h3></div></div><div class="chart-legend chart-legend-row"><span><i class="legend-key speed-key"></i>Velocidade</span><span><i class="legend-key accel-key"></i>Aceleração</span></div><div class="chart-wrap"><canvas id="motion-chart" aria-label="Histórico de velocidade e aceleração" role="img"></canvas><div id="motion-tip" class="chart-tip" hidden></div></div><p class="chart-footnote"><span class="chart-footnote-label">Escala</span><span>A velocidade começa em 0–30 km/h e a escala se ajusta quando necessário.</span></p></article>
+        <article class="card chart-card electric-chart-card"><div class="card-top"><div><span class="chart-eyebrow">ENERGIA</span><h3>Sistema elétrico</h3></div><div class="chart-signal-pair"><label class="chart-signal-control" for="electric-signal"><span>Esquerda</span><select id="electric-signal" aria-label="Sinal no eixo esquerdo"><option value="power">Potência</option><option value="current">Corrente</option><option value="voltage">Tensão</option><option value="soc">SoC · simulado</option><option value="autonomy">Autonomia · simulada</option><option value="shunt">Tensão no shunt · INA228</option><option value="inaTemp">Temperatura · INA228</option><option value="inaEnergy">Energia acumulada · INA228</option><option value="inaCharge">Carga acumulada · INA228</option></select></label><label class="chart-signal-control" for="electric-signal-2"><span>Direita</span><select id="electric-signal-2" aria-label="Sinal no eixo direito"><option value="current">Corrente</option><option value="power">Potência</option><option value="voltage">Tensão</option><option value="soc">SoC · simulado</option><option value="autonomy">Autonomia · simulada</option><option value="shunt">Tensão no shunt · INA228</option><option value="inaTemp">Temperatura · INA228</option><option value="inaEnergy">Energia acumulada · INA228</option><option value="inaCharge">Carga acumulada · INA228</option></select></label><label class="chart-signal-control" for="electric-signal-3"><span>Curva extra</span><select id="electric-signal-3" aria-label="Terceira grandeza opcional"><option value="none">Nenhuma</option><option value="voltage">Tensão</option><option value="power">Potência</option><option value="current">Corrente</option><option value="soc">SoC · simulado</option><option value="autonomy">Autonomia · simulada</option><option value="shunt">Tensão no shunt · INA228</option><option value="inaTemp">Temperatura · INA228</option><option value="inaEnergy">Energia acumulada · INA228</option><option value="inaCharge">Carga acumulada · INA228</option></select></label></div></div><div class="chart-legend chart-legend-row"><span id="electric-legend-primary"><i class="legend-key electric-primary-key"></i>Potência</span><span id="electric-legend-secondary"><i class="legend-key electric-secondary-key"></i>Corrente</span><span id="electric-legend-tertiary" class="electric-extra-legend" hidden><i class="legend-key electric-tertiary-key"></i><span id="electric-tertiary-label">Curva extra</span></span></div><div class="chart-wrap"><canvas id="electric-chart" aria-label="Histórico do sistema elétrico" role="img"></canvas><div id="electric-tip" class="chart-tip" hidden></div></div><p class="chart-footnote"><span class="chart-footnote-label">Eixos</span><span id="electric-caption">À esquerda, potência (W); à direita, corrente (A).</span></p></article>
       </div>
       <div class="section-heading"><h2>Detalhes do veículo</h2></div>
-      <div class="detail-grid">
-        <article class="card detail-card"><div class="card-top"><h3>Bateria e consumo</h3></div><dl><div><dt>Tensão do barramento</dt><dd id="voltage">Não disponível</dd></div><div><dt>Corrente</dt><dd id="current">Não disponível</dd></div><div><dt>Estado de carga</dt><dd id="soc-detail">Não disponível</dd></div><div><dt>Energia nesta página <small>calculada</small></dt><dd id="energy">Não disponível</dd></div><div><dt>Consumo médio <small>calculado</small></dt><dd id="consumption">Não disponível</dd></div><div><dt>Autonomia estimada</dt><dd id="range-estimate">Não disponível</dd></div></dl><p class="context-note">Tensão e corrente vêm do INA228 no modo real. Energia nesta página e consumo médio são estimados pelo navegador; estado de carga e autonomia ainda não têm medição real.</p></article>
-        <article class="card detail-card sensor-card"><div class="card-top"><h3>Operação e sensores</h3></div><div class="bars"><div><div class="bar-label"><span>Acelerador <small>informado</small></span><b id="throttle">Não disponível</b></div><div class="progress"><span id="throttle-bar"></span></div></div><div><div class="bar-label"><span>Freio <small>informado</small></span><b id="brake">Não disponível</b></div><div class="progress red"><span id="brake-bar"></span></div></div></div><div class="sensor-readings"><section class="sensor-group"><h4>Movimento <small>MPU6050</small></h4><dl><div><dt>Estado</dt><dd id="mpu">Não disponível</dd></div><div><dt>Temperatura</dt><dd id="mpu-temp">Não disponível</dd></div></dl></section><section class="sensor-group sensor-group-electric"><div class="sensor-group-head"><h4>Energia <small>INA228</small></h4><span id="ina-badge" class="badge muted">Sem leitura</span></div><dl><div><dt>Queda no shunt</dt><dd id="ina-shunt">Não disponível</dd></div><div><dt>Temperatura</dt><dd id="ina-temp">Não disponível</dd></div><div><dt>Energia acumulada</dt><dd id="ina-energy">Não disponível</dd></div><div><dt>Carga acumulada</dt><dd id="ina-charge">Não disponível</dd></div><div><dt>Diagnóstico</dt><dd id="ina-diagnostic">Não disponível</dd></div></dl></section></div><p class="context-note">Energia e carga do INA228 são contadas desde a última inicialização do sensor; não representam a carga restante da bateria.</p></article>
+      <div class="detail-grid telemetry-details">
+        <article class="card detail-card battery-detail" aria-labelledby="battery-detail-title">
+          <div class="card-top"><h3 id="battery-detail-title">Bateria e consumo</h3></div>
+          <dl class="telemetry-rows">
+            <div><dt>Tensão do barramento</dt><dd id="voltage">Não disponível</dd></div>
+            <div><dt>Corrente</dt><dd id="current">Não disponível</dd></div>
+            <div><dt>Potência instantânea</dt><dd id="power-detail">Não disponível</dd></div>
+            <div><dt>Estado de carga</dt><dd id="soc-detail">Não disponível</dd></div>
+            <div><dt>Consumo médio <small>calculado</small></dt><dd id="consumption">Não disponível</dd></div>
+            <div><dt>Autonomia estimada</dt><dd id="range-estimate">Não disponível</dd></div>
+          </dl>
+        </article>
+        <article class="card detail-card operation-detail" aria-labelledby="operation-detail-title">
+          <div class="card-top"><h3 id="operation-detail-title">Operação e sensores</h3></div>
+          <div class="bars operation-pedals">
+            <div>
+              <div class="bar-label"><span>Acelerador</span><b id="throttle">Não disponível</b></div>
+              <div class="progress"><span id="throttle-bar"></span></div>
+            </div>
+            <div>
+              <div class="bar-label"><span>Freio</span><b id="brake">Não disponível</b></div>
+              <div class="progress red"><span id="brake-bar"></span></div>
+            </div>
+          </div>
+          <div class="sensor-readings">
+            <section class="sensor-group" aria-labelledby="mpu-detail-title">
+              <div class="sensor-group-head"><h4 id="mpu-detail-title">Movimento <small>MPU6050</small></h4></div>
+              <dl class="telemetry-rows">
+                <div><dt>Estado</dt><dd id="mpu">Não disponível</dd></div>
+                <div id="mpu-accel-row"><dt>Aceleração</dt><dd id="mpu-accel">Não disponível</dd></div>
+                <div><dt>Temperatura</dt><dd id="mpu-temp">Não disponível</dd></div>
+              </dl>
+            </section>
+            <section class="sensor-group" aria-labelledby="ina-detail-title">
+              <div class="sensor-group-head">
+                <h4 id="ina-detail-title">Energia <small>INA228</small></h4>
+                <span id="ina-badge" class="badge muted">Sem leitura</span>
+              </div>
+              <dl class="telemetry-rows">
+                <div><dt>Tensão no shunt</dt><dd id="ina-shunt">Não disponível</dd></div>
+                <div><dt>Potência instantânea</dt><dd id="ina-power">Não disponível</dd></div>
+                <div><dt>Temperatura</dt><dd id="ina-temp">Não disponível</dd></div>
+                <div><dt>Energia acumulada</dt><dd id="ina-energy">Não disponível</dd></div>
+                <div><dt>Carga acumulada</dt><dd id="ina-charge">Não disponível</dd></div>
+              </dl>
+            </section>
+          </div>
+        </article>
       </div>
       <div class="section-heading"><h2>Comunicação e sessão</h2></div>
       <div class="detail-grid lower-grid">
@@ -76,99 +125,391 @@
         <article class="card detail-card"><div class="card-top"><h3>Sessão e eventos</h3><button id="export-csv" class="button secondary" disabled>Exportar CSV</button></div><p class="context-note">Exportação das amostras recebidas nesta página. Gravação e sessões anteriores não são expostas pela API atual.</p><ol id="events" class="events"><li>Aguardando a primeira leitura.</li></ol></article>
       </div>
     </section>
-    <section id="mestre" class="page" role="tabpanel" aria-labelledby="tab-mestre">
-      <div class="page-heading"><div><p class="section-kicker">Controlador principal</p><h1 id="title-mestre">ESP32 — Mestre</h1><p>Saúde do dispositivo, comunicação e respostas às consultas.</p></div><span id="mestre-auto" class="badge muted">Atualização automática</span></div>
-      <article id="mestre-details" class="card device-details"></article>
+    <section id="mestre" class="page device-page" role="tabpanel" aria-labelledby="tab-mestre">
+      <div class="page-heading device-heading"><div><h1 id="title-mestre">Mestre</h1><p>Aquisição e controle</p></div><span id="mestre-auto" class="device-link-status message-state" role="status">Aguardando enlace</span></div>
+      <article id="mestre-details" class="device-dashboard"></article>
     </section>
-    <section id="equipe" class="page" role="tabpanel" aria-labelledby="tab-equipe">
-      <div class="page-heading"><div><p class="section-kicker">Gateway local</p><h1 id="title-equipe">ESP32 — Equipe</h1><p>Saúde do módulo, recepção UART e qualidade do enlace com o mestre.</p></div><span id="equipe-auto" class="badge muted">Atualização automática</span></div>
+    <section id="equipe" class="page device-page" role="tabpanel" aria-labelledby="tab-equipe">
+      <div class="page-heading device-heading"><div><h1 id="title-equipe">Equipe</h1><p>Telemetria e painel técnico</p></div><span id="equipe-auto" class="device-link-status message-state" role="status">Aguardando enlace</span></div>
       <div id="equipe-content"></div>
     </section>
     <section id="comandos" class="page" role="tabpanel" aria-labelledby="tab-comandos">
-      <div class="page-heading"><div><p class="section-kicker">Centro de operação</p><h1 id="title-comandos">Comandos</h1><p>Ações enviadas ao mestre, com confirmação e acompanhamento do resultado.</p></div><span id="master-command-status" class="badge muted">Aguardando mestre</span></div>
-      <nav class="command-jump" aria-label="Seções dos comandos"><button type="button" data-scroll-to="command-overview">Última ação</button><button type="button" data-scroll-to="sync-card">Google</button><button type="button" data-scroll-to="simulator-card">Simulação</button><button type="button" data-scroll-to="wifi-master">Wi-Fi do mestre</button><button type="button" data-scroll-to="wifi-local">Redes locais</button><button type="button" data-scroll-to="master-queries">Consultas</button><button type="button" data-scroll-to="ota-command">OTA</button><button type="button" data-scroll-to="operation-command">Operação</button><button type="button" data-scroll-to="command-history-card">Histórico</button></nav>
-      <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
-      <div class="section-heading command-heading"><div><h2>Acompanhamento</h2><span>Resposta do comando e estado observado depois da execução.</span></div></div>
-      <article id="command-overview" class="card command-overview" aria-live="polite">
-        <div class="command-overview-top"><div><span class="command-overview-label">Acompanhamento</span><h3 id="command-live-name">Nenhuma ação enviada nesta página</h3></div><span id="command-live-status" class="badge muted">Sem solicitação</span></div>
-        <p id="command-live-text">Ao enviar uma ação, a resposta do mestre e a consulta do estado aparecerão aqui.</p>
-        <div class="command-stages" aria-label="Etapas da última ação"><div><span>Envio</span><strong id="command-stage-send">—</strong></div><div><span>Resposta do mestre</span><strong id="command-stage-response">—</strong></div><div><span>Consulta de estado</span><strong id="command-stage-state">—</strong></div></div>
-        <p id="command-live-meta" class="command-live-meta">O histórico desta sessão fica abaixo dos controles.</p>
-      </article>
-      <article id="sync-card" class="card sync-card" aria-labelledby="sync-title">
-        <div class="sync-head"><div><span class="command-overview-label">Histórico no SD</span><h3 id="sync-title">Sincronização com Google</h3></div><span id="sync-badge" class="badge muted">Aguardando consulta</span></div>
-        <p id="sync-summary" class="sync-summary">Os arquivos registrados no SD e o andamento do envio aparecerão aqui.</p>
-        <div class="sync-actions"><button type="button" class="button sync-primary" data-master-action="sincronizar_google" data-cap="512">Sincronizar arquivos pendentes</button><button id="refresh-sync-state" type="button" class="button secondary">Atualizar estado</button><span class="sync-actions-note">O envio começa após a confirmação do mestre.</span></div>
-        <div class="sync-progress" role="progressbar" aria-label="Progresso do arquivo em envio" aria-valuemin="0" aria-valuemax="100" aria-valuetext="Aguardando dados"><span id="sync-progress-fill"></span></div><p id="sync-progress-label" class="sync-progress-label">Aguardando transferência</p>
-        <div class="sync-stats"><div><span>Arquivos confirmados</span><strong id="sync-files">—</strong></div><div><span>Arquivo atual</span><strong id="sync-current">—</strong></div><div><span>Transferência</span><strong id="sync-bytes">—</strong></div><div><span>Velocidade / restante</span><strong id="sync-rate">—</strong></div></div>
-        <p id="sync-last-result" class="sync-last-result">Nenhuma sincronização concluída nesta inicialização.</p>
-        <p id="sync-checked" class="command-live-meta">Nenhuma consulta concluída.</p>
-      </article>
-      <article id="simulator-card" class="card simulator-card" aria-labelledby="simulator-title">
-        <div class="sync-head"><div><span class="command-overview-label">Fonte dos dados</span><h3 id="simulator-title">Telemetria simulada</h3></div><span id="simulator-badge" class="badge muted">Aguardando consulta</span></div>
-        <p id="simulator-state" class="sync-summary">A fonte ativa informada pelo mestre aparecerá aqui.</p>
-        <div class="simulator-layout"><div class="simulator-explain"><strong>Teste das páginas sem sensores</strong><p>O mestre gera leituras identificadas como simuladas. A escolha vale até a próxima reinicialização.</p><span class="simulator-origin">Sensores reais ↔ Simulação</span></div><div class="simulator-control"><label for="simulator-toggle">Fonte para esta sessão</label><select id="simulator-toggle"><option value="0">Sensores reais</option><option value="1">Simulador</option></select><button type="button" class="button simulator-apply" data-master-action="simulador_telemetria" data-cap="4096">Aplicar fonte</button><button id="refresh-simulator-state" type="button" class="button secondary">Atualizar estado</button></div></div>
-        <p id="simulator-checked" class="command-live-meta">Nenhuma consulta concluída.</p>
-      </article>
-      <div class="section-heading command-action-heading"><div><h2>Enviar comandos</h2><span>Botões preenchidos enviam ações. “Atualizar estado” apenas consulta o resultado.</span></div></div>
-      <div id="command-center" class="command-grid">
-        <details id="wifi-master" class="card command-card wifi-master-card">
-          <summary>Wi-Fi do mestre <span>Rede usada para OTA e envio ao Google</span></summary>
-          <div class="command-body">
-            <div class="wifi-state-row"><div id="wifi-command-state" class="command-result">Aguardando estado da rede do mestre.</div><button id="refresh-wifi-state" type="button" class="button secondary">Atualizar estado</button></div>
-            <details class="wifi-admin-disclosure"><summary>Permissão para alterar a rede principal e a política</summary><div class="wifi-admin"><label for="wifi-permission">Permissão administrativa</label><input id="wifi-permission" type="password" autocomplete="off" placeholder="Necessária para alterar a rede principal ou a política"><small>Usada somente nas ações protegidas abaixo. Não aparece no histórico.</small></div></details>
-            <p id="wifi-form-error" class="wifi-form-error" role="alert" hidden></p>
-            <p class="wifi-choice-note">Conecte a uma nova rede ou escolha uma rede salva. As configurações protegidas ficam abaixo.</p><div class="wifi-flow-grid">
-              <section class="wifi-step"><div class="wifi-step-heading"><div><h3>Conectar a uma rede</h3><p>Informe os dados da rede que o mestre deve usar agora.</p></div></div><div class="wifi-field-grid"><label>Nome da rede (SSID)<input id="wifi-ssid" type="text" maxlength="32" autocomplete="off" placeholder="Nome da rede"></label><label>Senha da rede<input id="wifi-password" type="password" maxlength="63" autocomplete="new-password" placeholder="Vazia para rede aberta"></label></div><p class="command-note">Rede aberta: deixe a senha vazia. Redes protegidas exigem 8 a 63 caracteres.</p><label class="check-field"><input id="wifi-save" type="checkbox"> Salvar esta rede após conectar</label><div class="wifi-step-actions"><button type="button" class="button secondary" data-master-action="wifi_test" data-cap="512">Testar e conectar</button></div><p class="command-note">O teste desliga o rádio após validar a conexão. Se marcar “Salvar”, confirme a rede na lista de redes salvas.</p></section>
-              <section class="wifi-step"><div class="wifi-step-heading"><div><h3>Usar uma rede salva</h3><p>Escolha uma rede já cadastrada no mestre.</p></div></div><label>Rede salva<select id="wifi-saved"><option value="">Aguardando lista de redes</option></select></label><div class="wifi-step-actions"><button type="button" class="button secondary" data-master-action="wifi_conectar_salva" data-cap="512">Conectar selecionada</button><button type="button" class="button danger" data-master-action="wifi_excluir_salva" data-cap="512">Excluir selecionada</button></div><p class="command-note">Excluir remove a rede da lista; não muda a rede principal.</p></section>
-              <section class="wifi-step"><div class="wifi-step-heading"><div><h3>Rede principal</h3><p>Exige a permissão administrativa informada acima.</p></div></div><p class="wifi-step-description">Para definir uma nova rede principal, preencha os campos em “Conectar a uma rede”.</p><div class="wifi-step-actions"><button type="button" class="button danger" data-master-action="wifi_primary" data-cap="512">Definir como principal</button><button type="button" class="button secondary" data-master-action="wifi_restaurar_principal" data-cap="512">Restaurar principal padrão</button></div><p class="command-note">Alterar a rede principal pode interromper temporariamente OTA e sincronização.</p></section>
-              <section class="wifi-step"><div class="wifi-step-heading"><div><h3>Conexão automática</h3><p>Controle as tentativas de conexão do mestre.</p></div></div><div class="wifi-auto-row"><label>Modo<select id="wifi-auto"><option value="1">Autorizada</option><option value="0">Desativada</option></select></label><button type="button" class="button secondary" data-master-action="wifi_automatico" data-cap="512">Aplicar modo</button></div><details class="wifi-advanced"><summary>Ajustar tentativas e tempos</summary><div class="wifi-field-grid"><label>Tentativas por rede<input id="wifi-attempts" type="number" min="1" max="10" step="1"></label><label>Tempo por tentativa (s)<input id="wifi-attempt-time" type="number" min="2" max="30" step="0.1"></label><label>Intervalo entre tentativas (s)<input id="wifi-retry-interval" type="number" min="0.1" max="5" step="0.1"></label><label>Limite da sessão (s)<input id="wifi-session-limit" type="number" min="5" max="180" step="0.1"></label></div><button type="button" class="button secondary" data-master-action="wifi_politica" data-cap="512">Salvar tempos e tentativas</button></details></section>
-            </div>
-          </div>
-        </details>
-        <div class="section-heading command-action-heading"><div><h2>Redes dos painéis</h2><span>Dispositivos conectados aos pontos Wi-Fi da Equipe e de Visitantes.</span></div></div>
-        <div id="wifi-local" class="ap-grid"><section class="card wifi-clients-panel" id="wifi-clients-equipe" aria-label="Clientes conectados à rede da Equipe"></section><section class="card wifi-clients-panel" id="wifi-clients-visitantes" aria-label="Clientes conectados à rede de Visitantes"></section></div>
-        <details class="card command-card"><summary>Consultas <span>Estado, diagnóstico e enlaces</span></summary><div class="command-body"><div class="command-inline"><label>Consulta<select id="master-query"><option value="ping">Conexão com o mestre</option><option value="versao">Firmware</option><option value="saude">Saúde</option><option value="telemetria">Telemetria resumida</option><option value="uart">Estado UART</option><option value="ota">Estado OTA</option><option value="sincronizacao">Sincronização com Google</option><option value="simulador">Fonte da telemetria</option><option value="wifi">Estado Wi-Fi</option><option value="diagnostico_mestre">Diagnóstico do mestre</option><option value="configuracao">Configuração</option><option value="satelite_equipe_ping">Conexão com Equipe</option><option value="satelite_equipe_versao">Firmware da Equipe</option><option value="satelite_visitantes_ping">Conexão com Visitantes</option><option value="satelite_visitantes_versao">Firmware de Visitantes</option></select></label><button id="run-master-query" type="button" class="button secondary">Consultar</button></div><p class="command-note">Consultas automáticas continuam ativas em todas as páginas.</p><div id="master-query-result" class="command-result">Nenhuma consulta manual nesta página.</div></div></details>
-        <details id="ota-command" class="card command-card ota-command-card">
-          <summary>Atualização OTA <span>Verificar, autorizar e acompanhar</span></summary>
-          <div class="command-body">
-            <div class="ota-action-layout">
-              <div class="ota-action-step"><strong>1. Procurar atualização</strong><p>O mestre consulta as versões disponíveis.</p><button type="button" class="button secondary" data-master-action="verificar_ota" data-cap="128">Verificar atualizações</button></div>
-              <div class="ota-action-step"><strong>2. Escolher quem atualizar</strong><p>Autorize após a verificação encontrar uma versão nova.</p><div class="ota-authorize-actions"><button type="button" class="button secondary" data-master-action="autorizar_mestre" data-cap="128">Mestre</button><button type="button" class="button secondary" data-master-action="autorizar_equipe" data-cap="128">Equipe</button><button type="button" class="button secondary" data-master-action="autorizar_visitantes" data-cap="128">Visitantes</button><button type="button" class="button secondary" data-master-action="autorizar_todos" data-cap="128">Todos</button></div></div>
-              <div class="ota-action-step ota-cancel-step"><strong>Cancelar</strong><p>Encerra as atualizações pendentes.</p><button type="button" class="button danger" data-master-action="cancelar_ota" data-cap="128">Cancelar OTA</button></div>
-            </div>
-            <div class="ota-panel"><div class="ota-panel-head"><strong>Estado da atualização</strong><button id="refresh-ota-state" type="button" class="button secondary">Atualizar estado</button></div><p id="ota-command-state" class="ota-summary">Aguardando a primeira consulta ao mestre.</p><div id="ota-targets" class="ota-targets"></div><p id="ota-state-checked" class="command-live-meta">Nenhuma consulta concluída.</p></div>
-            <p class="command-note">A resposta confirma o recebimento. Acompanhe a conclusão de cada ESP no estado acima.</p>
-          </div>
-        </details>
-        <details id="operation-command" class="card command-card operation-command-card"><summary>Operação e relatórios <span>Percurso, terminal e intervalos</span></summary><div class="command-body"><div class="operation-actions"><div><strong>Relatórios no terminal</strong><p>Estado atual: <span id="report-state">Não disponível</span></p><button type="button" class="button secondary" data-master-action="alternar_relatorios" data-cap="512">Pausar ou retomar</button></div><div><strong>Resumo do mestre</strong><p>O resultado aparece no terminal físico do mestre.</p><button type="button" class="button secondary" data-master-action="resumo_terminal" data-cap="256">Solicitar resumo</button></div><div><strong>Percurso atual</strong><p>Reinicia a distância desta viagem.</p><button type="button" class="button danger" data-master-action="zerar_percurso" data-cap="512">Zerar percurso</button></div></div><details class="operation-advanced"><summary>Ajustar intervalos de relatório e OTA</summary><div class="command-fields"><label>Grupo de relatório<select id="report-group"><option value="0">Telemetria</option><option value="1">UART</option><option value="2">Sistema</option><option value="3">OTA</option></select></label><label>Intervalo (ms)<input id="report-interval" type="number" min="0" max="4294967295" step="1" placeholder="0 desativa"></label><button type="button" class="button secondary" data-master-action="intervalo_relatorio" data-cap="512">Salvar intervalo do relatório</button></div><div class="command-fields"><label>Verificação OTA (min)<input id="ota-interval" type="number" min="1" max="10080" step="1"></label><button type="button" class="button secondary" data-master-action="intervalo_ota" data-cap="512">Salvar verificação OTA</button><label>Telemetria durante OTA (ms)<input id="telemetry-ota-interval" type="number" min="500" max="10000" step="1"></label><button type="button" class="button secondary" data-master-action="intervalo_telemetria_ota" data-cap="512">Salvar telemetria OTA</button></div></details></div></details>
+      <div class="page-heading">
+        <h1 id="title-comandos">Comandos</h1>
+        <span id="master-command-status" class="badge muted">Aguardando mestre</span>
       </div>
-      <article class="card command-history-card"><div class="card-top"><h3>Histórico de ações</h3></div><ol id="master-command-history" class="events command-run-list"><li>Nenhuma ação enviada nesta página.</li></ol></article>
+      <nav class="command-jump" aria-label="Grupos de comandos">
+        <button type="button" data-scroll-to="command-diagnostics">Diagnóstico</button>
+        <button type="button" data-scroll-to="command-networks">Rede</button>
+        <button type="button" data-scroll-to="command-operations">Operação</button>
+        <button type="button" data-scroll-to="command-activity">Atividade</button>
+      </nav>
+      <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+
+      <div id="command-center" class="command-grid">
+        <section id="command-diagnostics" class="command-task" aria-labelledby="command-diagnostics-title">
+          <h2 id="command-diagnostics-title">Diagnóstico</h2>
+          <details id="master-queries" class="card command-card" open>
+            <summary>Consultas <span>Estado e enlaces</span></summary>
+            <div class="command-body">
+              <div class="command-inline">
+                <label>Consulta
+                  <select id="master-query">
+                    <option value="ping">Conexão com o mestre</option>
+                    <option value="versao">Firmware</option>
+                    <option value="saude">Saúde</option>
+                    <option value="telemetria">Telemetria resumida</option>
+                    <option value="uart">Estado UART</option>
+                    <option value="ota">Estado OTA</option>
+                    <option value="sincronizacao">Sincronização com Google</option>
+                    <option value="simulador">Fonte da telemetria</option>
+                    <option value="wifi">Estado Wi-Fi</option>
+                    <option value="diagnostico_mestre">Diagnóstico do mestre</option>
+                    <option value="configuracao">Configuração</option>
+                    <option value="satelite_equipe_ping">Conexão com Equipe</option>
+                    <option value="satelite_equipe_versao">Firmware da Equipe</option>
+                    <option value="satelite_visitantes_ping">Conexão com Visitantes</option>
+                    <option value="satelite_visitantes_versao">Firmware de Visitantes</option>
+                  </select>
+                </label>
+                <button id="run-master-query" type="button" class="button secondary">Consultar</button>
+              </div>
+              <div id="master-query-result" class="command-result" role="status">Nenhuma consulta.</div>
+            </div>
+          </details>
+          <details id="sensor-command" class="card command-card sensor-command-card">
+            <summary>Sensores <span>Aquisição e diagnóstico</span></summary>
+            <div class="command-body">
+              <p id="sensor-status" class="command-field-status" role="status">Aguardando consulta.</p>
+              <ul id="sensor-list" class="sensor-list"></ul>
+              <details class="sensor-bus">
+                <summary>Barramento I²C <span id="sensor-i2c">Aguardando consulta</span></summary>
+                <dl id="sensor-i2c-facts" class="sensor-facts" hidden></dl>
+              </details>
+              <div class="wifi-step-actions">
+                <button id="refresh-sensors" type="button" class="button secondary" disabled>Atualizar</button>
+                <button type="button" class="button secondary" data-master-action="sensor_estado" data-sensor-id="255" data-sensor-value="0" data-cap="16384" disabled>Pausar todos</button>
+                <button type="button" class="button secondary" data-master-action="sensor_estado" data-sensor-id="255" data-sensor-value="1" data-cap="16384" disabled>Retomar todos</button>
+              </div>
+            </div>
+          </details>
+          <details id="master-tasks" class="card command-card">
+            <summary>Tarefas do mestre <span>CPU, pilha e estado</span></summary>
+            <div class="command-body">
+              <p id="master-task-status" class="command-field-status" role="status">Aguardando consulta.</p>
+              <ul id="master-task-list" class="sensor-rows"></ul>
+              <div class="wifi-step-actions">
+                <button id="master-task-first" type="button" class="button secondary">Atualizar</button>
+                <button id="master-task-previous" type="button" class="button secondary" disabled>Anterior</button>
+                <button id="master-task-next" type="button" class="button secondary" disabled>Próxima</button>
+              </div>
+            </div>
+          </details>
+          <article id="simulator-card" class="card simulator-card" aria-labelledby="simulator-title">
+            <div class="sync-head">
+              <h3 id="simulator-title">Fonte da telemetria</h3>
+              <span id="simulator-badge" class="badge muted">Aguardando consulta</span>
+            </div>
+            <p id="simulator-state" class="sync-summary">Fonte indisponível.</p>
+            <div class="simulator-control">
+              <div class="simulator-sources" role="group" aria-label="Fonte da telemetria">
+                <button type="button" class="button secondary" data-master-action="simulador_telemetria" data-source-value="0" data-cap="4096" aria-pressed="false" disabled>Sensores reais</button>
+                <button type="button" class="button secondary" data-master-action="simulador_telemetria" data-source-value="1" data-cap="4096" aria-pressed="false" disabled>Telemetria simulada</button>
+              </div>
+              <button id="refresh-simulator-state" type="button" class="button secondary">Atualizar</button>
+            </div>
+            <p id="simulator-checked" class="command-live-meta">Sem consulta.</p>
+          </article>
+        </section>
+
+        <section id="command-networks" class="command-task" aria-labelledby="command-networks-title">
+          <h2 id="command-networks-title">Rede</h2>
+          <details id="wifi-master" class="card command-card wifi-master-card">
+            <summary>Wi-Fi do mestre <span>OTA e Google</span></summary>
+            <div class="command-body">
+              <div class="wifi-state-row">
+                <div id="wifi-command-state" class="command-result">Aguardando mestre.</div>
+                <button id="refresh-wifi-state" type="button" class="button secondary">Atualizar</button>
+              </div>
+              <details class="wifi-admin-disclosure">
+                <summary>Permissão administrativa</summary>
+                <div class="wifi-admin">
+                  <label for="wifi-permission">Senha de permissão</label>
+                  <input id="wifi-permission" type="password" autocomplete="off">
+                </div>
+              </details>
+              <p id="wifi-form-error" class="wifi-form-error" role="alert" hidden></p>
+              <div class="wifi-flow-grid">
+                <section class="wifi-step">
+                  <div class="wifi-step-heading"><h3>Nova rede</h3></div>
+                  <div class="wifi-field-grid">
+                    <label>Nome (SSID)<input id="wifi-ssid" type="text" maxlength="32" autocomplete="off"></label>
+                    <label>Senha<input id="wifi-password" type="password" maxlength="63" autocomplete="new-password" placeholder="Vazia para rede aberta"></label>
+                  </div>
+                  <label class="check-field"><input id="wifi-save" type="checkbox"> Salvar após o teste</label>
+                  <div class="wifi-step-actions">
+                    <button type="button" class="button secondary" data-master-action="wifi_test" data-cap="512">Testar conexão</button>
+                  </div>
+                  <p class="command-note">O rádio desliga ao concluir o teste.</p>
+                </section>
+                <section class="wifi-step">
+                  <div class="wifi-step-heading"><h3>Redes salvas</h3></div>
+                  <label>Rede salva
+                    <select id="wifi-saved"><option value="">Aguardando lista</option></select>
+                  </label>
+                  <div class="wifi-step-actions">
+                    <button type="button" class="button secondary" data-master-action="wifi_conectar_salva" data-cap="512">Conectar</button>
+                    <button type="button" class="button danger" data-master-action="wifi_excluir_salva" data-cap="512">Excluir</button>
+                  </div>
+                </section>
+                <section class="wifi-step">
+                  <div class="wifi-step-heading">
+                    <div><h3>Rede principal</h3><p id="wifi-primary-current">Aguardando mestre.</p></div>
+                  </div>
+                  <label>Origem
+                    <select id="wifi-primary-source">
+                      <option value="new">Nova rede</option>
+                      <option value="saved">Rede salva</option>
+                    </select>
+                  </label>
+                  <p id="wifi-primary-help" class="wifi-step-description">Preencha os dados em Nova rede.</p>
+                  <div class="wifi-step-actions">
+                    <button type="button" class="button danger" data-master-action="wifi_primary" data-cap="512">Definir principal</button>
+                    <button type="button" class="button secondary" data-master-action="wifi_restaurar_principal" data-cap="512">Restaurar principal</button>
+                  </div>
+                </section>
+                <section class="wifi-step">
+                  <div class="wifi-step-heading"><h3>Política de conexão</h3></div>
+                  <div class="wifi-auto-row">
+                    <label>Conexão automática
+                      <select id="wifi-auto"><option value="1">Autorizada</option><option value="0">Desativada</option></select>
+                    </label>
+                    <button type="button" class="button secondary" data-master-action="wifi_automatico" data-cap="512">Aplicar modo</button>
+                  </div>
+                  <details class="wifi-advanced">
+                    <summary>Tentativas e tempos</summary>
+                    <div class="wifi-field-grid">
+                      <label>Tentativas por rede<input id="wifi-attempts" type="number" min="1" max="10" step="1"></label>
+                      <label>Tempo por tentativa (s)<input id="wifi-attempt-time" type="number" min="2" max="30" step="0.1"></label>
+                      <label>Entre tentativas (s)<input id="wifi-retry-interval" type="number" min="0.1" max="5" step="0.1"></label>
+                      <label>Limite da sessão (s)<input id="wifi-session-limit" type="number" min="5" max="180" step="0.1"></label>
+                    </div>
+                    <div id="wifi-policy-actions" class="wifi-step-actions">
+                      <button type="button" class="button secondary" data-master-action="wifi_politica" data-cap="512">Salvar política</button>
+                      <button type="button" class="button secondary" data-master-action="wifi_restaurar_politica" data-cap="32768" disabled>Restaurar padrão</button>
+                    </div>
+                  </details>
+                </section>
+              </div>
+            </div>
+          </details>
+          <h3 class="local-network-heading" hidden>Redes dos painéis</h3>
+          <div id="wifi-local" class="ap-grid">
+            <section class="card wifi-clients-panel" id="wifi-clients-equipe" aria-label="Clientes conectados à rede da Equipe"></section>
+            <section class="card wifi-clients-panel" id="wifi-clients-visitantes" aria-label="Clientes conectados à rede de Visitantes"></section>
+          </div>
+        </section>
+
+        <section id="command-operations" class="command-task" aria-labelledby="command-operations-title">
+          <h2 id="command-operations-title">Operação</h2>
+          <article id="sync-card" class="card sync-card" aria-labelledby="sync-title">
+            <div class="sync-head">
+              <h3 id="sync-title">Sincronização com Google</h3>
+              <span id="sync-badge" class="badge muted">Aguardando consulta</span>
+            </div>
+            <p id="sync-summary" class="sync-summary">Estado do cartão indisponível.</p>
+            <div class="sync-actions">
+              <button type="button" class="button sync-primary" data-master-action="sincronizar_google" data-cap="512">Enviar pendentes</button>
+              <button id="refresh-sync-state" type="button" class="button secondary">Atualizar</button>
+            </div>
+            <div class="sync-progress" role="progressbar" aria-label="Progresso do arquivo em envio" aria-valuemin="0" aria-valuemax="100" aria-valuetext="Aguardando dados"><span id="sync-progress-fill"></span></div>
+            <p id="sync-progress-label" class="sync-progress-label">Sem transferência.</p>
+            <div class="sync-stats">
+              <div><span>Confirmados</span><strong id="sync-files">—</strong></div>
+              <div><span>Arquivo</span><strong id="sync-current">—</strong></div>
+              <div><span>Transferência</span><strong id="sync-bytes">—</strong></div>
+              <div><span>Velocidade / restante</span><strong id="sync-rate">—</strong></div>
+            </div>
+            <p id="sync-last-result" class="sync-last-result">Sem envio concluído.</p>
+            <p id="sync-checked" class="command-live-meta">Sem consulta.</p>
+          </article>
+          <details id="ota-command" class="card command-card ota-command-card">
+            <summary>Atualização OTA <span>Mestre e satélites</span></summary>
+            <div class="command-body">
+              <div class="ota-panel">
+                <div class="ota-panel-head">
+                  <strong>Estado da atualização</strong>
+                  <button id="refresh-ota-state" type="button" class="button secondary">Atualizar</button>
+                </div>
+                <p id="ota-command-state" class="ota-summary">Aguardando mestre.</p>
+                <div id="ota-targets" class="ota-targets"></div>
+                <p id="ota-state-checked" class="command-live-meta">Sem consulta.</p>
+              </div>
+              <div class="ota-action-layout">
+                <div class="ota-action-step"><button type="button" class="button secondary" data-master-action="verificar_ota" data-cap="128">Verificar versões</button></div>
+                <div class="ota-action-step ota-authorize">
+                  <strong>Autorizar atualização</strong>
+                  <div class="ota-authorize-actions">
+                    <button type="button" class="button secondary" data-master-action="autorizar_mestre" data-cap="128">Mestre</button>
+                    <button type="button" class="button secondary" data-master-action="autorizar_equipe" data-cap="128">Equipe</button>
+                    <button type="button" class="button secondary" data-master-action="autorizar_visitantes" data-cap="128">Visitantes</button>
+                    <button type="button" class="button secondary" data-master-action="autorizar_todos" data-cap="128">Todos</button>
+                  </div>
+                </div>
+                <div class="ota-action-step ota-cancel-step"><button type="button" class="button danger" data-master-action="cancelar_ota" data-cap="128">Cancelar OTA</button></div>
+              </div>
+            </div>
+          </details>
+          <details id="operation-command" class="card command-card operation-command-card">
+            <summary>Relatórios e percurso <span>Ações do mestre</span></summary>
+            <div class="command-body">
+              <div class="operation-actions">
+                <div><strong>Relatórios</strong><p id="report-state">Indisponível</p><button type="button" class="button secondary" data-master-action="alternar_relatorios" data-cap="512">Pausar ou retomar</button></div>
+                <div><strong>Resumo serial</strong><p>Saída no terminal físico.</p><button type="button" class="button secondary" data-master-action="resumo_terminal" data-cap="256">Solicitar resumo</button></div>
+                <div><strong>Distância da sessão</strong><button type="button" class="button danger" data-master-action="zerar_percurso" data-cap="512">Zerar percurso</button></div>
+              </div>
+              <details class="operation-advanced">
+                <summary>Intervalos de relatório e OTA</summary>
+                <div class="command-fields">
+                  <label>Grupo
+                    <select id="report-group"><option value="0">Telemetria</option><option value="1">UART</option><option value="2">Sistema</option><option value="3">OTA</option></select>
+                  </label>
+                  <label>Intervalo (ms)<input id="report-interval" type="number" min="0" max="4294967295" step="1" placeholder="0 desativa"></label>
+                  <button type="button" class="button secondary" data-master-action="intervalo_relatorio" data-cap="512">Salvar relatório</button>
+                </div>
+                <div class="command-fields ota-interval-fields">
+                  <div>
+                    <label>Verificação OTA (min)<input id="ota-interval" type="number" min="1" max="10080" step="1"></label>
+                    <button type="button" class="button secondary" data-master-action="intervalo_ota" data-cap="512">Salvar verificação</button>
+                  </div>
+                  <div>
+                    <label>Telemetria durante OTA (ms)<input id="telemetry-ota-interval" type="number" min="500" max="10000" step="1"></label>
+                    <button type="button" class="button secondary" data-master-action="intervalo_telemetria_ota" data-cap="512">Salvar telemetria</button>
+                  </div>
+                </div>
+              </details>
+            </div>
+          </details>
+          <details id="terminal-logs" class="card command-card">
+            <summary>Logs do terminal <span>Níveis, perfil e cores</span></summary>
+            <div class="command-body">
+              <p id="terminal-log-status" class="command-field-status" role="status">Aguardando consulta.</p>
+              <div class="command-fields">
+                <label>Ajuste<select id="terminal-log-type"><option value="0">Nível global</option><option value="3">Nível por fonte</option><option value="1">Perfil NEXUS</option><option value="2">Cores no serial</option></select></label>
+                <label id="terminal-log-source-field" hidden>Fonte<select id="terminal-log-source"></select></label>
+                <label>Valor<select id="terminal-log-value"></select></label>
+                <label>Senha de permissão<input id="terminal-log-permission" type="password" autocomplete="off"></label>
+              </div>
+              <div class="wifi-step-actions">
+                <button id="refresh-terminal-logs" type="button" class="button secondary" disabled>Atualizar</button>
+                <button type="button" class="button" data-master-action="logs_terminal" data-cap="65536" disabled>Aplicar</button>
+              </div>
+              <details class="operation-advanced"><summary>Níveis por fonte</summary><ul id="terminal-log-levels" class="sensor-rows"></ul></details>
+            </div>
+          </details>
+        </section>
+
+        <section id="command-activity" class="command-task" aria-labelledby="command-activity-title">
+          <h2 id="command-activity-title">Atividade</h2>
+          <article id="command-overview" class="card command-overview" aria-live="polite">
+            <div class="command-overview-top"><h3 id="command-live-name">Nenhuma ação enviada</h3><span id="command-live-status" class="badge muted">Sem solicitação</span></div>
+            <p id="command-live-text"></p>
+            <div class="command-stages" aria-label="Etapas da última ação">
+              <div><span>Envio</span><strong id="command-stage-send">—</strong></div>
+              <div><span>Resposta</span><strong id="command-stage-response">—</strong></div>
+              <div><span>Estado</span><strong id="command-stage-state">—</strong></div>
+            </div>
+            <p id="command-live-meta" class="command-live-meta"></p>
+          </article>
+          <article class="card command-history-card">
+            <ol id="master-command-history" class="events command-run-list"><li>Nenhuma ação nesta sessão.</li></ol>
+          </article>
+        </section>
+      </div>
     </section>
-    <section id="visitantes" class="page" role="tabpanel" aria-labelledby="tab-visitantes"><div class="page-heading"><div><p class="section-kicker">Satélite remoto</p><h1 id="title-visitantes">ESP32 — Visitantes</h1><p>Estado consultado automaticamente por meio do mestre.</p></div><span id="visitantes-auto" class="badge muted">Atualização automática</span></div><div id="visitantes-content"></div></section>
+    <section id="visitantes" class="page device-page" role="tabpanel" aria-labelledby="tab-visitantes">
+      <div class="page-heading device-heading"><div><h1 id="title-visitantes">Visitantes</h1><p>Satélite de exibição</p></div><span id="visitantes-auto" class="device-link-status message-state" role="status">Aguardando enlace</span></div>
+      <div id="visitantes-content"></div>
+    </section>
     <section id="controle" class="page" role="tabpanel" aria-labelledby="tab-controle">
-      <div class="page-heading"><div><p class="section-kicker">Comandos críticos</p><h1>Controle do veículo</h1><p>Pedidos de condução e leituras recentes do mestre.</p></div><span class="badge warn">Sem atuação física nesta versão</span></div>
+      <div class="page-heading"><h1>Controle do veículo</h1><span id="actuation-status" class="badge muted">Atuação não confirmada</span></div>
       <div id="critical-notice" class="notice" role="status" aria-live="polite" hidden></div>
       <div class="critical-telemetry card"><div class="critical-telemetry-head"><h2>Leitura do veículo</h2><span id="critical-freshness" class="badge muted">Aguardando telemetria</span></div>
-        <dl class="critical-readings"><div class="critical-speed"><dt>Velocidade</dt><dd id="critical-speed">—</dd><small>km/h</small></div><div><dt>Acelerador</dt><dd id="critical-throttle">—</dd></div><div><dt>Freio</dt><dd id="critical-brake">—</dd></div><div><dt>Corrente</dt><dd id="critical-current">—</dd></div><div><dt>Tensão</dt><dd id="critical-voltage">—</dd></div><div><dt>Potência</dt><dd id="critical-power">—</dd></div></dl>
-        <p class="context-note">Acelerador, freio e grandezas elétricas dependem da origem simulada; sem medição real, aparecem como indisponíveis. Leituras antigas são identificadas acima.</p>
+        <dl class="critical-readings"><div class="critical-speed"><dt>Velocidade</dt><dd id="critical-speed">—</dd><small>km/h</small></div><div class="critical-soc"><dt>Carga simulada</dt><dd id="critical-soc">—</dd></div><div><dt>Acelerador</dt><dd id="critical-throttle">—</dd></div><div><dt>Freio</dt><dd id="critical-brake">—</dd></div><div><dt>Corrente</dt><dd id="critical-current">—</dd></div><div><dt>Tensão</dt><dd id="critical-voltage">—</dd></div><div><dt>Potência</dt><dd id="critical-power">—</dd></div></dl>
       </div>
       <article id="remote-control" class="card remote-control">
-        <div class="critical-control-head"><div><h2>Parada remota</h2><p>Pedido enviado diretamente ao mestre.</p></div><button type="button" class="button danger critical-stop" data-master-action="parada_remota" data-cap="8192">Solicitar parada</button></div>
-        <p class="critical-stop-note"><strong>Atenção</strong><span>Sem confirmação: o botão registra o pedido no mestre. Nesta versão, não aciona o freio físico nem comprova que o carro parou.</span></p>
-        <p id="remote-state" role="status">Aguardando estado do mestre.</p>
-        <div class="critical-status-head"><h2>Pedidos registrados</h2><button id="refresh-remote-control" type="button" class="button secondary">Atualizar estado</button></div>
-        <dl class="remote-readings"><div><dt>Marcha solicitada</dt><dd id="remote-gear-current">—</dd></div><div><dt>Limite de velocidade</dt><dd id="remote-speed-current">—</dd></div><div><dt>Limite de aceleração</dt><dd id="remote-accel-current">—</dd></div><div><dt>Pedido de parada</dt><dd id="remote-stop-current">—</dd></div></dl>
-        <div class="critical-control-grid"><div class="critical-settings"><h2>Marcha e limites</h2><div class="remote-fields"><div><label for="remote-gear">Marcha</label><select id="remote-gear"><option value="0">Neutro</option><option value="1">Frente</option><option value="2">Ré</option></select><button type="button" class="button" data-master-action="definir_marcha" data-cap="8192">Enviar marcha</button></div><div><label for="remote-speed">Velocidade máxima (km/h)</label><input id="remote-speed" type="number" min="0" max="35" step="0.01" value="0"><button type="button" class="button" data-master-action="velocidade_maxima" data-cap="8192">Enviar velocidade máxima</button></div><div><label for="remote-accel">Aceleração máxima (m/s²)</label><input id="remote-accel" type="number" min="0" max="5" step="0.001" value="0"><button type="button" class="button" data-master-action="aceleracao_maxima" data-cap="8192">Enviar aceleração máxima</button></div></div></div><div class="critical-release"><h2>Preparar movimento</h2><p>Para solicitar frente ou ré, informe limites positivos e libere o pedido de parada. Solicite neutro antes de inverter o sentido.</p><button type="button" class="button secondary" data-master-action="liberar_parada_remota" data-cap="8192">Liberar pedido de parada</button></div></div>
+        <div class="critical-control-head"><div><h2>Parada remota</h2></div><button type="button" class="button danger critical-stop" aria-describedby="critical-stop-note" data-master-action="parada_remota" data-cap="8192">PARADA DE EMERGÊNCIA</button></div>
+        <div id="critical-stop-note" class="critical-stop-note message-state" data-tone="emergency" role="note"><span class="critical-stop-symbol" aria-hidden="true">!</span><p>Ao pressionar, o comando é enviado sem confirmação.</p></div>
+        <p id="remote-state" class="message-state" data-tone="info" role="status">Aguardando o mestre.</p>
+        <div class="critical-status-head"><h2>Estado do controle</h2><button id="refresh-remote-control" type="button" class="button secondary">Atualizar estado</button></div>
+        <dl class="remote-readings"><div><dt>Chave de marcha</dt><dd id="remote-gear-physical">—</dd></div><div><dt>Marcha permitida</dt><dd id="remote-gear-current">—</dd></div><div><dt>Marcha máxima</dt><dd id="remote-gear-limit-current">—</dd></div><div><dt>Sentido</dt><dd id="remote-reverse-current">—</dd></div><div><dt>Velocidade máxima</dt><dd id="remote-speed-current">—</dd></div><div><dt>Acelerador máximo</dt><dd id="remote-throttle-max-current">—</dd></div><div class="remote-stop-reading"><dt>Parada e relé</dt><dd id="remote-stop-current">—</dd></div></dl>
+        <div class="critical-control-grid">
+          <div class="critical-settings">
+            <h2>Marcha e limites</h2>
+            <div class="remote-fields">
+              <div>
+                <span id="remote-gear-label">Marcha máxima</span>
+                <div class="remote-segments" role="group" aria-labelledby="remote-gear-label">
+                  <button type="button" data-master-action="limite_marcha" data-control-value="1" data-cap="8192" aria-pressed="false" disabled>L</button>
+                  <button type="button" data-master-action="limite_marcha" data-control-value="2" data-cap="8192" aria-pressed="false" disabled>M</button>
+                  <button type="button" data-master-action="limite_marcha" data-control-value="3" data-cap="8192" aria-pressed="false" disabled>H</button>
+                </div>
+              </div>
+              <div>
+                <span id="reverse-permission-label">Permissão de ré</span>
+                <div class="remote-segments" role="group" aria-labelledby="reverse-permission-label" aria-describedby="reverse-permission-state">
+                  <button type="button" data-master-action="permitir_re" data-control-value="0" data-cap="262144" aria-pressed="false" disabled>Bloquear ré</button>
+                  <button type="button" data-master-action="permitir_re" data-control-value="1" data-cap="262144" aria-pressed="false" disabled>Permitir ré</button>
+                </div>
+                <small id="reverse-permission-state">Aguardando o Mestre.</small>
+              </div>
+              <div>
+                <label for="remote-speed">Velocidade máxima (km/h)</label>
+                <input id="remote-speed" type="number" min="0" max="35" step="0.01" value="0">
+                <button type="button" class="button" data-master-action="velocidade_maxima" data-cap="8192">Salvar velocidade</button>
+              </div>
+              <div>
+                <label for="remote-throttle-max">Acelerador máximo (%)</label>
+                <input id="remote-throttle-max" type="number" min="0" max="100" step="1" value="0">
+                <button type="button" class="button" data-master-action="limite_acelerador" data-cap="8192">Salvar acelerador</button>
+              </div>
+            </div>
+          </div>
+          <div class="critical-release">
+            <div><h2>Rearme</h2><p>Mínimo de 5 s. Rearme automático após 30 s, se seguro. Após OTA, rearme manual.</p><p id="remote-rearm-wait" role="status" hidden></p></div>
+            <button type="button" class="button secondary" aria-describedby="remote-rearm-wait" data-master-action="liberar_parada_remota" data-cap="8192">Rearmar</button>
+          </div>
+        </div>
+        <div class="pedal-config"><div class="pedal-config-intro"><h2>Calibração do pedal</h2><p>Ajuste com o pedal solto.</p><p id="remote-pedal-status">Aguardando leituras.</p></div><div class="pedal-config-fields"><div><label for="remote-deadzone">Zona morta do pedal (%)</label><input id="remote-deadzone" type="number" min="0" max="30" step="0.1" value="5"><button type="button" class="button" data-master-action="zona_morta_pedal" data-cap="8192">Salvar zona morta</button></div></div></div>
         <p id="remote-checked" class="context-note">Nenhuma consulta recebida.</p>
       </article>
     </section>
     <section id="sobre" class="page" role="tabpanel" aria-labelledby="tab-sobre">
-      <div class="page-heading"><div><p class="section-kicker">O projeto</p><h1>Carro Elétrico UFSM-CS</h1><p>Instrumentação, telemetria e acompanhamento de um veículo elétrico experimental.</p></div></div>
-      <div class="about-layout"><div class="card about-identity"><img class="project-symbol" src="/* PROJECT_LOGO */" alt="Símbolo do Carro Elétrico UFSM-CS: carro elétrico e raio"/><p>Um painel para aproximar a equipe dos dados do carro durante o desenvolvimento e os testes, e para compartilhar a experiência com visitantes.</p></div><div class="card about-credits"><div><span class="about-kicker">Orientação</span><h2>Prof. Dr. Paulo César Vargas Luz</h2></div><div><span class="about-kicker">Equipe discente</span><ul><li>Adylson Hahn</li><li>Érick Ramon Biscaglia</li><li>Gabriel Muttoni</li><li>Gustavo Reckziegel Machado</li><li>Théos Schultz Tompsen</li></ul></div></div></div>
+      <article class="card about-layout" aria-labelledby="about-title">
+        <div class="about-identity">
+          <img class="project-symbol" src="/* PROJECT_LOGO */" alt="Símbolo do Carro Elétrico UFSM-CS: carro elétrico e raio">
+        </div>
+        <div class="about-credits">
+          <h1 id="about-title">Carro Elétrico UFSM-CS</h1>
+          <section aria-labelledby="about-advisor">
+            <h2 id="about-advisor">Orientação</h2>
+            <p class="about-advisor-name">Prof. Dr. Paulo César Vargas Luz</p>
+          </section>
+          <section class="about-team" aria-labelledby="about-team-title">
+            <h2 id="about-team-title">Equipe discente</h2>
+            <ul>
+              <li>Adylson Hahn</li>
+              <li>Érick Ramon Biscaglia</li>
+              <li>Gabriel Muttoni</li>
+              <li>Gustavo Reckziegel Machado</li>
+              <li>Théos Schultz Tompsen</li>
+            </ul>
+          </section>
+        </div>
+      </article>
     </section>
   </main>
-  <dialog id="confirm-dialog"><form method="dialog"><h2 id="confirm-title">Confirmar ação</h2><p id="confirm-text"></p><div class="dialog-actions"><button value="cancel" class="button secondary">Cancelar</button><button id="confirm-action" value="confirm" class="button danger">Confirmar</button></div></form></dialog>
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-text"><form method="dialog"><h2 id="confirm-title">Confirmar ação</h2><p id="confirm-text"></p><p id="confirm-wait" role="status" hidden></p><div class="dialog-actions"><button value="cancel" class="button secondary">Cancelar</button><button id="confirm-action" value="confirm" class="button danger">Confirmar</button></div></form></dialog>
   <script>/* NEXUS_JS */</script>
 </body>
 </html>

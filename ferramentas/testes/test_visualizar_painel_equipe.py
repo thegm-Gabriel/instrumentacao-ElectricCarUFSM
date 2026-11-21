@@ -10,7 +10,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, build_opener, ProxyHandler
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from visualizar_painel_equipe import SimuladorEquipe, criar_servidor, GERADOR
+from visualizar_painel_equipe import GERADOR, POLITICA_WIFI_PADRAO, SimuladorEquipe, criar_servidor
 
 
 class SimuladorTests(unittest.TestCase):
@@ -85,6 +85,17 @@ class SimuladorTests(unittest.TestCase):
         self.sim.comando("wifi_salvar_preparada", "")
         self.assertIn("Rede aberta", self.sim.redes)
 
+    def test_rede_salva_pode_virar_principal(self):
+        rede = self.sim.redes[0]
+        self.sim.comando("wifi_principal_salva", "1\npermissao-ficticia")
+        config = self.sim.consulta("configuracao", {})
+        self.assertEqual(config["rede_principal"], rede)
+        self.assertTrue(config["principal_alterada"])
+        self.assertNotIn(rede, self.sim.redes)
+        self.sim.comando("wifi_restaurar_principal", "permissao-ficticia")
+        self.assertEqual(self.sim.consulta("configuracao", {})["rede_principal"],
+                         "Laboratório UFSM")
+
     def test_configuracao_protegida_validada_antes_de_alterar(self):
         original = dict(self.sim.config)
         for body in ("3\n15000\n3000\n120000", "11\n15000\n3000\n120000\nteste"):
@@ -115,6 +126,18 @@ class SimuladorTests(unittest.TestCase):
         self.assertEqual(self.sim.telemetria()["percurso_metros"], 0)
         self.sim.comando("simulador_telemetria", "0")
         self.assertFalse(self.sim.telemetria()["simulado"])
+
+    def test_carga_simulada_cai_um_decimo_a_cada_250_ms(self):
+        self.assertEqual(self.sim.telemetria()["carga_decimos_percentual"], 880)
+        self.advance(.249)
+        self.assertEqual(self.sim.telemetria()["carga_decimos_percentual"], 880)
+        self.advance(.001)
+        self.assertEqual(self.sim.telemetria()["carga_decimos_percentual"], 879)
+        self.advance(219.75)
+        ultima = self.sim.telemetria()
+        self.assertEqual(ultima["carga_decimos_percentual"], 0)
+        self.assertEqual(ultima["velocidade_centesimos_kmh"], 0)
+        self.assertEqual(ultima["corrente_centesimos_a"], 0)
 
     def test_trajetoria_variada_e_sinais_coerentes(self):
         leituras = []
@@ -149,32 +172,79 @@ class SimuladorTests(unittest.TestCase):
     def test_controle_remoto_intertravamentos_e_parada_sem_retomada(self):
         self.assertFalse(self.sim.consulta("controle_remoto", {})["atuacao_habilitada"])
         with self.assertRaises(ValueError):
-            self.sim.comando("definir_marcha", "1")
+            self.sim.comando("definir_faixa_marcha", "1")
         self.sim.comando("velocidade_maxima", "2500")
-        self.sim.comando("aceleracao_maxima", "1200")
+        self.sim.comando("limite_acelerador", "500")
         self.sim.comando("parada_remota", "0")
-        self.sim.comando("definir_marcha", "1")
-        with self.assertRaises(ValueError):
-            self.sim.comando("definir_marcha", "2")
+        self.assertEqual(self.sim.controle["faixa_marcha_solicitada"], 1)
+        self.sim.comando("limite_marcha", "2")
+        self.assertEqual(self.sim.controle["faixa_marcha_solicitada"], 2)
         self.sim.comando("parada_remota", "1")
+        self.assertEqual(self.sim.controle["faixa_marcha_solicitada"], 0)
+        self.advance(5)
         self.sim.comando("parada_remota", "0")
-        self.assertEqual(self.sim.controle["marcha_solicitada"], 0)
-        self.sim.comando("definir_marcha", "2")
+        self.assertEqual(self.sim.controle["faixa_marcha_solicitada"], 2)
         self.sim.comando("velocidade_maxima", "0")
-        self.assertEqual(self.sim.controle["marcha_solicitada"], 0)
+        self.assertEqual(self.sim.controle["faixa_marcha_solicitada"], 2)
         fresh = SimuladorEquipe().controle
         self.assertTrue(fresh["parada_solicitada"])
         self.assertEqual(fresh["velocidade_maxima_centesimos_kmh"], 0)
 
+    def test_rearme_exige_cinco_segundos_desde_a_ultima_parada(self):
+        self.sim.comando("parada_remota", "1")
+        self.advance(4)
+        self.sim.comando("parada_remota", "1")
+        self.advance(4.999)
+        antes = dict(self.sim.controle)
+        with self.assertRaisesRegex(ValueError, "5 s"):
+            self.sim.comando("parada_remota", "0")
+        self.assertEqual(self.sim.controle, antes)
+        self.now.return_value = 1009
+        self.sim.comando("parada_remota", "0")
+        self.assertFalse(self.sim.controle["parada_solicitada"])
+
     def test_controle_remoto_recusa_valores_sem_mutacao(self):
         original = dict(self.sim.controle)
-        for name, body in (("velocidade_maxima", "3501"), ("aceleracao_maxima", "5001"),
-                           ("definir_marcha", "3"), ("parada_remota", "2"),
+        for name, body in (("velocidade_maxima", "3501"), ("limite_acelerador", "1001"),
+                           ("limite_marcha", "0"), ("parada_remota", "2"),
                            ("velocidade_maxima", "-1"), ("velocidade_maxima", "2.5"),
-                           ("definir_marcha", "1\n")):
+                           ("definir_faixa_marcha", "1\n")):
             with self.subTest(name=name, body=body), self.assertRaises(ValueError):
                 self.sim.comando(name, body)
         self.assertEqual(self.sim.controle, original)
+
+    def test_reversao_e_limite_do_pedal_na_previa(self):
+        self.sim.comando("velocidade_maxima", "2000")
+        self.sim.comando("limite_acelerador", "400")
+        self.assertEqual(self.sim.controle["acelerador_maximo_decimos_percentual"], 400)
+        self.sim.comando("parada_remota", "0")
+        with self.assertRaisesRegex(ValueError, "Ré bloqueada"):
+            self.sim.comando("definir_reversao", "1")
+        self.sim.comando("permitir_re", "1")
+        self.assertTrue(self.sim.controle["reversao_permitida"])
+        self.assertFalse(self.sim.controle["reversao_solicitada"])
+        self.sim.comando("definir_reversao", "1")
+        self.assertEqual(self.sim.controle["faixa_marcha_solicitada"], 1)
+        self.sim.comando("permitir_re", "0")
+        self.assertFalse(self.sim.controle["reversao_permitida"])
+        self.assertTrue(self.sim.controle["parada_solicitada"])
+        self.assertEqual(self.sim.consulta("controle_remoto", {})["rearme_restante_ms"], 5000)
+        self.assertEqual(self.sim.controle["acelerador_permitido_decimos_percentual"], 0)
+        self.assertEqual(self.sim.controle["faixa_marcha_solicitada"], 0)
+        self.assertFalse(self.sim.controle["reversao_solicitada"])
+
+    def test_configuracao_pedal_na_previa(self):
+        self.sim.comando('zona_morta_pedal', '75')
+        self.sim.comando('tensao_minima_dac', '850')
+        estado = self.sim.consulta('controle_remoto', {})
+        self.assertEqual(estado['formato'], 7)
+        self.assertEqual(estado['zona_morta_decimos_percentual'], 75)
+        self.assertEqual(estado['tensao_minima_saida_mv'], 850)
+        self.assertFalse(estado['atuacao_habilitada'])
+        with self.assertRaises(ValueError):
+            self.sim.comando('zona_morta_pedal', '301')
+        with self.assertRaises(ValueError):
+            self.sim.comando('tensao_minima_dac', '2501')
 
 
 class HttpTests(unittest.TestCase):
@@ -262,9 +332,84 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(data['velocidade_maxima_centesimos_kmh'], 2300)
         self.assertFalse(data['atuacao_habilitada'])
-        self.assertEqual(self.request('/api/mestre?consulta=definir_marcha', '1')[0], 400)
+        self.assertEqual(self.request('/api/mestre?consulta=definir_faixa_marcha', '1')[0], 400)
         self.request('/__previa/cenario', 'sem-mestre')
         self.assertEqual(self.request('/api/mestre?consulta=parada_remota', '1')[0], 503)
+
+    def test_sensores_http_distingue_aquisicao_e_leitura_valida(self):
+        rota = "/api/mestre?consulta=sensores"
+        status, sensores = self.request(rota)
+        self.assertEqual(status, 200)
+        self.assertTrue(sensores["controle_permitido"])
+        self.assertEqual(sensores["ativos"], 31)
+        self.assertEqual(sensores["validos"], 16)
+        self.request("/api/mestre?consulta=simulador_telemetria", "0")
+        self.assertEqual(self.request(rota, "3\n0")[0], 200)
+        sensores = self.request(rota)[1]
+        self.assertEqual(sensores["ativos"], 23)
+        self.assertEqual(sensores["validos"], 23)
+        self.assertEqual(sensores["ina228"]["tensao_v"], 0)
+        self.assertEqual(self.request(rota, "5\n1")[0], 400)
+        self.assertEqual(self.request(rota, "255\n0")[0], 200)
+        self.assertEqual(self.request(rota)[1]["ativos"], 0)
+        self.assertEqual(self.request(rota, "255\n1")[0], 200)
+        self.assertEqual(self.request(rota)[1]["validos"], 31)
+
+    def test_logs_terminal_http_perfil_e_fonte(self):
+        rota = "/api/mestre?consulta=logs_terminal"
+        self.assertEqual(self.request(rota, "1\n1\n0\n")[0], 400)
+        self.assertEqual(self.request(rota, "1\n1\n1\nteste")[0], 400)
+        self.assertEqual(self.request(rota, "3\n1\n18\nteste")[0], 400)
+        self.assertEqual(self.request(rota, "3\n1\n17\nteste")[0], 200)
+        self.assertEqual(self.request(rota, "1\n1\n0\nteste")[0], 200)
+        self.assertEqual(self.request(rota, "2\n0\n0\nteste")[0], 200)
+        logs = self.request(rota)[1]
+        self.assertEqual(len(logs["fontes"]), 18)
+        self.assertEqual(logs["fontes"][0], dict(id=0, nivel=3, nivel_efetivo=2))
+        self.assertEqual(logs["fontes"][17], dict(id=17, nivel=1, nivel_efetivo=1))
+        self.assertTrue(logs["apenas_avisos_projeto"])
+        self.assertFalse(logs["cores"])
+        self.assertEqual(self.request(rota, "0\n2\n0\nteste")[0], 200)
+        logs = self.request(rota)[1]
+        self.assertFalse(logs["apenas_avisos_projeto"])
+        self.assertEqual(logs["nivel_global"], 2)
+        self.assertEqual({fonte["nivel"] for fonte in logs["fontes"]}, {2})
+
+    def test_restauracao_http_afeta_apenas_politica_wifi(self):
+        rota_mestre = "/api/mestre?consulta="
+        versao = self.request(rota_mestre+"versao")[1]
+        novos_comandos = 16384 | 32768 | 65536 | 131072
+        self.assertEqual(versao["capacidades"] & novos_comandos, novos_comandos)
+        self.request(rota_mestre+"wifi_principal_salva", "1\nteste")
+        self.request(rota_mestre+"wifi_automatico", "0\nteste")
+        self.request(rota_mestre+"wifi_politica", "4\n20000\n1000\n100000\nteste")
+        rota = rota_mestre+"wifi_restaurar_politica"
+        self.assertEqual(self.request(rota, "")[0], 400)
+        alterada = self.request(rota_mestre+"configuracao")[1]
+        self.assertEqual(alterada["tentativas_wifi"], 4)
+        self.assertEqual(self.request(rota, "teste")[0], 200)
+        restaurada = self.request(rota_mestre+"configuracao")[1]
+        for campo, padrao in POLITICA_WIFI_PADRAO.items():
+            self.assertEqual(restaurada[campo], padrao)
+        for campo in ("wifi_automatico", "rede_principal", "quantidade_redes_wifi"):
+            self.assertEqual(restaurada[campo], alterada[campo])
+
+    def test_tarefas_mestre_http_pagina_e_preserva_coleta(self):
+        rota = "/api/mestre?consulta=tarefas_mestre"
+        status, primeira = self.request(rota)
+        self.assertEqual(status, 200)
+        self.assertTrue(primeira["valido"])
+        self.assertEqual(primeira["inicio"], 0)
+        self.assertEqual(primeira["quantidade"], 3)
+        segunda = self.request(rota+"&inicio=3")[1]
+        self.assertEqual(segunda["coletado_em_ms"], primeira["coletado_em_ms"])
+        self.assertEqual(segunda["total"], primeira["total"])
+        self.assertNotEqual(segunda["tarefas"][0]["nome"], primeira["tarefas"][0]["nome"])
+        self.assertEqual(self.request(rota+"&inicio=6")[1]["quantidade"], 2)
+        self.assertEqual(self.request(rota+"&inicio=45")[1]["tarefas"], [])
+        for inicio in ("-3", "1", "48", "x"):
+            with self.subTest(inicio=inicio):
+                self.assertEqual(self.request(rota+"&inicio="+inicio)[0], 400)
 
 
 if __name__ == "__main__":

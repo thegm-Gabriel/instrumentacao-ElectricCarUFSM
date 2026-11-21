@@ -73,7 +73,7 @@ amostras evita que uma escrita lenta pare a aquisição; se ela encher, a perda
 é contabilizada no diagnóstico. O CSV ativo é sincronizado com o cartão a
 cada 10 s e fechado após **1 h ou 8 MiB**, o que ocorrer primeiro. Esses
 valores estão em
-[`configuracao_registro_telemetria.h`](../firmware/mestre-s3/include/nucleo/configuracao_registro_telemetria.h).
+[`historico.h`](../firmware/mestre-s3/include/nucleo/configuracao/historico.h).
 
 | Local no microSD | Significado |
 |---|---|

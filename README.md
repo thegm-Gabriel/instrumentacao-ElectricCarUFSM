@@ -52,12 +52,15 @@ flowchart LR
 
 Os firmwares são projetos independentes **PlatformIO/ESP-IDF** em
 [`firmware/`](firmware/). A equipe dispõe de páginas separadas para telemetria,
-comandos, controle preparatório e diagnóstico dos ESPs. O painel público mostra
+comandos, controle experimental e diagnóstico dos ESPs. O painel público mostra
 as leituras do veículo sem controles de operação.
 
-> **Estado atual do controle:** pedidos de marcha, limites e parada remota são
-> registrados no mestre, mas **não acionam fisicamente o veículo**. Ações pelo
-> painel da equipe ficam disponíveis aos clientes do AP da Equipe. Veja
+> **Estado atual do controle:** o mestre valida faixa L/M/H, sentido, limites
+> de velocidade e de pedal, zona morta, tensão mínima do DAC e parada remota.
+> O pedal é lido no GPIO3; o MCP4725 é zerado na inicialização. **A saída
+> diferente de zero e os GPIOs de marcha/relé seguem desabilitados** até
+> validação elétrica e dos intertravamentos.
+> Ações pelo painel da equipe ficam disponíveis aos clientes do AP da Equipe. Veja
 > [controle remoto](documentacao/controle-remoto.md) e
 > [acesso aos satélites](documentacao/satelites.md).
 

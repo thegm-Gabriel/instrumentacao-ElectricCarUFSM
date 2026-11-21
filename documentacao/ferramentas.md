@@ -43,51 +43,34 @@ geradores. `node --check firmware/equipe-s3/web/app.js` e o comando equivalente
 de Visitantes verificam sintaxe de JavaScript; ainda é preciso testar a página
 em tela estreita, resposta ausente e dados reais/simulados.
 
-### Prévia local da página de visitantes
+### Prévias da Equipe e de Visitantes
 
 ```powershell
 python ferramentas\visualizar_painel_visitantes.py
+python ferramentas\visualizar_painel_equipe.py
 ```
 
-Abra `http://127.0.0.1:8765/` no navegador. O servidor monta o mesmo HTML
-incorporado pelo gerador e responde à API de telemetria com trajetos simulados
-variados, identificados como demonstração na página. A prévia da Equipe usa a
-mesma fonte local; ambas alternam cruzeiro suave e frenagens de intensidades
-diferentes. Ele lê as fontes a cada abertura:
-após editar HTML, CSS ou JavaScript, atualize o navegador. Use `Ctrl+C` para
-encerrar. Se a porta estiver ocupada, passe `--porta 8766` e abra o endereço
-correspondente. A prévia permite avaliar layout e interações; dados reais e
-comportamento de rede ainda dependem do ESP.
+O menu no terminal oferece duas opções.
 
-Para abrir também no celular, conecte-o à mesma rede Wi-Fi do PC e execute:
+- **1 · Somente neste computador.** Pressione Enter para usar esta opção. O
+  endereço é `http://127.0.0.1:8765/` para Visitantes e `http://127.0.0.1:8766/`
+  para Equipe.
+- **2 · Computador e dispositivos na mesma rede.** No celular, abra um dos
+  endereços exibidos no terminal. Se precisar localizar o IPv4 do PC, use
+  `ipconfig`. A rede deve permitir comunicação entre os dispositivos, e o
+  firewall do Windows deve permitir o acesso ao Python na rede privada.
 
-```powershell
-python ferramentas\visualizar_painel_visitantes.py --rede
-```
+Use `--local` ou `--rede` para escolher o modo direto pela linha de comando.
+Em execução sem terminal interativo, o padrão é acesso só no PC. `--porta
+8770`, por exemplo, escolhe outra porta. As duas prévias podem rodar ao mesmo
+tempo em terminais separados. `Ctrl+C` encerra a prévia.
 
-No PC, consulte o endereço IPv4 da conexão Wi-Fi com `ipconfig`. No celular,
-abra `http://IP_DO_PC:8765/`, substituindo `IP_DO_PC` por esse endereço. A
-opção `--rede` faz o servidor aceitar conexões da rede local; sem ela, aceita
-somente conexões do próprio PC. Se o celular não conseguir abrir, confira se a
-rede permite comunicação entre dispositivos e se o firewall do Windows
-permite o Python na rede privada.
+Os visualizadores montam as páginas a partir das fontes HTML, CSS e JavaScript
+dos firmwares. Atualize o navegador depois de editar a interface e reinicie o
+script após mudanças no simulador Python. As duas prévias usam trajetos
+simulados com cruzeiro e frenagens de intensidades variadas.
 
-### Prévia local da página da equipe
-
-```powershell
-python ferramentas\visualizar_painel_equipe.py --rede
-```
-
-No PC, abra `http://127.0.0.1:8766/`. No celular conectado à mesma rede,
-abra `http://IP_DO_PC:8766/`; obtenha o IPv4 do PC com `ipconfig`. Sem `--rede`,
-o acesso fica restrito ao próprio computador. `--porta 8770`, por exemplo,
-permite escolher outra porta. As prévias da Equipe e de Visitantes podem rodar
-ao mesmo tempo em terminais separados, usando suas portas padrão.
-
-A ferramenta usa **as mesmas fontes HTML, CSS e JavaScript do firmware da
-Equipe**. Atualize o navegador depois de editar a interface; reinicie o script
-se alterar o simulador Python. Encerre com `Ctrl+C`. Não é necessário gerar o
-arquivo C nem compilar para usar a prévia.
+#### Cenários e comandos da Equipe
 
 Uma faixa exclusiva da prévia identifica que **todos os dados e comandos são
 simulados**, inclusive se você selecionar “Sensores reais” no painel. Essa
@@ -96,7 +79,7 @@ sem resposta. Também é possível iniciar em um cenário específico:
 
 ```powershell
 python ferramentas\visualizar_painel_equipe.py --rede --cenario degradado
-python ferramentas\visualizar_painel_equipe.py --cenario sem-mestre
+python ferramentas\visualizar_painel_equipe.py --local --cenario sem-mestre
 ```
 
 O ambiente fornece telemetria a 4 Hz, diagnósticos dos três ESPs, clientes Wi-Fi,

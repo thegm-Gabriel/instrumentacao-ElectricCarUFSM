@@ -11,7 +11,7 @@ conferidos nos cabeçalhos apontados em [pinagem](pinagem.md) e
 
 | Parte | Responsabilidade | Vantagem da separação |
 |---|---|---|
-| `nucleo` do mestre | Define pinos, limites e políticas estáticas. | Ajustes da placa ficam localizados, sem espalhar números pelo firmware. |
+| `include/nucleo/configuracao` do mestre | Reúne a pinagem e os valores padrão da placa e dos serviços. | Ajustes da placa ficam localizados, sem espalhar números pelo firmware. |
 | `gerenciadores` | Configuram e operam drivers, filas e periféricos do ESP-IDF. | Um serviço pode trocar o modo de acesso ao hardware sem reescrever as regras do veículo. |
 | `dispositivos` | Interpretam cada componente físico e sua conversão local. | Calibração ou substituição de sensor não precisa alterar HTTP, OTA ou os painéis. |
 | `servicos` | Combinam leituras, comandos, estados e recuperação. | O mesmo resultado atende terminal, logs e páginas, sem três implementações da regra. |
@@ -95,7 +95,7 @@ outro. Veja o significado dos termos no [glossário](conceitos.md).
 1. Encoders, ADC e MPU6050 produzem leituras no mestre. O odômetro calcula
    velocidade e percurso; a origem simulada, quando ativada, preenche o mesmo
    conjunto de leituras com as unidades usadas pelo painel.
-2. `servico_telemetria` compacta o modelo no quadro v5, identifica sequência e
+2. `telemetria_uart` compacta o modelo no quadro v5, identifica sequência e
    instante do mestre, aplica CRC-16 e entrega cópias às duas filas UART. O
    produtor não espera o TX físico ou a página web.
 3. Cada receptor separa telemetria, comandos e OTA pelo enquadramento. Só publica
@@ -151,7 +151,7 @@ comportamento quando o SD falha.
 | Mudança | Verificações necessárias |
 |---|---|
 | Campo ou enquadramento UART | Atualizar o contrato em `firmware/compartilhado/protocolos`, os três consumidores, [protocolos](protocolos.md) e testes de parser/CRC. |
-| GPIO, escala física ou montagem | Atualizar `configuracao_placa.h`, [pinagem](pinagem.md) e validar em bancada. |
+| GPIO, escala física ou montagem | Ajustar a [pinagem da placa](../firmware/mestre-s3/include/nucleo/configuracao/placa.h) ou a [calibração do veículo](../firmware/mestre-s3/include/nucleo/configuracao/veiculo.h), atualizar a [pinagem documentada](pinagem.md) e validar em bancada. |
 | Comando ou resposta | Preservar identificador, resultado e tamanho; revisar servidor HTTP, estado assíncrono e [satélites](satelites.md). |
 | Tela web | Editar HTML/CSS/JS em `web/`, executar o respectivo `gerar_painel.py` e revisar celular e computador. O `.c` gerado acompanha a fonte no Git. |
 | Tarefa ou buffer | Medir pilha, maior bloco interno, PSRAM e tempo sob Wi-Fi/OTA antes de mudar prioridades ou afinidade. |

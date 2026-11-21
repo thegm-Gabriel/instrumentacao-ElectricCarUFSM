@@ -22,7 +22,7 @@ depois o guia do componente que pretende operar ou modificar.
 | Controlador principal | [Firmware mestre](mestre.md) | Aquisição, odômetro, telemetria, SD, terminal, Wi-Fi, diagnóstico, OLED e sinalização. |
 | Painéis locais | [Satélites e APIs](satelites.md) | Equipe, visitantes, rotas HTTP, comandos e comportamento sem enlace. |
 | Formato dos dados | [Protocolos](protocolos.md) | Pacotes UART de telemetria, ACK, comandos e OTA. |
-| Pedidos de condução futuros | [Controle remoto](controle-remoto.md) | Marcha, limites e parada remota preparados no mestre, sem atuação física. |
+| Controle experimental | [Controle de marcha e acelerador](controle-remoto.md) | Faixa L/M/H, sentido, limites, pedal no ADC1, MCP4725, zona morta e parada. Saída de aceleração ainda bloqueada até validação elétrica. |
 | Versões, publicação e atualização | [OTA e releases](ota.md) | Major/minor/patch, versões independentes, preparador, tag, GitHub Release, autorização e rollback. |
 | Comandos de desenvolvimento | [Ferramentas](ferramentas.md) | Geradores das páginas e QR, segredos, compilação, testes e scripts de release. |
 | Histórico remoto | [Google Drive e Sheets](google.md) | CSV, Apps Script, credenciais, envio e recuperação. |
@@ -102,7 +102,7 @@ Antes da montagem, confira a [pinagem](pinagem.md), os níveis de 3,3 V e o GND
 comum. Copie
 `firmware/mestre-s3/include/nucleo/segredos_ota.exemplo.h` para
 `segredos_ota.h` e preencha só a cópia local. Revise geometria, orientação e
-limites em `firmware/mestre-s3/include/nucleo/configuracao_placa.h`.
+limites em [`veiculo.h`](../firmware/mestre-s3/include/nucleo/configuracao/veiculo.h). Consulte o [mapa de configuração do mestre](mestre.md#configuração-e-tarefas) para localizar os demais padrões.
 Configure o Google apenas se o upload remoto for utilizado. O manual de
 [ferramentas](ferramentas.md) mostra como gerar as páginas incorporadas e
 o cabeçalho local de credenciais.
@@ -113,8 +113,9 @@ o cabeçalho local de credenciais.
   `/painel`, `/diagnostico` e `/mestre` entregam a mesma interface com sete
   páginas: **Telemetria, Comandos, Controle, ESP32 — Mestre, ESP32 — Equipe,
   ESP32 — Visitantes e Sobre**. Comandos reúne Wi-Fi, OTA e Google; Controle
-  apresenta os pedidos de marcha, limites e parada remota, ainda sem atuação
-  física. As páginas dos ESPs apresentam diagnóstico. O AP da Equipe não
+  apresenta faixa de marcha, sentido, limites, acelerador e parada remota. O
+  mestre valida e acompanha esses comandos, mas ainda não aciona motor, DAC
+  ou relé. As páginas dos ESPs apresentam diagnóstico. O AP da Equipe não
   oferece DNS local; o anúncio do portal pelo DHCP depende do cliente.
 - Na rede `NEXUS-Visitantes`, abra `http://192.168.4.1/`. O DNS cativo
   responde consultas IPv4 com esse IP quando a tarefa DNS está disponível. A

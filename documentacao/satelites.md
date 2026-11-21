@@ -65,23 +65,41 @@ mestre, equipe, visitantes e sobre.
 | Página da Equipe | O que apresenta ou permite fazer |
 |---|---|
 | Telemetria | Velocidade, movimento, energia disponível, histórico desta sessão, qualidade do enlace e contagem de clientes dos APs. |
-| Comandos | Envio e acompanhamento de ações; Google, simulação, Wi-Fi externo do mestre, clientes dos dois APs e OTA. |
-| Controle | Telemetria essencial, marcha e limites solicitados, liberação e parada remota de envio direto. Não há atuação física nesta versão. |
+| Comandos | Diagnóstico de sensores, simulação, Wi-Fi do mestre, clientes dos APs, Google, OTA, logs e histórico das ações. |
+| Controle | Telemetria essencial, faixa L/M/H, sentido, limites de velocidade e pedal, e parada de envio direto. O mestre valida os comandos, mas ainda não aciona motor ou relé. |
 | ESP32 — Mestre | Saúde, causas de degradação, memória, CPU, tarefas e estado obtido por consultas UART. |
 | ESP32 — Equipe | Diagnóstico local, recepção UART e estado do ponto de acesso técnico. |
 | ESP32 — Visitantes | Diagnóstico remoto, disponibilidade, memória, CPU e clientes quando o satélite responde. |
 | Sobre | Intenção do projeto, símbolo, orientação e equipe discente. |
 
-As páginas dos ESPs mostram diagnóstico; ações de rede, Google e OTA ficam em
-Comandos, enquanto pedidos de condução ficam em Controle. CPU em uso, memória interna livre e temperatura aparecem em destaque
-nos três diagnósticos. As abas e os indicadores de conexão se reorganizam em
-linhas no celular. Na página Comandos, os botões preenchidos identificam ações;
-consultas de estado têm apresentação secundária. Os atalhos abrem a seção
-correspondente, inclusive quando recolhida, e os ajustes protegidos de Wi-Fi
-têm um campo próprio para permissão administrativa.
-O resumo de saúde do mestre é consultado periodicamente:
-uma operação degradada ou falha aparece em aviso discreto com suas causas ativas
-e acesso ao diagnóstico. A telemetria pode ser consultada a 1, 2, 3 ou 4 Hz
+As páginas dos ESPs mostram o estado do enlace, CPU, memória interna e
+temperatura. Os detalhes técnicos e o histórico podem ser expandidos. A aba
+Mestre também mostra as causas de degradação e a idade do diagnóstico.
+Em **Comandos**, os atalhos levam aos grupos **Diagnóstico**, **Rede**,
+**Operação** e **Atividade**. Em **Sensores**, é possível consultar leituras e
+pausar ou retomar a aquisição, por sensor ou em conjunto. Com a atuação física
+habilitada, essa seção fica disponível para consulta. Os ajustes de Wi-Fi e do
+terminal protegidos exigem a senha de permissão. Os controles novos dependem de
+firmwares compatíveis no mestre e na Equipe.
+Cada sensor mostra se está lendo, pausado ou sem leitura válida. Os detalhes
+reúnem os valores por grandeza e os contadores do barramento I²C. A recuperação
+do MPU6050 e do INA228 ocorre no serviço de aquisição, em condições específicas
+de falha. A supervisão trata a recuperação de tarefas por módulo.
+**Tarefas do mestre** mostra CPU, pilha, prioridade e estado. Cada página reúne
+até cinco tarefas da mesma coleta. **Logs do terminal** permite ajustar o nível
+global ou por fonte, o perfil NEXUS e as cores do serial.
+Em **Wi-Fi do mestre**, a rede principal pode ser definida a partir de SSID e
+senha novos ou de um perfil já salvo. O mestre testa a conexão antes de gravar;
+uma rede promovida sai da lista de secundárias. O painel consulta novamente a
+configuração e mostra o SSID principal confirmado. A seção também permite
+testar e salvar redes abertas ou protegidas, conectar ou excluir perfis,
+restaurar a principal do firmware, configurar conexão automática e ajustar
+tentativas e tempos ou restaurar a política padrão. A consulta de estado e a lista de redes podem ser
+atualizadas pelo botão do próprio cartão.
+O indicador de saúde no cabeçalho abre o diagnóstico do Mestre. Uma falha
+ativa também aparece em um aviso flutuante com a causa e o atalho para o
+diagnóstico. A aba **Mestre** reúne o estado e os detalhes de saúde.
+A telemetria pode ser consultada a 1, 2, 3 ou 4 Hz
 (padrão de 4 Hz, compatível com os 250 ms da publicação do mestre). As consultas
 de estado OTA, Google e simulador continuam automáticas a cada 2 s,
 independentemente dessa escolha. O cartão Google também permite iniciar a
@@ -177,12 +195,13 @@ simultânea podem ocupar tarefas de resposta; uma nova chamada recebe HTTP 503
 quando a respectiva capacidade está ocupada.
 
 O painel usa HTTP local, sem TLS. Proteja o acesso ao AP da Equipe, pois a
-senha da rede é o controle de acesso aos comandos. A permissão de certas
-alterações de Wi-Fi no mestre permanece separada.
+senha da rede é o controle de acesso aos comandos. Alterações protegidas de
+Wi-Fi e ajustes de logs também usam a senha de permissão do mestre.
 
 Consultas GET aceitas: `ping`, `versao`, `saude`, `telemetria`,
 `uart`, `ota`, `sincronizacao`, `wifi`, `diagnostico_mestre`, `configuracao`,
-`simulador`,
+`simulador`, `sensores`, `logs_terminal`, `tarefas_mestre` (com `inicio`
+opcional em passos de 3, de 0 a 45),
 `rede_wifi_salva` (com `indice` de 1 a 5), `satelite_equipe_ping`,
 `satelite_equipe_versao`, `satelite_visitantes_ping` e
 `satelite_visitantes_versao`.
@@ -194,7 +213,9 @@ Ações POST aceitas: `verificar_ota`, `autorizar_mestre`, `autorizar_equipe`,
 `simulador_telemetria`,
 `wifi_preparar`, `wifi_conectar_preparada`, `wifi_salvar_preparada`,
 `wifi_conectar_salva`, `wifi_excluir_salva`, `wifi_automatico`,
-`wifi_alterar_principal`, `wifi_restaurar_principal` e `wifi_politica`.
+`wifi_alterar_principal`, `wifi_principal_salva`,
+`wifi_restaurar_principal`, `wifi_politica`, `wifi_restaurar_politica`,
+`sensores` e `logs_terminal`.
 Algumas ações recebem campos de texto separados por quebra de linha no corpo
 HTTP; a ordem e as validações estão em `preparar_acao_mestre` no
 `src/servicos/servidor_web.c`. O painel já prepara esses campos e pede confirmação
@@ -213,7 +234,11 @@ são rejeitadas. A fila de comandos evita disputas com a recepção UART.
 | `wifi_conectar_salva`, `wifi_excluir_salva` | Índice de 1 a 5, conforme a lista consultada. |
 | `wifi_automatico` | `0` ou `1`, quebra de linha e senha de permissão. |
 | `wifi_alterar_principal`, `wifi_restaurar_principal` | Senha de permissão; a alteração exige rede previamente preparada. |
+| `wifi_principal_salva` | Índice da rede salva (1 a 5), quebra de linha e senha de permissão. O mestre testa a conexão, torna a rede principal e a remove da lista de secundárias. |
 | `wifi_politica` | Cinco linhas: tentativas por rede, tempo por tentativa em ms, intervalo entre tentativas em ms, limite da sessão em ms e senha de permissão. |
+| `wifi_restaurar_politica` | Senha de permissão. Restaura os quatro parâmetros de tentativas e tempos. |
+| `sensores` | ID (0 ADC, 1 MPU6050, 2 encoders, 3 INA228, 4 temperatura do ESP, 255 todos), quebra de linha e `1` para retomar ou `0` para pausar. |
+| `logs_terminal` | Quatro linhas: tipo, valor, alvo e senha de permissão. O tipo é `0` nível global, `1` perfil, `2` cores ou `3` nível por fonte. O alvo é o ID da fonte no tipo `3` e `0` nos outros. Valores de nível vão de `0` (silenciado) a `3` (informações). Perfil e cores usam `0` ou `1`. |
 
 O HTTP rejeita consulta ausente ou desconhecida e método incompatível com
 `400` ou `405`. Consultas e ações aceitas são
@@ -224,12 +249,27 @@ resposta de comando foi aceita;
 para OTA, upload e outras ações assíncronas, consulte o estado depois.
 
 O painel não recupera sessões passadas do SD nem confirma sozinho o efeito final
-de uma operação assíncrona. Tensão do barramento, corrente e potência vêm do
-INA228 quando o mestre marca a leitura elétrica como válida. A página da equipe
-mostra também, dentro de **Operação e sensores**, queda no shunt, temperatura
-do chip, energia e carga acumuladas desde o reset do INA228 e diagnóstico
-quando disponíveis. Não há um cartão separado para o sensor; carga percentual,
-autonomia e pedais ainda só são apresentados no modo simulado.
+de uma operação assíncrona. Tensão do barramento, corrente e potência usam
+leituras do INA228 quando o mestre marca a medição elétrica como válida. Nos
+indicadores principais, a Equipe mostra estado de carga, potência e corrente
+nessa ordem; a aceleração fica com as leituras do MPU6050 em **Operação e
+sensores**. O cartão de carga simulada mostra **Atenção** abaixo de 50%,
+**Bateria baixa** abaixo de 30% e **Crítico** abaixo de 10%. O cartão de
+corrente usa uma escala visual até 35 A e começa a ganhar
+tons vermelhos acima de 7,5 A; a cor é apenas um destaque do painel, não um
+limite de proteção. A barra de potência cresce da esquerda para a direita em
+uma escala visual de até 1000 W. Seu destaque aumenta com a intensidade do
+valor e distingue consumo de regeneração. As barras de corrente e potência
+mostram por cerca de um segundo uma marca discreta quando a leitura cai após
+um pico, com o valor no canto do cartão; ambos desaparecem gradualmente e não
+representam um limite de segurança.
+O grupo do INA228 mostra também potência
+instantânea, queda no shunt, temperatura do chip, energia e carga acumuladas
+desde o reset do sensor e diagnóstico quando disponíveis. A potência enviada
+ao painel conserva o sinal da corrente, conforme explicado em [Mestre](mestre.md).
+Não há um cartão separado para o sensor; carga percentual, autonomia e pedais
+ainda só são apresentados no modo simulado. A estimativa de energia permanece
+interna ao navegador para calcular o consumo médio e não ocupa uma linha própria.
 `tensao_adc_bruta` é apenas a contagem não calibrada do ADC.
 
 ## ESP32-S3 de visitantes
@@ -274,8 +314,8 @@ distância e tempo começam quando a página é aberta.
 
 O cabeçalho identifica **NEXUS** como sistema de telemetria e controle e
 aponta para o Sobre no fim da página. O painel público só lê dados: não expõe
-os comandos do sistema. A página apresenta velocidade, aceleração, percurso e,
-quando recebidos, bateria e grandezas elétricas. No modo real, os campos ainda
+os comandos do sistema. A página destaca velocidade, carga da bateria e
+odômetro, com a aceleração no gráfico de movimento. No modo real, os campos ainda
 sem aquisição aparecem como “Sem leitura” ou com uma nota de indisponibilidade;
 zero permanece uma leitura válida. Os botões “i” nos cartões de acompanhamento
 abrem descrições curtas por toque, clique ou teclado.
@@ -301,18 +341,14 @@ As barras de acelerador e freio crescem da extremidade externa para o centro,
 respectivamente da esquerda para a direita e da direita para a esquerda.
 `acelerador_decimos_percentual` e `freio_decimos_percentual` usam décimos de
 por cento. Como o firmware atual só obtém esses valores na simulação, no modo
-real são `null`. Aceleração negativa colore seu cartão em coral suave; o cartão
-de potência distingue consumo de regeneração com tons próprios. Rótulo, cor e
-número acompanham a mesma transição ao atravessar zero.
+real são `null`. O cartão de carga usa uma barra verde e mostra a estimativa
+simulada, sem avisos por faixa de carga.
 
-Quando há potência, o cartão principal mostra uma faixa com **zero no centro**:
-consumo cresce à direita e regeneração, à esquerda. A escala começa em ±500 W
-e só aumenta durante a sessão se a potência recebida exceder esse alcance;
-não oscila para baixo a cada amostra. Um risco sem rótulo marca, por cerca de
-1,55 s, um pico de magnitude de pelo menos 120 W seguido de queda de pelo menos
-55 W ou 25% (o maior dos dois). Uma inversão de sinal também pode marcar o
-pico anterior; há intervalo de 3,5 s entre marcas. A faixa e esse cartão ficam
-ocultos quando não há leitura elétrica.
+Quando há potência, a barra usa escala de 0 a 1000 W e cresce com a magnitude.
+O valor e o rótulo distinguem consumo de regeneração, que tem cor própria.
+Um risco marca por 1 s um pico de pelo menos 120 W seguido de queda de pelo
+menos 55 W ou 25%, o maior dos dois, com intervalo de 2,5 s entre marcas.
+O cartão aparece quando há leitura elétrica.
 
 O mestre publica telemetria aos satélites nominalmente a cada 250 ms (4 Hz);
 o navegador de Visitantes consulta `/api/telemetria` a cada 500 ms (2 Hz), sem
@@ -341,15 +377,16 @@ O Sobre traz o símbolo do carro, a intenção do projeto, orientação e equipe
 discente. A tipografia dos cartões largos cresce no computador sem ampliar os
 cartões estreitos do celular; não há fontes ou bibliotecas carregadas da rede.
 
-A seção de energia mostra tensão com três casas decimais e os demais valores
-disponíveis com pelo menos duas casas decimais, sem alterar a precisão da
-medição original. Também apresenta **autonomia restante** em km, recebida no
-campo `autonomia_decimos_km`, e **consumo médio** em Wh/km. A autonomia é uma
+A seção **Energia** reúne tensão da bateria e corrente elétrica, exibidas com
+duas casas decimais, **autonomia restante** em km e **consumo médio** em Wh/km.
+A potência instantânea aparece no destaque da página. O bloco **Seu acompanhamento**
+reúne energia consumida, distância e tempo da sessão. A autonomia, recebida no
+campo `autonomia_decimos_km`, é uma
 estimativa do mestre; atualmente só existe no modo simulado e é `null` no modo
 real. A prévia local fornece esse campo para experimentar a interface.
 O consumo médio é calculado pelo navegador, dividindo a energia positiva
 integrada pela distância dos mesmos intervalos válidos. Inclui energia gasta
-parado e não desconta regeneração. Só aparece após 100 m de distância acumulada
+parado e não desconta regeneração. Só aparece após 20 m de distância acumulada
 com leituras de potência e percurso. Lacunas de comunicação, falta de potência
 ou de percurso não acrescentam distância ao denominador; intervalos acima de
 3 segundos também são descartados. Recarregar a página, trocar a origem entre
@@ -368,17 +405,30 @@ do veículo nem uma previsão de autonomia calculada pelo navegador.
 - Os detalhes de enquadramento estão no [guia de protocolos](protocolos.md)
   e a atualização de firmware no [guia OTA](ota.md).
 
-## Preparação de controle remoto
+## Controle de marcha e acelerador
 
-Na página **Comandos**, Última ação, Google, simulação, Wi-Fi do mestre,
-redes locais, consultas, OTA, operação e histórico começam recolhidos. Os
-atalhos no topo abrem automaticamente a seção escolhida e levam o foco até
-ela. Subseções internas podem ser abertas separadamente. A página **Controle**
-reúne telemetria recente, marcha, limites e pedido de parada. Esse pedido é
-enviado sem diálogo de confirmação, com aviso discreto sobre a ausência de
-atuação física; os demais pedidos mantêm a confirmação.
+A página **Controle** reúne telemetria recente, faixa L/M/H, sentido, limites de
+velocidade e pedal, e parada. A parada é enviada imediatamente. O painel informa
+o estado da atuação física e pede que a parada seja confirmada no veículo.
 
-A Equipe pode solicitar marcha, limites de velocidade e aceleração e parada
-remota ao mestre. O estado é apenas preparatório, sem atuação física. Consulte
-[Controle remoto](controle-remoto.md) para o contrato UART/HTTP, intertravamentos,
-reinício, acompanhamento no painel e requisitos da integração futura.
+A página **Controle** permite definir faixa L/M/H, faixa máxima, sentido,
+velocidade máxima e teto percentual do pedal. A aceleração aparece como medição,
+sem limite configurável. O teto fica no mestre até novo ajuste ou reinício e
+não constitui comando para acelerar. O pedal é lido no GPIO3; sem leitura
+local recente, o acelerador permitido permanece zero. A página também ajusta
+a zona morta. O padrão da tensão mínima do DAC está na configuração de
+veículo do Mestre. O
+botão de parada é enviado sem confirmação e zera a referência no mestre. O
+botão **Rearmar** só fica disponível após a espera mínima de 5 s. O Mestre
+também aplica essa espera à API e permite o rearme automático após 30 s se as
+condições de segurança permitirem. Após OTA, o rearme é manual. Uma nova
+leitura local do pedal em zero é necessária antes de voltar a acelerar. O painel mostra o estado consultado;
+os bits de bloqueio também estão na resposta da API, sem
+representar atuação do controlador. Consulte
+[Controle de marcha e acelerador](controle-remoto.md) para contrato UART/HTTP,
+intertravamentos e pendências de hardware.
+
+Em **Controle**, a ré começa bloqueada. **Permitir ré** libera pedidos de ré
+que passem pelo Mestre, e **Bloquear ré** provoca uma parada se houver uma ré
+solicitada. A confirmação dessas mudanças e do rearme manual libera o botão
+após 3 s.

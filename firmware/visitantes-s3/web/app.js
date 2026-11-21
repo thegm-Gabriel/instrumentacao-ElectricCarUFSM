@@ -5,6 +5,7 @@
   const format = (value, digits = 1) => value.toLocaleString('pt-BR', {minimumFractionDigits:digits, maximumFractionDigits:digits});
   const finite = value => typeof value === 'number' && Number.isFinite(value);
   const speedGaugeMax = 35;
+  const powerVisualMaxW = 1000;
   const consumptionMinMeters = 20;
   function updatePedal(id, value) {
     const valid = finite(value) && value >= 0 && value <= 100;
@@ -18,7 +19,7 @@
     previousSpeedForTone:null, speedToneTimer:null,
     samples:[], gapOpen:false, rangeMinutes:1, chartSignal:'power-current',
     firstDistance:null, previousEnergy:null, energyWh:null,
-    consumptionWh:0, consumptionMeters:0, powerRailLimit:500,
+    consumptionWh:0, consumptionMeters:0,
     chartLimits:{}, hovering:{}, fetching:false,
   };
 
@@ -130,13 +131,13 @@
   }
   function showPowerPeak(value) {
     const marker=$('power-peak-marker');
-    marker.style.setProperty('--power-peak-position',(50+Math.max(-1,Math.min(1,value/state.powerRailLimit))*50)+'%');
+    marker.style.setProperty('--power-peak-position', Math.min(99, Math.max(1, Math.abs(value) / powerVisualMaxW * 100)) + '%');
     marker.classList.toggle('is-regen',value<0);
     marker.classList.remove('is-visible');
     void marker.getBoundingClientRect();
     marker.classList.add('is-visible');
     clearTimeout(powerPeak.timer);
-    powerPeak.timer=setTimeout(hidePowerPeak,1550);
+    powerPeak.timer=setTimeout(hidePowerPeak,1000);
   }
   function trackPowerPeak(value) {
     const now=performance.now();
@@ -149,9 +150,9 @@
     const candidate=powerPeak.candidate;
     const signChanged=Math.sign(value)!==Math.sign(candidate)&&Math.abs(value)>20;
     const fell=Math.abs(candidate)-Math.abs(value)>=Math.max(55,Math.abs(candidate)*.25);
-    if(Math.abs(candidate)>=120&&(fell||signChanged)&&now>=powerPeak.cooldownUntil){
+    if(Math.abs(candidate)>=120&&fell&&now>=powerPeak.cooldownUntil){
       showPowerPeak(candidate);
-      powerPeak.cooldownUntil=now+3500;
+      powerPeak.cooldownUntil=now+2500;
       powerPeak.candidate=value;powerPeak.candidateAt=now;
     }else if(signChanged||Math.abs(value)>Math.abs(candidate)||now-powerPeak.candidateAt>3500){
       powerPeak.candidate=value;powerPeak.candidateAt=now;
@@ -197,7 +198,6 @@
     state.chartLimits = {};
     state.lastArrivalAt = 0;
     state.observedPeriodMs = 500;
-    state.powerRailLimit = 500;
   }
 
   function addGap() {
@@ -217,7 +217,6 @@
     const electrical = data.eletrica_disponivel === true;
     const speed = readNumber(data, 'velocidade_centesimos_kmh', 100);
     const power = electrical ? readNumber(data, 'potencia_w') : null;
-    const accel = data.aceleracao_disponivel ? readNumber(data, 'aceleracao_milesimos_ms2', 1000) : null;
     const charge = simulated ? readNumber(data, 'carga_decimos_percentual', 10) : null;
     const voltage = electrical ? readNumber(data, 'tensao_pacote_mv', 1000) : null;
     const current = electrical ? readNumber(data, 'corrente_centesimos_a', 100) : null;
@@ -245,68 +244,57 @@
     updatePedal('throttle', readNumber(data, 'acelerador_decimos_percentual', 10));
     updatePedal('brake', readNumber(data, 'freio_decimos_percentual', 10));
 
-    animateValue('battery-value', charge, 1, charge === null ? '' : '%', '', current => {
+    animateValue('battery-value', charge, 2, charge === null ? '' : '%', '', current => {
       $('battery-fill').style.width = current === null ? '0%' : Math.max(0, Math.min(100, current)) + '%';
     });
-    $('battery-hint').textContent = simulated ? 'Carga estimada pela simulação.' : 'Sem medição validada no modo real.';
+    $('battery-hint').textContent = charge === null ? '' : 'Estimativa simulada';
 
     const powerUnit = power === null ? '' : Math.abs(power) >= 1000 ? 'kW' : 'W';
-    animateValue('power-value', power === null ? null : powerUnit === 'kW' ? power / 1000 : power, powerUnit === 'kW' ? 2 : 0, powerUnit,'',current=>{
-      const watts=current===null?null:powerUnit==='kW'?current*1000:current;
-      $('power-hint').textContent=watts===null?'Medição elétrica indisponível.':watts<-.5?(simulated?'Simulação · ':'')+'Devolução de energia ao sistema.':watts>.5?(simulated?'Simulação · ':'')+'Consumo elétrico, não potência nas rodas.':(simulated?'Simulação · ':'')+'Potência próxima de zero.';
-    });
-    const rail=$('power-rail');
-    $('power-motion-card').hidden=power===null;
-    document.querySelector('.primary-stack').classList.toggle('has-power',power!==null);
-    if(power!==null){
-      const limit=niceCeiling(Math.abs(power)*1.12,500);
-      if(limit>state.powerRailLimit){state.powerRailLimit=limit;hidePowerPeak();}
-      const scaleText=state.powerRailLimit>=1000?format(state.powerRailLimit/1000,1)+' kW':format(state.powerRailLimit,0)+' W';
-      $('power-rail-negative-limit').textContent='−'+scaleText;
-      $('power-rail-positive-limit').textContent=scaleText;
-    }
+    const powerScale = powerUnit === 'kW' ? 1000 : 1;
+    const powerDisplay = power === null ? null : power / powerScale;
+    const powerDigits = powerUnit === 'kW' ? 2 : 0;
+    const powerCard = $('power-motion-card');
+    const rail = $('power-rail');
+    powerCard.hidden = power === null;
+    document.querySelector('.primary-stack').classList.toggle('has-power', power !== null);
     trackPowerPeak(power);
-    animateValue('power-rail-value',power===null?null:powerUnit==='kW'?power/1000:power,powerUnit==='kW'?2:0,'',' '+powerUnit,current=>{
-      const watts=current===null?0:powerUnit==='kW'?current*1000:current;
-      const extent=Math.min(100,Math.abs(watts)/state.powerRailLimit*100)+'%';
-      $('power-rail-consume').style.setProperty('--power-positive',watts>0?extent:'0%');
-      $('power-rail-regen').style.setProperty('--power-negative',watts<0?extent:'0%');
-      const flow=watts<-.5?'Regeneração':watts>.5?'Consumo':'Sem fluxo';
-      $('power-flow').textContent=flow;
-      $('power-motion-card').classList.toggle('is-regen',watts<-.5);
-      rail.setAttribute('aria-label',flow+' · '+format(Math.abs(watts),0)+' watts');
+    animateValue('power-rail-value', powerDisplay, powerDigits, powerUnit, '', reading => {
+      const watts = reading === null ? null : reading * powerScale;
+      const intensity = watts === null ? 0 : Math.min(1, Math.abs(watts) / powerVisualMaxW);
+      const level = (intensity * 100) + '%';
+      powerCard.style.setProperty('--power-intensity', level);
+      powerCard.style.setProperty('--power-glow', (intensity * .3).toFixed(3));
+      powerCard.classList.toggle('is-regen', watts !== null && watts < 0);
+      $('power-rail-fill').style.setProperty('--fill-level', level);
+      const flow = watts === null ? '' : watts < 0 ? 'Regeneração' : watts > 0 ? 'Consumo' : 'Sem fluxo elétrico';
+      $('power-flow').textContent = flow;
+      rail.setAttribute('aria-label', watts === null ? 'Potência elétrica sem leitura' :
+        flow + ' · ' + format(watts, 0) + ' W. Escala de 0 a ' + powerVisualMaxW + ' W.');
     });
 
-    animateValue('range-value', range, 1, range === null ? '' : 'km');
-    $('range-hint').textContent = range === null ? 'Estimativa não disponível.' : simulated ? 'Autonomia simulada.' : 'Estimativa informada pelo veículo.';
+    animateValue('range-value', range, 1, '', ' km');
+    $('range-hint').textContent = range === null ? '' : simulated ? 'Estimativa simulada' : 'Estimativa do veículo';
     const consumption = power !== null && state.consumptionMeters >= consumptionMinMeters
       ? state.consumptionWh / (state.consumptionMeters / 1000) : null;
-    animateValue('consumption-value', consumption, 1, consumption === null ? '' : 'Wh/km');
-    $('consumption-hint').textContent = power === null ? 'Aguardando leituras de energia.' : consumption === null
-      ? 'Aguardando ' + consumptionMinMeters + ' m com energia e percurso.'
-      : 'Trechos acompanhados nesta página · sem descontar regeneração.';
-
-    animateValue('accel-value', accel, 2, accel === null ? '' : 'm/s²','',current=>{
-      $('accel-card').classList.toggle('is-negative',current!==null&&current<-.005);
-      $('accel-hint').textContent=current===null?'Aguardando leitura válida do sensor.':simulated?'Dados simulados.':current>.15?'Acelerando · leitura do sensor.':current<-.15?'Desacelerando · leitura do sensor.':'Velocidade estável · leitura do sensor.';
-    });
+    animateValue('consumption-value', consumption, 1, '', ' Wh/km');
+    $('consumption-hint').textContent = power !== null && consumption === null
+      ? 'Mínimo de ' + consumptionMinMeters + ' m com dados elétricos.' : '';
 
     const distance = readNumber(data, 'percurso_metros');
     animateValue('trip-value', distance === null ? null : distance / 1000, 2, distance === null ? '' : 'km');
-    $('trip-hint').textContent = simulated ? 'Percurso simulado.' : 'Percurso registrado pelo veículo.';
-    const hasElectricData = charge !== null || power !== null;
-    $('energy-live-grid').hidden = !hasElectricData && range === null;
-    $('energy-unavailable').hidden = hasElectricData || range !== null;
-    document.querySelectorAll('.electric-detail').forEach(card => {card.hidden = !hasElectricData;});
-    document.querySelector('#details-title').closest('.section').querySelector('.detail-grid').classList.toggle('compact',!hasElectricData);
+    $('trip-hint').textContent = distance === null ? '' : simulated ? 'Odômetro simulado' : 'Leitura do veículo';
+    const hasElectricData = charge !== null || power !== null || voltage !== null || current !== null;
+    const showEnergy = hasElectricData || range !== null;
+    $('energy-live-grid').hidden = !showEnergy;
+    $('energy-unavailable').hidden = showEnergy;
+    $('energy-unavailable').textContent = 'Medição elétrica indisponível no momento.';
+    const showSessionEnergy = power !== null || state.energyWh !== null;
+    $('session-energy-card').hidden = !showSessionEnergy;
+    $('session-grid').classList.toggle('compact', !showSessionEnergy);
     $('electric-chart-card').hidden = !hasElectricData;
     $('visitor-chart-grid').classList.toggle('single', !hasElectricData);
-    if (!hasElectricData) $('energy-unavailable').textContent = 'Medição elétrica indisponível no momento.';
-
     animateValue('voltage-value', voltage, 2, '', ' V');
-    $('voltage-hint').textContent = simulated ? 'Valor simulado.' : electrical ? 'Leitura do INA228.' : 'Medição indisponível.';
     animateValue('current-value', current, 2, '', ' A');
-    $('current-hint').textContent = simulated ? 'Valor simulado.' : electrical ? 'Leitura do INA228.' : 'Medição indisponível.';
     animateValue('energy-value', state.energyWh, 1, '', ' Wh');
     if (distance !== null) {
       if (state.firstDistance === null || distance < state.firstDistance) state.firstDistance = distance;

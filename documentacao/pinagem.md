@@ -8,19 +8,21 @@ definida uma única vez em
 `firmware/compartilhado/protocolos/configuracao_enlace_uart.h`.
 
 O mestre usa o módulo ESP32-S3-WROOM-1-N16R8. Como a PSRAM é Octal, reserve os
-GPIOs 33 a 37 para a interface interna de memória e não os use em periféricos. A
-pinagem também usa GPIO 38 a 42, 47 e 48, sem ocupar os pinos da PSRAM.
+GPIOs 33 a 37 para a interface interna de memória. A pinagem do firmware,
+incluindo os GPIOs 38 a 41 usados pelo microSD, fica em
+[`placa.h`](../firmware/mestre-s3/include/nucleo/configuracao/placa.h).
 
 ## Entrada ADC do mestre
 
 | Função | GPIO do mestre | Implementação atual |
 |---|---:|---|
 | Leitura analógica de tensão | GPIO 4 | ADC oneshot, atenuação de 12 dB; publica a contagem bruta de 0 a 4095 |
+| Pedal Hall | GPIO 3 | ADC1 com calibração; fornece milivolts à tarefa de controle |
 
-`leitor_tensao.cpp` não aplica calibração nem converte essa contagem em volts.
-Qualquer tensão externa precisa de condicionamento elétrico apropriado para a
-entrada de 3,3 V do ESP32-S3; os campos de tensão do pacote do veículo não devem
-ser interpretados como medição do conjunto de baterias a partir desse ADC.
+[`adc.cpp`](../firmware/mestre-s3/src/dispositivos/entradas/adc.cpp) publica
+a contagem bruta do GPIO 4. O monitor INA228 fornece a leitura do conjunto de
+baterias. Qualquer tensão externa precisa de condicionamento elétrico
+apropriado para a entrada de 3,3 V do ESP32-S3.
 
 ## Monitor elétrico INA228 do mestre
 
@@ -56,7 +58,7 @@ ser ligado diretamente somente se a corrente declarada pelo fabricante estiver
 dentro do limite do GPIO.
 
 Os pinos podem ser alterados em
-`firmware/mestre-s3/include/nucleo/configuracao_placa.h` sem mudar o serviço.
+`firmware/mestre-s3/include/nucleo/configuracao/placa.h` sem mudar o serviço.
 
 ## Encoders incrementais do mestre
 
@@ -81,7 +83,7 @@ mas não usa a defasagem entre A e B para identificar o sentido de rotação:
 deslocamentos para frente e para trás aumentam o percurso registrado. O
 odômetro usa a média das distâncias esquerda e direita. Diâmetros, relações
 de transmissão e intervalo de persistência ficam em
-`firmware/mestre-s3/include/nucleo/configuracao_placa.h`.
+[`veiculo.h`](../firmware/mestre-s3/include/nucleo/configuracao/veiculo.h).
 
 ## Tela SSD1306 I²C do mestre
 
@@ -137,25 +139,7 @@ GPIOs 33 a 37 continuam reservados para a PSRAM Octal.
 | GND | GND |
 
 Esses pinos são definidos em
-[`configuracao_registro_telemetria.h`](../firmware/mestre-s3/include/nucleo/configuracao_registro_telemetria.h)
+[`placa.h`](../firmware/mestre-s3/include/nucleo/configuracao/placa.h)
 e precisam ser conferidos com a placa e o módulo usados antes de fabricar o
 chicote. O comportamento dos arquivos e do envio está no
 [guia do histórico no Google](google.md).
-
-## Microfone INMP441 temporário para treinamento
-
-A opção 9 do terminal grava amostras WAV para `/sdcard/audio_ia`. Esta ligação é
-temporária para formar o conjunto de treinamento do reconhecedor de voz.
-
-| Pino do INMP441 | ESP32-S3 mestre | Observação |
-|---|---:|---|
-| VDD | 3,3 V | Não alimentar com 5 V |
-| GND | GND | Referência comum |
-| SCK / BCLK | GPIO 42 | Clock I2S |
-| WS / LRCL | GPIO 47 | Seleção de palavra I2S |
-| SD | GPIO 48 | Dados do microfone para o mestre |
-| L/R | GND | Seleciona o canal esquerdo configurado no firmware |
-
-Os pinos ficam centralizados em `configuracao_placa.h`. O gravador produz áudio
-mono PCM de 16 bits a 16 kHz, não sobrescreve amostras existentes e aceita de 1
-a 60 segundos por arquivo.

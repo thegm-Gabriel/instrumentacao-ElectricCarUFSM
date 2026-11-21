@@ -18,6 +18,11 @@
 \usepackage{eso-pic}
 \usepackage{titlesec,fancyhdr,enumitem,listings,tcolorbox}
 \usepackage{caption}
+% Em páginas dedicadas a figuras/tabelas, posiciona o conteúdo no topo.
+\makeatletter
+\setlength{\@fptop}{0pt}
+\setlength{\@fpbot}{0pt plus 1fil}
+\makeatother
 \usepackage{xurl}
 \usepackage{hyperref}
 \definecolor{nexus}{HTML}{153650}
@@ -39,7 +44,7 @@
 \titleformat{\subsection}{\large\bfseries\color{nexus}}{\thesubsection}{0.7em}{}
 \pagestyle{fancy}\fancyhf{}
 \fancyhead[L]{\small\textcolor{nexus}{NEXUS | Manual técnico}}
-\fancyhead[R]{\small Revisão 2.1}
+\fancyhead[R]{\small Revisão 3.0}
 \fancyfoot[L]{\small UFSM | Cachoeira do Sul}\fancyfoot[R]{\thepage}
 \renewcommand{\headrulewidth}{0.4pt}
 \fancypagestyle{plain}{\fancyhf{}\fancyfoot[L]{\small NEXUS | UFSM}\fancyfoot[R]{\thepage}\renewcommand{\headrulewidth}{0pt}}
@@ -47,4 +52,4 @@
 \setlist{nosep,leftmargin=*}
 \newtcolorbox{nota}[1]{colback=pale,colframe=accent,boxrule=0.5pt,arc=2mm,title=#1,fonttitle=\bfseries}
 \lstset{basicstyle=\ttfamily\small,backgroundcolor=\color{pale},frame=single,rulecolor=\color{accent},numbers=left,numberstyle=\tiny\color{gray},breaklines=true,columns=fullflexible,keepspaces=true,showstringspaces=false,captionpos=b,keywordstyle=\color{nexus}\bfseries,commentstyle=\color{gray}}
-\setcounter{tocdepth}{1}
+\setcounter{tocdepth}{2}

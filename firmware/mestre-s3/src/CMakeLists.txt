@@ -1,5 +1,4 @@
-# This file was automatically generated for projects
-# without default 'CMakeLists.txt' file.
+# Reúne as fontes das três camadas, incluindo as subpastas dos serviços.
 
 FILE(GLOB_RECURSE app_sources
     ${CMAKE_SOURCE_DIR}/src/gerenciadores/*.cpp
@@ -22,7 +21,6 @@ idf_component_register(
         esp_netif
         esp_psram
         esp_driver_pcnt
-        esp_driver_i2s
         esp_driver_spi
         esp_wifi
         fatfs

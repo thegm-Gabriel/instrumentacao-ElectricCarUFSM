@@ -28,8 +28,21 @@
 #define CAPACIDADE_COMANDO_SINCRONIZACAO (1u << 11)
 #define CAPACIDADE_COMANDO_CONTROLE_REMOTO (1u << 13)
 #define CAPACIDADE_COMANDO_SIMULADOR (1u << 12)
+#define CAPACIDADE_COMANDO_SENSORES_MESTRE (1u << 14)
+#define CAPACIDADE_COMANDO_RESTAURAR_POLITICA_WIFI (1u << 15)
+#define CAPACIDADE_COMANDO_LOGS_TERMINAL (1u << 16)
+#define CAPACIDADE_COMANDO_TAREFAS_MESTRE (1u << 17)
+#define CAPACIDADE_COMANDO_PERMISSAO_REVERSAO (1u << 18)
 
 #define COMANDO_FORMATO_DIAGNOSTICO_MESTRE 1u
+#define COMANDO_FORMATO_SENSORES_MESTRE 1u
+#define COMANDO_FORMATO_LOGS_TERMINAL 1u
+#define COMANDO_FONTES_LOG_TERMINAL 18u
+#define COMANDO_NIVEL_LOG_AVISOS 2u
+#define COMANDO_NIVEL_LOG_INFORMACOES 3u
+#define COMANDO_FORMATO_TAREFAS_MESTRE 1u
+#define COMANDO_TAREFAS_MESTRE_POR_PAGINA 3u
+#define COMANDO_MAXIMO_TAREFAS_MESTRE 48u
 #define COMANDO_FORMATO_DIAGNOSTICO_SATELITE 1u
 #define COMANDO_FORMATO_SINCRONIZACAO 1u
 #define COMANDO_FORMATO_CONFIRMACAO_SINCRONIZACAO 1u
@@ -82,6 +95,9 @@ typedef enum {
     COMANDO_OBTER_CLIENTES_WIFI_SATELITE = 39,
     COMANDO_GERIR_WIFI_SATELITE = 40,
     COMANDO_OBTER_CONTROLE_REMOTO = 41,
+    COMANDO_OBTER_SENSORES_MESTRE = 42,
+    COMANDO_OBTER_LOGS_TERMINAL = 43,
+    COMANDO_OBTER_TAREFAS_MESTRE = 44,
 } codigo_comando_t;
 
 // Uma única ação estruturada transporta as operações do menu serial sem
@@ -107,7 +123,34 @@ typedef enum {
     ACAO_MESTRE_DEFINIR_VELOCIDADE_MAXIMA = 18,
     ACAO_MESTRE_DEFINIR_ACELERACAO_MAXIMA = 19,
     ACAO_MESTRE_DEFINIR_PARADA_REMOTA = 20,
+    ACAO_MESTRE_DEFINIR_REDE_WIFI_SALVA_COMO_PRINCIPAL = 21,
+    ACAO_MESTRE_DEFINIR_FAIXA_MARCHA = 22,
+    ACAO_MESTRE_DEFINIR_LIMITE_MARCHA = 23,
+    ACAO_MESTRE_DEFINIR_LIMITE_ACELERADOR = 24,
+    ACAO_MESTRE_DEFINIR_REVERSAO = 25,
+    ACAO_MESTRE_DEFINIR_ZONA_MORTA_PEDAL = 26,
+    ACAO_MESTRE_DEFINIR_TENSAO_MINIMA_DAC = 27,
+    ACAO_MESTRE_DEFINIR_SENSOR = 28,
+    ACAO_MESTRE_RESTAURAR_POLITICA_WIFI = 29,
+    ACAO_MESTRE_DEFINIR_LOGS_TERMINAL = 30,
+    ACAO_MESTRE_PERMITIR_REVERSAO = 31,
 } acao_mestre_t;
+
+typedef enum {
+    AJUSTE_LOG_TERMINAL_GLOBAL = 0,
+    AJUSTE_LOG_TERMINAL_APENAS_PROJETO = 1,
+    AJUSTE_LOG_TERMINAL_CORES = 2,
+    AJUSTE_LOG_TERMINAL_FONTE = 3,
+} ajuste_log_terminal_t;
+
+typedef enum {
+    SENSOR_MESTRE_ADC = 0,
+    SENSOR_MESTRE_MPU6050 = 1,
+    SENSOR_MESTRE_ENCODERS = 2,
+    SENSOR_MESTRE_INA228 = 3,
+    SENSOR_MESTRE_TEMPERATURA_ESP = 4,
+    SENSOR_MESTRE_TODOS = 255,
+} sensor_mestre_t;
 
 typedef enum {
     RESPOSTA_COMANDO_OK = 0,
@@ -242,6 +285,8 @@ typedef struct __attribute__((packed)) {
     uint32_t tempo_tentativa_wifi_ms;
     uint32_t intervalo_tentativas_wifi_ms;
     uint32_t tempo_limite_wifi_ms;
+    uint8_t principal_alterada;
+    char rede_principal[33];
 } resposta_configuracao_mestre_t;
 
 // Estado volátil: ao reiniciar, volta ao padrão definido no firmware.
@@ -319,6 +364,63 @@ typedef struct __attribute__((packed)) {
     char tarefa_cpu_pico[15];
     char tarefa_menor_pilha[15];
 } resposta_diagnostico_mestre_t;
+
+// As máscaras usam os índices sensor_mestre_t de 0 a 4. Somente os bits
+// em `validos` indicam medições reais e disponíveis.
+typedef struct __attribute__((packed)) {
+    uint8_t versao_formato;
+    uint8_t ativos;
+    uint8_t validos;
+    uint8_t controle_permitido;
+    uint16_t adc_bruto;
+    int16_t acelerometro_bruto[3];
+    int16_t giroscopio_bruto[3];
+    float temperatura_mpu_c;
+    int32_t temperatura_esp_centesimos;
+    uint64_t contagem_esquerda;
+    uint64_t contagem_direita;
+    float velocidade_esquerda_kmh;
+    float velocidade_direita_kmh;
+    float tensao_ina_v;
+    float corrente_ina_a;
+    float queda_shunt_mv;
+    float temperatura_ina_c;
+    uint16_t diagnostico_ina;
+    uint32_t i2c_operacoes_ok;
+    uint32_t i2c_erros;
+    uint32_t i2c_sondagens_ok;
+    uint32_t i2c_enderecos_ausentes;
+    int32_t i2c_ultimo_erro;
+} resposta_sensores_mestre_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t versao_formato;
+    uint8_t nivel_global;
+    uint8_t apenas_avisos_projeto;
+    uint8_t cores;
+    uint8_t niveis_fontes[COMANDO_FONTES_LOG_TERMINAL];
+} resposta_logs_terminal_t;
+
+typedef struct __attribute__((packed)) {
+    char nome[24];
+    uint32_t pilha_reservada_bytes;
+    uint32_t pilha_minima_livre_bytes;
+    uint16_t cpu_decimos;
+    uint8_t prioridade;
+    int8_t nucleo;
+    uint8_t estado;
+    uint8_t cpu_valida;
+} tarefa_diagnostico_mestre_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t versao_formato;
+    uint8_t inicio;
+    uint8_t total;
+    uint8_t quantidade;
+    uint8_t valido;
+    uint64_t coletado_em_ms;
+    tarefa_diagnostico_mestre_t tarefas[COMANDO_TAREFAS_MESTRE_POR_PAGINA];
+} resposta_tarefas_mestre_t;
 
 typedef enum {
     CONSULTA_SATELITE_PING = 1,
@@ -444,6 +546,8 @@ static_assert(sizeof(resposta_comando_ota_detalhada_t) ==
               "A resposta OTA detalhada deve ocupar 128 bytes");
 static_assert(sizeof(resposta_comando_acao_t) == 8,
               "A confirmação de ação deve ter 8 bytes");
+static_assert(sizeof(estado_controle_remoto_t) <= COMANDO_TAMANHO_MAXIMO_CARGA,
+              "O estado de controle deve caber na carga de comando");
 static_assert(sizeof(resposta_comando_acao_sincronizacao_t) == 16,
               "A confirmação de sincronização deve ter 16 bytes");
 static_assert(sizeof(solicitacao_acao_mestre_t) ==
@@ -460,6 +564,12 @@ static_assert(sizeof(resposta_sincronizacao_mestre_t) <=
 static_assert(sizeof(resposta_diagnostico_mestre_t) ==
                   COMANDO_TAMANHO_MAXIMO_CARGA,
               "O diagnóstico do mestre deve ocupar 128 bytes");
+static_assert(sizeof(resposta_sensores_mestre_t) <= COMANDO_TAMANHO_MAXIMO_CARGA,
+              "O retrato de sensores deve caber em um quadro");
+static_assert(sizeof(resposta_logs_terminal_t) <= COMANDO_TAMANHO_MAXIMO_CARGA,
+              "Resposta de logs do terminal deve caber no limite do comando UART");
+static_assert(sizeof(resposta_tarefas_mestre_t) <= COMANDO_TAMANHO_MAXIMO_CARGA,
+              "Página de tarefas deve caber no limite do comando UART");
 static_assert(sizeof(resposta_consulta_clientes_wifi_satelite_t) <= COMANDO_TAMANHO_MAXIMO_CARGA,
               "A lista de clientes deve caber na carga de comando");
 #else
@@ -472,6 +582,8 @@ _Static_assert(sizeof(resposta_comando_ota_detalhada_t) ==
                "A resposta OTA detalhada deve ocupar 128 bytes");
 _Static_assert(sizeof(resposta_comando_acao_t) == 8,
                "A confirmação de ação deve ter 8 bytes");
+_Static_assert(sizeof(estado_controle_remoto_t) <= COMANDO_TAMANHO_MAXIMO_CARGA,
+               "O estado de controle deve caber na carga de comando");
 _Static_assert(sizeof(resposta_comando_acao_sincronizacao_t) == 16,
                "A confirmação de sincronização deve ter 16 bytes");
 _Static_assert(sizeof(solicitacao_acao_mestre_t) ==
@@ -488,6 +600,12 @@ _Static_assert(sizeof(resposta_sincronizacao_mestre_t) <=
 _Static_assert(sizeof(resposta_diagnostico_mestre_t) ==
                    COMANDO_TAMANHO_MAXIMO_CARGA,
                "O diagnóstico do mestre deve ocupar 128 bytes");
+_Static_assert(sizeof(resposta_sensores_mestre_t) <= COMANDO_TAMANHO_MAXIMO_CARGA,
+               "O retrato de sensores deve caber em um quadro");
+_Static_assert(sizeof(resposta_logs_terminal_t) <= COMANDO_TAMANHO_MAXIMO_CARGA,
+               "Resposta de logs do terminal deve caber no limite do comando UART");
+_Static_assert(sizeof(resposta_tarefas_mestre_t) <= COMANDO_TAMANHO_MAXIMO_CARGA,
+               "Página de tarefas deve caber no limite do comando UART");
 _Static_assert(sizeof(resposta_consulta_clientes_wifi_satelite_t) <= COMANDO_TAMANHO_MAXIMO_CARGA,
                "A lista de clientes deve caber na carga de comando");
 #endif

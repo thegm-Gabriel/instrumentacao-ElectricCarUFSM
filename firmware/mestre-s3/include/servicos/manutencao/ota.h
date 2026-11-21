@@ -1,0 +1,91 @@
+// Declara a política e a orquestração das atualizações OTA.
+#pragma once
+
+#include <cstdint>
+
+#include "esp_err.h"
+
+enum class EstadoServicoOta : uint8_t {
+    Desabilitado,
+    Inicializando,
+    AguardandoRede,
+    Verificando,
+    Atualizado,
+    AguardandoAutorizacao,
+    Baixando,
+    Aplicado,
+    Cancelado,
+    Falha,
+};
+
+enum class AlvoOta : uint8_t {
+    Nenhum,
+    Todos,
+    Mestre,
+    Equipe,
+    Visitantes,
+};
+
+enum class EstadoOtaSatelite : uint8_t {
+    Desconhecido,
+    Indisponivel,
+    NaoSuportado,
+    Atualizado,
+    AguardandoAutorizacao,
+    Transferindo,
+    Reiniciando,
+    Concluido,
+    Cancelado,
+    Falha,
+};
+
+struct ProgressoTransferenciaOta {
+    uint32_t bytes_transferidos = 0;
+    uint32_t tamanho_total = 0;
+    uint32_t percentual_decimos = 0;
+    uint32_t taxa_bytes_por_segundo = 0;
+    uint32_t tempo_decorrido_ms = 0;
+    uint32_t tempo_restante_segundos = 0;
+};
+
+struct SituacaoOtaSatelite {
+    EstadoOtaSatelite estado = EstadoOtaSatelite::Desconhecido;
+    char versao_atual[24] = {};
+    char versao_disponivel[24] = {};
+    ProgressoTransferenciaOta progresso;
+    esp_err_t ultimo_erro = ESP_OK;
+};
+
+struct SituacaoOta {
+    EstadoServicoOta estado = EstadoServicoOta::Desabilitado;
+    char versao_atual[32] = {};
+    char versao_disponivel[32] = {};
+    uint32_t verificacoes = 0;
+    uint32_t falhas = 0;
+    uint32_t conclusoes = 0;
+    uint32_t intervalo_verificacao_minutos = 0;
+    esp_err_t ultimo_erro = ESP_OK;
+    AlvoOta alvo_ativo = AlvoOta::Nenhum;
+    AlvoOta ultimo_alvo_concluido = AlvoOta::Nenhum;
+    ProgressoTransferenciaOta progresso;
+    SituacaoOtaSatelite equipe;
+    SituacaoOtaSatelite visitantes;
+};
+
+esp_err_t servico_ota_iniciar();
+esp_err_t servico_ota_confirmar_firmware_em_execucao();
+esp_err_t servico_ota_rejeitar_firmware_em_execucao();
+esp_err_t servico_ota_solicitar_verificacao();
+esp_err_t servico_ota_autorizar_atualizacao();
+esp_err_t servico_ota_autorizar_atualizacao_todos();
+esp_err_t servico_ota_autorizar_atualizacao_satelite(AlvoOta alvo);
+esp_err_t servico_ota_cancelar_atualizacao();
+esp_err_t servico_ota_definir_intervalo_verificacao(uint32_t minutos);
+// Repõe o intervalo do backup SD somente se a chave NVS estiver ausente.
+esp_err_t servico_ota_restaurar_intervalo_se_ausente(uint32_t minutos);
+SituacaoOta servico_ota_obter_situacao();
+// Cada consumidor mantém seu próprio contador de conclusões observadas.
+bool servico_ota_observar_conclusao(uint32_t& conclusoes_observadas, AlvoOta& alvo);
+const char* servico_ota_nome_estado(EstadoServicoOta estado);
+const char* servico_ota_nome_estado_satelite(EstadoOtaSatelite estado);
+const char* servico_ota_nome_alvo(AlvoOta alvo);

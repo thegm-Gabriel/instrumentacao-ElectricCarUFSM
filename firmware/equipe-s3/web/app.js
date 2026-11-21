@@ -7,10 +7,84 @@
   const age = ms => ms === null ? 'Não disponível' : ms < 1000 ? ms + ' ms' : ms < 60000 ? number(ms / 1000, 1) + ' s' : number(ms / 60000, 1) + ' min';
   const bytes = n => n === null ? 'Não disponível' : n >= 1048576 ? number(n / 1048576, 1) + ' MiB' : number(n / 1024, 1) + ' KiB';
   const set = (id, text) => { const el = $(id); if (el && el.textContent !== text) el.textContent = text; };
-  const tone = (id, name) => { const el = $(id); if (el) el.className = 'dot ' + name; };
   const badge = (id, text, name) => { const el = $(id); if (el) { el.textContent = text; el.className = 'badge ' + name; } };
-  const message = (text, kind = '') => { const el = $(state.tab==='controle'?'critical-notice':'notice'); el.hidden = false; el.textContent = text; el.className = 'notice ' + kind; };
-  const state = { tab: 'telemetria', range: 30, signal: 'power', signalSecondary: 'current', signalTertiary: 'none', telemetry: null, local: null, localAt: 0, master: {}, visitors: {}, browserOnline: false, browserChecked: false, localChecked: false, lastHttp: 0, masterOnline: false, masterChecked: false, visitorsOnline: false, visitorsChecked: false, lastSample: 0, lastSampleAgeMs: 0, lastSequence: null, samples: [], deviceSamples: {mestre:[],equipe:[],visitantes:[]}, deviceSignal:{mestre:'cpu',equipe:'cpu',visitantes:'rtt'}, deviceSignalSecondary:{mestre:'heap',equipe:'heap',visitantes:'availability'}, events: [], commandEvents: [], commandRuns: [], selected: {mestre:'mestre',equipe:'equipe', visitantes:'visitantes'}, busy: false, energyWh: 0, distanceStart: null, pending: null, polls: {}, telemetryRefreshMs: 250, commandRefreshMs: 2000 };
+  const messageTypes = {
+    info: {label:'Aviso', icon:'i', duration:5000},
+    success: {label:'Concluído', icon:'✓', duration:6500},
+    warning: {label:'Atenção', icon:'!', duration:8000},
+    error: {label:'Erro', icon:'×', duration:10000},
+    emergency: {label:'Parada remota', icon:'!', duration:12000}
+  };
+  function message(text, kind = 'info', onDetails) {
+    if(!Object.hasOwn(messageTypes,kind))kind='info';
+    const type=messageTypes[kind];
+    let host=$('global-toast-stack');
+    if(!host){
+      host=document.createElement('div');
+      host.id='global-toast-stack';
+      host.className='global-toast-stack';
+      document.body.append(host);
+    }
+    for(const previous of [...host.children]){
+      if(previous.dataset.message===text||(kind!=='info'&&previous.dataset.tone==='info')){
+        previous.remove();
+      }
+    }
+    const toast=document.createElement('div');
+    const symbol=document.createElement('span');
+    const body=document.createElement('span');
+    const label=document.createElement('strong');
+    const close=document.createElement('button');
+    toast.className='global-toast message-state '+kind;
+    toast.dataset.tone=kind;
+    toast.dataset.message=text;
+    toast.setAttribute('role',kind==='error'||kind==='emergency'?'alert':'status');
+    symbol.className='global-toast-symbol';
+    symbol.textContent=type.icon;
+    symbol.setAttribute('aria-hidden','true');
+    body.className='global-toast-text';
+    label.className='message-label';
+    label.textContent=type.label;
+    body.append(label,document.createTextNode(' '+text));
+    close.type='button';
+    close.className='global-toast-close';
+    close.textContent='×';
+    close.setAttribute('aria-label','Fechar mensagem');
+    toast.append(symbol,body,close);
+    host.prepend(toast);
+    while(host.children.length>2)host.lastElementChild.remove();
+    let timer;
+    const dismiss=()=>{
+      clearTimeout(timer);
+      toast.classList.add('is-leaving');
+      setTimeout(()=>toast.remove(),220);
+    };
+    const schedule=()=>{
+      clearTimeout(timer);
+      timer=setTimeout(dismiss,type.duration);
+    };
+    if(onDetails){
+      const details=document.createElement('button');
+      details.type='button';
+      details.className='global-toast-details';
+      details.textContent='Ver diagnóstico';
+      details.addEventListener('click',()=>{dismiss();onDetails();});
+      body.append(' ',details);
+    }
+    close.addEventListener('click',dismiss);
+    toast.addEventListener('mouseenter',()=>clearTimeout(timer));
+    toast.addEventListener('mouseleave',schedule);
+    toast.addEventListener('focusin',()=>clearTimeout(timer));
+    toast.addEventListener('focusout',schedule);
+    schedule();
+    return toast;
+  }
+  function controlNotice(text,kind='info'){
+    const notice=$('remote-state');
+    notice.dataset.tone=kind;
+    set('remote-state',text);
+  }
+  const state = { tab: 'telemetria', range: 30, signal: 'power', signalSecondary: 'current', signalTertiary: 'none', telemetry: null, local: null, localAt: 0, master: {}, visitors: {}, browserOnline: false, localChecked: false, lastHttp: 0, masterOnline: false, masterChecked: false, visitorsOnline: false, visitorsChecked: false, lastSample: 0, lastSampleAgeMs: 0, lastSequence: null, samples: [], deviceSamples: {mestre:[],equipe:[],visitantes:[]}, deviceSignal:{mestre:'cpu',equipe:'cpu',visitantes:'rtt'}, deviceSignalSecondary:{mestre:'heap',equipe:'heap',visitantes:'availability'}, events: [], commandEvents: [], commandRuns: [], selected: {mestre:'mestre',equipe:'equipe', visitantes:'visitantes'}, busy: false, energyWh: 0, distanceStart: null, pending: null, polls: {}, telemetryRefreshMs: 250, commandRefreshMs: 2000 };
   const devices = {
     mestre: {group:'mestre', name:'ESP32 mestre', id:'MESTRE', role:'Mestre', function:'Aquisição e telemetria do veículo'},
     equipe: {group:'equipe', name:'ESP32 da equipe', id:'EQUIPE', role:'Satélite / gateway', function:'Recepção UART, Wi-Fi e painel web'},
@@ -28,6 +102,10 @@
   }
   const CAP_SYNC = 1 << 11;
   const CAP_SIMULATOR = 1 << 12;
+  const CAP_SENSORS = 1 << 14;
+  const CAP_TERMINAL_LOGS = 1 << 16;
+  const CAP_MASTER_TASKS = 1 << 17;
+  const CAP_REVERSE_PERMISSION = 1 << 18;
   const refreshChoices = [1000,500,333,250];
   try {const saved=Number(localStorage.getItem('nexus-telemetry-refresh-ms'));if(refreshChoices.includes(saved))state.telemetryRefreshMs=saved;} catch (_) { /* O painel funciona sem armazenamento local. */ }
   $('command-refresh-rate').value=String(state.telemetryRefreshMs);
@@ -37,54 +115,6 @@
     clearTimeout(state.telemetryTimer);
     try {localStorage.setItem('nexus-telemetry-refresh-ms',String(selected));} catch (_) { /* Preferência válida apenas nesta sessão. */ }
     pollTelemetry();
-  });
-  const statusbar=$('statusbar-toggle').closest('.statusbar');
-  const topbarInner=document.querySelector('.topbar-inner');
-  let statusbarAnimation=null;
-  function placeStatusbarToggle(){
-    const notice=$('health-notice');
-    const noticeSlot=$('statusbar-notice-slot');
-    const host=!statusbar.classList.contains('is-collapsed')?statusbar.querySelector('.statusbar-shell'):notice.hidden?topbarInner:noticeSlot;
-    const toggle=$('statusbar-toggle');
-    if(toggle.parentElement!==host){
-      const wasFocused=document.activeElement===toggle;
-      host.append(toggle);
-      if(wasFocused)toggle.focus({preventScroll:true});
-    }
-    $('health-notice-row').hidden=notice.hidden;
-    topbarInner.classList.toggle('has-statusbar-toggle',host===topbarInner);
-  }
-  function setStatusbarCollapsed(collapsed,smooth=false){
-    const fromHeight=statusbar.getBoundingClientRect().height;
-    if(statusbarAnimation){statusbarAnimation.cancel();statusbarAnimation=null;}
-    statusbar.classList.toggle('is-collapsed',collapsed);
-    $('statusbar-toggle').setAttribute('aria-expanded',String(!collapsed));
-    $('statusbar-toggle').setAttribute('aria-label',collapsed?'Expandir faixa de estado':'Recolher faixa de estado');
-    $('statusbar-toggle').title=collapsed?'Expandir faixa de estado':'Recolher faixa de estado';
-    if(!collapsed){statusbar.hidden=false;$('statusbar-content').hidden=false;}
-    placeStatusbarToggle();
-    if(!smooth||!statusbar.animate||matchMedia('(prefers-reduced-motion: reduce)').matches){
-      statusbar.style.overflow='';
-      statusbar.hidden=collapsed;
-      $('statusbar-content').hidden=collapsed;
-      return;
-    }
-    const toHeight=collapsed?0:statusbar.scrollHeight;
-    statusbar.style.overflow='hidden';
-    const animation=statusbar.animate([{height:fromHeight+'px',opacity:collapsed?1:0},{height:toHeight+'px',opacity:collapsed?0:1}],{duration:220,easing:'ease-in-out'});
-    statusbarAnimation=animation;
-    animation.onfinish=()=>{
-      if(statusbarAnimation!==animation)return;
-      statusbarAnimation=null;
-      statusbar.style.overflow='';
-      if(collapsed){statusbar.hidden=true;$('statusbar-content').hidden=true;}
-    };
-  }
-  try {setStatusbarCollapsed(localStorage.getItem('nexus-statusbar-collapsed')==='1');} catch (_) {setStatusbarCollapsed(false);}
-  $('statusbar-toggle').addEventListener('click',()=>{
-    const collapsed=!statusbar.classList.contains('is-collapsed');
-    setStatusbarCollapsed(collapsed,true);
-    try {localStorage.setItem('nexus-statusbar-collapsed',collapsed?'1':'0');} catch (_) { /* O controle continua funcional nesta sessão. */ }
   });
   const marchas = ['Estacionado','Neutro','Frente','Ré'];
 
@@ -147,6 +177,7 @@
   const PEAK_HOLD_MS=1400;
   const speedScale={max:30,belowSince:null};
   const telemetryMotion={items:{},period:250,arrivedAt:0,tickScale:null,slowingUntil:0};
+  const CURRENT_HIGHLIGHT_A=7.5,CURRENT_VISUAL_MAX_A=35;
   const reducedMotion=()=>matchMedia('(prefers-reduced-motion: reduce)').matches;
   function animateTelemetry(id,target,digits=1,onFrame=()=>{},suffix=''){
     const old=telemetryMotion.items[id];
@@ -248,35 +279,40 @@
     }
     $('speed-fill').closest('svg').setAttribute('aria-label','Velocidade em escala de 0 a '+scale+' km/h'+(peakVisible?'. Velocidade antes da desaceleração: '+number(speedPeak.value,1)+' km/h.':''));
   }
-  const powerPeak={last:null,candidate:0,value:null,until:0,cooldownUntil:0,timer:null};
-  let powerRange=500;
-  function recordPowerPeak(power){
+  const powerPeak={last:null,candidate:0,value:null,until:0,cooldownUntil:0,timer:null,minimum:120,minimumFall:55,markerId:'power-peak-marker',labelId:'power-peak-label',unit:' W',digits:0};
+  const currentPeak={last:null,candidate:0,value:null,until:0,cooldownUntil:0,timer:null,minimum:2,minimumFall:.8,markerId:'current-peak-marker',labelId:'current-peak-label',unit:' A',digits:2,highlight:CURRENT_HIGHLIGHT_A};
+  const POWER_VISUAL_MAX_W=1000;
+  function recordMeterPeak(peak,reading){
     const now=performance.now();
-    if(power===null){clearTimeout(powerPeak.timer);Object.assign(powerPeak,{last:null,candidate:0,value:null,until:0,cooldownUntil:0,timer:null});return;}
-    if(powerPeak.last===null){powerPeak.last=power;powerPeak.candidate=power;return;}
-    if(Math.sign(power)===Math.sign(powerPeak.candidate)&&Math.abs(power)>Math.abs(powerPeak.candidate))powerPeak.candidate=power;
-    const fall=Math.abs(powerPeak.candidate)-Math.abs(power);
-    if(Math.abs(powerPeak.candidate)>=120&&fall>=Math.max(55,Math.abs(powerPeak.candidate)*.25)&&now>=powerPeak.cooldownUntil){
-      powerPeak.value=powerPeak.candidate;powerPeak.until=now+1600;powerPeak.cooldownUntil=now+3500;
-      powerPeak.candidate=power;clearTimeout(powerPeak.timer);
-      powerPeak.timer=setTimeout(()=>{powerPeak.until=0;const displayed=telemetryMotion.items.power?.current;renderPowerRail(displayed===undefined?power:telemetryMotion.powerUnit?displayed*1000:displayed);},1600);
+    if(reading===null){clearTimeout(peak.timer);Object.assign(peak,{last:null,candidate:0,value:null,until:0,cooldownUntil:0,timer:null});$(peak.markerId).classList.remove('is-visible');$(peak.labelId).classList.remove('is-visible');return;}
+    if(peak.last===null){peak.last=reading;peak.candidate=reading;return;}
+    if(Math.sign(reading)===Math.sign(peak.candidate)&&Math.abs(reading)>Math.abs(peak.candidate))peak.candidate=reading;
+    const fall=Math.abs(peak.candidate)-Math.abs(reading);
+    if(Math.abs(peak.candidate)>=peak.minimum&&fall>=Math.max(peak.minimumFall,Math.abs(peak.candidate)*.25)&&now>=peak.cooldownUntil){
+      peak.value=peak.candidate;peak.until=now+1000;peak.cooldownUntil=now+2500;
+      peak.candidate=reading;clearTimeout(peak.timer);
+      const label=$(peak.labelId);label.textContent='Pico · '+number(peak.value,peak.digits)+peak.unit;
+      label.classList.toggle('is-regen',peak.value<0);
+      label.classList.toggle('is-elevated',!!peak.highlight&&Math.abs(peak.value)>peak.highlight);
+      label.classList.add('is-visible');
+      peak.timer=setTimeout(()=>{peak.until=0;$(peak.markerId).classList.remove('is-visible');label.classList.remove('is-visible');},1000);
     }
-    if(Math.sign(power)!==Math.sign(powerPeak.candidate))powerPeak.candidate=power;
-    powerPeak.last=power;
+    if(Math.sign(reading)!==Math.sign(peak.candidate))peak.candidate=reading;
+    peak.last=reading;
   }
   function renderPowerRail(power){
     const rail=$('power-rail');if(!rail)return;
     rail.hidden=power===null;
+    const card=$('power-card'),strength=power===null?0:Math.min(1,Math.abs(power)/POWER_VISUAL_MAX_W);
+    card.style.setProperty('--power-intensity',Math.round(strength*100)+'%');
+    card.style.setProperty('--power-glow',(strength*.3).toFixed(3));
     if(power===null)return;
-    powerRange=Math.max(powerRange,Math.ceil(Math.abs(power)/250)*250,Math.ceil(Math.abs(powerPeak.value||0)/250)*250);
-    const fraction=Math.min(1,Math.abs(power)/powerRange);
-    $('power-rail-regen').style.width=(power<0?fraction*50:0)+'%';
-    $('power-rail-consume').style.width=(power>0?fraction*50:0)+'%';
+    const fraction=Math.min(1,Math.abs(power)/POWER_VISUAL_MAX_W);
+    $('power-rail-fill').style.setProperty('--fill-level',(fraction*100)+'%');
     const peak=$('power-peak-marker'),visible=powerPeak.value!==null&&powerPeak.until>performance.now();
     peak.classList.toggle('is-visible',visible);
-    if(visible)peak.style.left=(50+Math.max(-1,Math.min(1,powerPeak.value/powerRange))*50)+'%';
-    set('power-negative-limit','−'+powerRange+' W');set('power-positive-limit',powerRange+' W');
-    rail.setAttribute('aria-label','Potência elétrica: '+number(power,0)+' W; escala de menos '+powerRange+' a mais '+powerRange+' W');
+    if(visible)peak.style.left=Math.min(99,Math.max(1,Math.abs(powerPeak.value)/POWER_VISUAL_MAX_W*100))+'%';
+    rail.setAttribute('aria-label','Potência elétrica: '+number(power,0)+' W; barra de 0 a '+POWER_VISUAL_MAX_W+' W'+(power<0?' em regeneração':''));
     $('power-card').classList.toggle('is-regen',power<0);
     set('power-context',power<0?'Regeneração':power>0?'Consumo':'Sem fluxo elétrico');
   }
@@ -295,12 +331,7 @@
     items.forEach(item => { const li = document.createElement('li'), time = document.createElement('time'); time.textContent = new Date(item.time).toLocaleTimeString('pt-BR'); li.append(time, document.createTextNode(item.text)); el.append(li); });
   }
   function updateStatus() {
-    tone('browser-dot', !state.browserChecked ? 'neutral' : state.browserOnline ? 'good' : 'bad'); set('browser-status', !state.browserChecked ? 'Conectando' : state.browserOnline ? 'Conectado' : 'Sem resposta');
-    tone('master-dot', !state.masterChecked ? 'neutral' : state.masterOnline ? 'good' : 'bad'); set('master-status', !state.masterChecked ? 'Não consultado' : state.masterOnline ? 'Respondendo' : 'Sem resposta');
-    tone('esp-dot', !state.visitorsChecked ? 'neutral' : state.visitorsOnline ? 'good' : 'bad'); set('esp-status', !state.visitorsChecked ? 'Não consultado' : state.visitorsOnline ? 'Respondendo' : 'Sem resposta');
     const elapsed = state.lastSample ? Math.max(0,Date.now()-state.lastSample)+state.lastSampleAgeMs : null;
-    set('updated-status', elapsed === null ? 'Sem leitura' : elapsed < 1000 ? 'Atual' : 'há ' + Math.floor(elapsed / 1000) + ' s');
-    set('record-status', state.samples.length ? 'Histórico local' : 'Sem histórico');
     const stale = !state.telemetry || !state.telemetry.valido || elapsed === null || elapsed >= 2000;
     document.querySelectorAll('.speed-card,.metric-card,.quick-strip,.chart-card,.detail-card').forEach(el => el.classList.toggle('stale', stale));
     if (state.telemetry) badge('data-badge', stale ? 'Dados desatualizados' : state.telemetry.simulado ? 'Dados simulados' : 'Dados do mestre', stale || state.telemetry.simulado ? 'warn' : 'good');
@@ -312,32 +343,92 @@
     const electrical=!!d&&(sim||!!(d.estado_mpu&128));
     badge('critical-freshness',!state.telemetry?'Aguardando telemetria':stale?'Leitura desatualizada':sim?'Leitura simulada':'Leitura do mestre',stale?'warn':sim?'warn':'good');
     set('critical-speed',d?format(value(d,'velocidade_centesimos_kmh',100),'',1).trim():'—');
+    set('critical-soc',sim?format(value(d,'carga_decimos_percentual',10),'%',1):'Não disponível');
     set('critical-throttle',sim?format(value(d,'acelerador_decimos_percentual',10),'%',1):'Não disponível');
     set('critical-brake',sim?format(value(d,'freio_decimos_percentual',10),'%',1):'Não disponível');
     set('critical-current',electrical?format(value(d,'corrente_centesimos_a',100),'A',2):'Não disponível');
     set('critical-voltage',electrical?format(value(d,'tensao_pacote_mv',1000),'V',3):'Não disponível');
     set('critical-power',electrical?format(value(d,'potencia_w'),'W',0):'Não disponível');
   }
-  const healthCauses=['Memória crítica','Pilha de tarefa baixa','Sensor','I²C','UART','Supervisão de tarefas','Equipe sem resposta','Visitantes sem resposta','Wi-Fi fraco','Falha OTA recente','Persistência no SD','Memória baixa'];
-  function renderHealth(){
-    const health=state.master.saude,fresh=state.masterOnline&&health&&Date.now()-(state.lastHealthAt||0)<30000;
-    const notice=$('health-notice');
-    if(!fresh){tone('health-dot',state.masterChecked&&!state.masterOnline?'bad':'neutral');set('health-status',state.masterChecked&&!state.masterOnline?'Mestre sem resposta':'Aguardando consulta');notice.hidden=true;placeStatusbarToggle();return;}
-    const level=Number(health.estado)||0;
-    const labels=['Normal','Recuperando','Operação degradada','Falha detectada'];
-    tone('health-dot',level===0?'good':level===3?'bad':'warn');
-    set('health-status',labels[level]||'Estado desconhecido');
-    notice.hidden=level===0;
-    if(level===0){placeStatusbarToggle();return;}
-    notice.className='health-notice '+(level===3?'bad':'warn');
-    set('health-notice-title',level===3?'Falha detectada no mestre':level===1?'Mestre em recuperação':'Operação degradada');
-    const mask=Number(health.causas_ativas)||0;
-    const causes=healthCauses.filter((_,index)=>(mask&(1<<index))!==0);
-    set('health-notice-detail',causes.length?'Causas informadas: '+causes.slice(0,3).join(', ')+(causes.length>3?' e mais '+(causes.length-3)+'.':'.'):'O mestre informou um estado de atenção. Consulte o diagnóstico para detalhes.');
-    placeStatusbarToggle();
+  // A ordem das causas segue os bits de CausaSaudeSistema no mestre.
+  const healthCauses = [
+    'Memória crítica', 'Pilha de tarefa baixa', 'Sensor', 'I²C', 'UART', 'Supervisão de tarefas',
+    'Equipe sem resposta', 'Visitantes sem resposta', 'Wi-Fi fraco', 'Falha OTA recente',
+    'Persistência no SD', 'Memória baixa'
+  ];
+  const healthFreshMs = 30000;
+
+  function getSystemHealth() {
+    const health = state.master.saude;
+    const level = health?.estado;
+    const receivedAt = state.lastHealthAt;
+    const known = Number.isInteger(level) && level >= 0 && level <= 3;
+    const offline = state.masterChecked && !state.masterOnline;
+    const fresh = state.masterOnline && known && Date.now() - receivedAt < healthFreshMs;
+    const labels = ['Normal', 'Recuperando', 'Degradada', 'Falha'];
+    const tones = ['success', 'info', 'warning', 'error'];
+    let label = 'Aguardando';
+    if (offline) label = 'Mestre offline';
+    else if (fresh) label = labels[level];
+    else if (known) label = 'Desatualizada';
+    else if (health) label = 'Estado desconhecido';
+
+    const mask = value(health, 'causas_ativas');
+    const causes = healthCauses.filter((_, index) => (mask & (1 << index)) !== 0);
+    const unknown = (mask >>> healthCauses.length) << healthCauses.length;
+    if (unknown) causes.push('Outras causas (0x' + (unknown >>> 0).toString(16).toUpperCase() + ')');
+    return {health, level, fresh, offline, label, tone: fresh ? tones[level] : offline ? 'error' : 'info', causes, mask, receivedAt};
   }
-  $('refresh-remote-control').addEventListener('click',async()=>{if(!await masterQuery('controle_remoto'))set('remote-state','Sem resposta · estado solicitado não confirmado');});
-  $('health-details').addEventListener('click',()=>showTab('mestre','push'));
+
+  function healthAge(receivedAt) {
+    const seconds = Math.max(0, Math.floor((Date.now() - receivedAt) / 1000));
+    if (seconds < 1) return 'agora';
+    if (seconds < 60) return 'há ' + seconds + ' s';
+    if (seconds < 3600) return 'há ' + Math.floor(seconds / 60) + ' min';
+    return 'há ' + Math.floor(seconds / 3600) + ' h';
+  }
+
+  function healthCauseSummary(causes) {
+    if (!causes.length) return '';
+    return causes[0] + (causes.length > 1 ? ' +' + (causes.length - 1) : '');
+  }
+
+  let lastHealthAlert='', healthToast;
+  function renderHealth(){
+    const healthState = getSystemHealth();
+    const {level,fresh,offline,causes,mask,label,tone}=healthState;
+    const shortcut=$('health-shortcut');
+    if(shortcut.dataset.tone!==tone)shortcut.dataset.tone=tone;
+    set('health-status',label);
+    const hasFault=fresh&&(level>=2||(level===1&&mask));
+    const alertKey=offline?'offline':hasFault?`${level}/${mask}`:'';
+    if(alertKey!==lastHealthAlert){
+      healthToast?.remove();
+      healthToast=null;
+      lastHealthAlert=alertKey;
+      if(alertKey){
+        const text=offline?'Mestre sem resposta':['','Mestre em recuperação','Operação degradada','Falha no Mestre'][level];
+        const detail=offline?'':healthCauseSummary(causes);
+        healthToast=message(text+(detail?' · '+detail:'')+'.',offline||level===3?'error':'warning',openHealthDiagnostics);
+      }
+    }
+    renderDeviceSystemHealth(healthState);
+  }
+  $('refresh-remote-control').addEventListener('click',async()=>{
+    if(!await masterQuery('controle_remoto')){
+      controlNotice('Mestre sem resposta. Estado não confirmado.','warning');
+      badge('vehicle-arm-badge','Estado do carro indisponível','muted');
+    }
+  });
+  function openHealthDiagnostics() {
+    showTab('mestre', 'push');
+    const diagnostics = $('health-diagnostics');
+    diagnostics.open = true;
+    renderMasterHealthDiagnostics(getSystemHealth());
+    diagnostics.querySelector('summary').focus({preventScroll: true});
+    diagnostics.scrollIntoView({block: 'nearest'});
+  }
+  $('health-shortcut').addEventListener('click',openHealthDiagnostics);
   async function getJSON(url, timeout = 7000) {
     const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), timeout);
     try { const response = await fetch(url, {cache:'no-store', signal:controller.signal}); state.lastHttp = Date.now(); state.browserOnline = true; const body = await response.json(); if (!response.ok || body.ok === false) throw new Error(body.erro || 'Resposta ' + response.status); return body; }
@@ -366,7 +457,8 @@
     clearTimeout(telemetryMotion.slowingTimer);
     $('speed-card').classList.toggle('is-slowing',telemetryMotion.slowingUntil>now);
     if(telemetryMotion.slowingUntil>now)telemetryMotion.slowingTimer=setTimeout(()=>$('speed-card').classList.remove('is-slowing'),telemetryMotion.slowingUntil-now);
-    recordPowerPeak(sample.power);
+    recordMeterPeak(powerPeak,sample.power);
+    recordMeterPeak(currentPeak,sample.current);
     if (state.samples.length && !state.samples[state.samples.length-1].gap) {
       const previous = state.samples[state.samples.length-1];
       const hours = Math.min((now - previous.time) / 3600000, 2 / 3600);
@@ -379,35 +471,62 @@
     drawCharts();
   }
   function deviceSample(id, measurements) { const history=state.deviceSamples[id]; history.push({time:Date.now(),...measurements}); if(history.length>180)history.shift(); if(state.tab===devices[id].group) drawDeviceChart(devices[id].group,id); }
+  const batteryWarnings = [
+    { below: 10, level: 'critical', label: 'Crítico', icon: '☠️' },
+    { below: 30, level: 'low', label: 'Bateria baixa', icon: '🪫' },
+    { below: 50, level: 'attention', label: 'Atenção', icon: '⚠️' }
+  ];
+  function renderBatteryCharge(charge) {
+    const warning = charge === null ? null : batteryWarnings.find(item => charge < item.below);
+    $('soc-card').dataset.chargeLevel = charge === null ? 'unavailable' : warning?.level ?? 'normal';
+    const notice = $('soc-notice');
+    set('soc-notice-label', warning?.label ?? '');
+    set('soc-notice-icon', warning?.icon ?? '');
+    notice.hidden = !warning;
+    set('soc-context', charge === null ? 'Sem estimativa de carga' : 'Estimativa simulada');
+    animateTelemetry('soc', charge, 2, reading => {
+      $('soc-bar').style.width = Math.max(0, Math.min(100, reading ?? 0)) + '%';
+    });
+  }
   function renderTelemetry(d) {
     const available = !!(d && d.valido);
     if (!available) return;
     const electrical=d.simulado || !!(d.estado_mpu & 128);
-    const speed = value(d,'velocidade_centesimos_kmh',100), accel = d.simulado || (d.estado_mpu & 1) ? value(d,'aceleracao_milesimos_ms2',1000) : null, soc = d.simulado ? value(d,'carga_decimos_percentual',10) : null, power = electrical ? value(d,'potencia_w') : null;
+    const speed = value(d,'velocidade_centesimos_kmh',100), accel = d.simulado || (d.estado_mpu & 1) ? value(d,'aceleracao_milesimos_ms2',1000) : null, soc = d.simulado ? value(d,'carga_decimos_percentual',10) : null, power = electrical ? value(d,'potencia_w') : null, current = electrical ? value(d,'corrente_centesimos_a',100) : null;
     animateTelemetry('speed',speed,1,()=>updateArc(false));
-    animateTelemetry('accel',accel,2,current=>{$('accel-card').classList.toggle('is-negative',current!==null&&current<-.015);set('accel-context',current===null?'Sensor indisponível':current<-.04?'Desaceleração':current>.04?'Aceleração':'Movimento estável');});
-    animateTelemetry('soc',soc,2,current=>{$('soc-bar').style.width=Math.max(0,Math.min(100,current||0))+'%';set('soc-context',current===null?'Carga indisponível':current<20?'Carga baixa':current<80?'Carga disponível':'Carga elevada');});
+    animateTelemetry('mpu-accel',accel,2,reading=>{$('mpu-accel-row').classList.toggle('is-negative',reading!==null&&reading<-.04);},' m/s²');
+    renderBatteryCharge(soc);
     const powerKw=power!==null&&Math.abs(power)>=1000;
     if(telemetryMotion.powerUnit!==undefined&&telemetryMotion.powerUnit!==powerKw){const oldPower=telemetryMotion.items.power;if(oldPower?.frame)cancelAnimationFrame(oldPower.frame);delete telemetryMotion.items.power;}
     telemetryMotion.powerUnit=powerKw;
     set('power-unit',powerKw?'kW':'W');
     animateTelemetry('power',powerKw?power/1000:power,powerKw?2:0,current=>renderPowerRail(current===null?null:powerKw?current*1000:current));
     if(power===null){$('power-card').classList.remove('is-regen');set('power-context','Medição indisponível');}
+    animateTelemetry('current-primary',current,2,reading=>{
+      const magnitude=Math.abs(reading||0),card=$('current-card');
+      const intensity=Math.min(1,Math.max(0,(magnitude-CURRENT_HIGHLIGHT_A)/(CURRENT_VISUAL_MAX_A-CURRENT_HIGHLIGHT_A)));
+      card.classList.toggle('is-elevated',reading!==null&&magnitude>CURRENT_HIGHLIGHT_A);
+      card.classList.toggle('is-regen',reading!==null&&reading<-.5&&magnitude<=CURRENT_HIGHLIGHT_A);
+      card.style.setProperty('--current-red',Math.round(intensity*100)+'%');
+      card.style.setProperty('--current-heat',(intensity*.34).toFixed(3));
+      $('current-meter-fill').style.setProperty('--fill-level',Math.min(100,magnitude/CURRENT_VISUAL_MAX_A*100)+'%');
+      const peak=$('current-peak-marker'),visible=currentPeak.value!==null&&currentPeak.until>performance.now()&&reading!==null;
+      peak.classList.toggle('is-visible',visible);
+      if(visible)peak.style.left=Math.min(99,Math.max(1,Math.abs(currentPeak.value)/CURRENT_VISUAL_MAX_A*100))+'%';
+      set('current-context',reading===null?'Medição indisponível':reading<-.5?'Regeneração':d.simulado?'Dados simulados':'Leitura do INA228');
+    },' A');
     set('gear', d.simulado ? marchas[d.marcha] || 'Não disponível' : 'Não disponível'); set('distance', format(value(d,'percurso_metros',1000),'km',2)); set('master-time', age(value(d,'tempo_mestre_ms'))); set('source', d.simulado ? 'Dados simulados' : 'Mestre');
-    set('voltage', format(electrical ? value(d,'tensao_pacote_mv',1000) : null,'V',3)); set('current', format(electrical ? value(d,'corrente_centesimos_a',100) : null,'A',2)); set('soc-detail', format(soc,'%',2));
+    set('voltage', format(electrical ? value(d,'tensao_pacote_mv',1000) : null,'V',3)); set('current', format(current,'A',2)); set('power-detail',format(power,'W',2)); set('soc-detail', format(soc,'%',2));
     set('range-estimate',format(d.simulado?value(d,'autonomia_decimos_km',10):null,'km',2));
-    set('energy', electrical && state.samples.length > 1 ? format(state.energyWh,'Wh',2) : 'Não disponível');
     const distanceKm = state.distanceStart === null ? null : (d.percurso_metros - state.distanceStart)/1000;
     set('consumption', electrical && distanceKm !== null && distanceKm >= 0.1 && state.energyWh >= 0 ? format(state.energyWh/distanceKm,'Wh/km',2) : 'Não disponível');
     const ina=electrical&&!d.simulado&&!!(d.estado_ina&1);
     badge('ina-badge',ina?'Leitura do INA228':d.simulado?'Simulação':'Sem leitura',ina?'good':d.simulado?'warn':'muted');
     set('ina-shunt',ina?format(value(d,'ina_shunt_microvolts',1000),'mV',3):'Não disponível');
+    set('ina-power',ina?format(power,'W',2):'Não disponível');
     set('ina-temp',ina?format(value(d,'ina_temperatura_centesimos_c',100),'°C',2):'Não disponível');
     set('ina-energy',ina&&(d.estado_ina&2)?format(value(d,'ina_energia_mwh',1000),'Wh',2):'Não disponível');
     set('ina-charge',ina&&(d.estado_ina&4)?format(value(d,'ina_carga_mah',1000),'Ah',3):'Não disponível');
-    const diag=Number(d.ina_diagnostico)||0;
-    const diagText=diag&0xc00?'Acumulador saturado':diag&0x200?'Cálculo inválido':!(diag&1)?'Memória inválida':'Normal';
-    set('ina-diagnostic',ina?diagText+' · 0x'+diag.toString(16).toUpperCase().padStart(4,'0'):'Não disponível');
     const throttle = d.simulado ? value(d,'acelerador_decimos_percentual',10) : null, brake = d.simulado ? value(d,'freio_decimos_percentual',10) : null;
     animateTelemetry('throttle-arc-value',throttle,0,current=>{$('throttle-fill').style.setProperty('--fill-level',Math.max(0,Math.min(100,current||0))+'%');},'%');
     animateTelemetry('brake-arc-value',brake,0,current=>{$('brake-fill').style.setProperty('--fill-level',Math.max(0,Math.min(100,current||0))+'%');},'%');
@@ -428,7 +547,7 @@
       else if (state.lastSequence !== null && (!state.samples.length || !state.samples[state.samples.length-1].gap)) { state.samples.push({time:Date.now(),gap:true}); event('Telemetria desatualizada.','warn'); drawCharts(); }
     } catch (error) { failed = true; state.browserOnline = Date.now() - state.lastHttp < 5000; if (state.lastSequence !== null && (!state.samples.length || !state.samples[state.samples.length-1].gap)) {state.samples.push({time:Date.now(),gap:true}); event('Conexão com a equipe interrompida.','warn'); drawCharts();} }
     finally {
-      state.browserChecked=true;state.polls.telemetry = false; updateStatus();
+      state.polls.telemetry = false; updateStatus();
       clearTimeout(state.telemetryTimer);
       if(!document.hidden)state.telemetryTimer=setTimeout(pollTelemetry,failed?Math.max(500,state.telemetryRefreshMs):Math.max(0,state.telemetryRefreshMs-(performance.now()-started)));
     }
@@ -437,12 +556,12 @@
     if (state.polls.local) return; state.polls.local = true;
     try { state.local = await getJSON('/api/diagnostico'); state.localAt=Date.now(); state.browserOnline = true; deviceSample('equipe',{cpu:state.local.cpu_valida?value(state.local,'cpu_total_decimos_percentual',10):null,core0:state.local.cpu_valida?value(state.local,'cpu_nucleo_0_decimos_percentual',10):null,core1:state.local.cpu_valida?value(state.local,'cpu_nucleo_1_decimos_percentual',10):null,heap:value(state.local,'heap_interno_livre',1024),temp:state.local.temperatura_valida?value(state.local,'temperatura_centesimos_c',100):null,rate:value(state.local,'taxa_pacotes_centesimos_hz',100)}); }
     catch (_) { state.browserOnline = Date.now() - state.lastHttp < 5000; deviceSample('equipe',{cpu:null,core0:null,core1:null,heap:null,temp:null,rate:null}); }
-    finally {state.localChecked=true;state.browserChecked=true;state.polls.local = false; set('equipe-client-count',state.local&&Number.isFinite(state.local.clientes_wifi)?String(state.local.clientes_wifi):'—');updateStatus(); renderGroup('equipe');}
+    finally {state.localChecked=true;state.polls.local = false; set('equipe-client-count',state.local&&Number.isFinite(state.local.clientes_wifi)?String(state.local.clientes_wifi):'—');updateStatus(); renderGroup('equipe');}
   }
   async function masterQuery(consult, quiet = true) {
     const key = 'master-' + consult; if (state.polls[key]) return state.polls[key];
     const pending=(async()=>{
-      try { const d = await remote(() => getJSON('/api/mestre?consulta=' + encodeURIComponent(consult), 18000)); const restored=consult==='ping'&&!state.masterOnline;state.master[consult] = d; state.masterOnline = true; if(consult==='saude')state.lastHealthAt=Date.now(); if(restored){state.lastCommandPoll=0;state.lastAuxPoll=0;}updateMasterUI(consult,d); if(consult==='ping')deviceSample('mestre',{rtt:value(d,'rtt_ms')});if(consult==='diagnostico_mestre')deviceSample('mestre',{cpu:d.cpu_valida?value(d,'cpu_total_decimos_percentual',10):null,core0:d.cpu_valida?value(d,'cpu_nucleo_0_decimos_percentual',10):null,core1:d.cpu_valida?value(d,'cpu_nucleo_1_decimos_percentual',10):null,heap:value(d,'heap_interno_livre',1024),temp:d.temperatura_valida?value(d,'temperatura_centesimos_c',100):null}); if (!quiet) commandEvent('MESTRE', consult, 'Executado', d); return d; }
+      try { const d = await remote(() => getJSON('/api/mestre?consulta=' + encodeURIComponent(consult), 18000)); const restored=consult==='ping'&&!state.masterOnline;state.master[consult] = d; state.masterOnline = true; if(consult==='saude')state.lastHealthAt=Date.now(); if(consult==='diagnostico_mestre')state.masterDiagnosisAt=Date.now(); if(restored){state.lastCommandPoll=0;state.lastAuxPoll=0;}updateMasterUI(consult,d); if(consult==='ping')deviceSample('mestre',{rtt:value(d,'rtt_ms')});if(consult==='diagnostico_mestre')deviceSample('mestre',{cpu:d.cpu_valida?value(d,'cpu_total_decimos_percentual',10):null,core0:d.cpu_valida?value(d,'cpu_nucleo_0_decimos_percentual',10):null,core1:d.cpu_valida?value(d,'cpu_nucleo_1_decimos_percentual',10):null,heap:value(d,'heap_interno_livre',1024),temp:d.temperatura_valida?value(d,'temperatura_centesimos_c',100):null}); if (!quiet) commandEvent('MESTRE', consult, 'Executado', d); return d; }
       catch (error) { if (consult === 'ping'){state.masterOnline = false;deviceSample('mestre',{rtt:null,cpu:null,core0:null,core1:null,heap:null,temp:null});} if (!quiet) commandEvent('MESTRE', consult, error.name === 'AbortError' ? 'Tempo esgotado' : 'Falhou', null, error.message); return null; }
       finally {if(consult==='ping')state.masterChecked=true;updateStatus();availability();renderDevice('mestre','mestre');}
     })();
@@ -452,7 +571,7 @@
   async function visitorsQuery(consult, quiet = true) {
     const key = 'visitor-' + consult; if (state.polls[key]) return null; state.polls[key] = true;
     const name = 'satelite_visitantes_' + consult;
-    try {const d = await remote(() => getJSON('/api/mestre?consulta=' + name, 18000)); state.visitors[consult] = d; state.visitorsOnline = true; if(consult==='ping')deviceSample('visitantes',{rtt:value(d,'rtt_ms'),availability:100});if(consult==='diagnostico')deviceSample('visitantes',{cpu:d.cpu_valida?value(d,'cpu_total_decimos_percentual',10):null,core0:d.cpu_valida?value(d,'cpu_nucleo_0_decimos_percentual',10):null,core1:d.cpu_valida?value(d,'cpu_nucleo_1_decimos_percentual',10):null,heap:value(d,'heap_interno_livre',1024),temp:d.temperatura_valida?value(d,'temperatura_centesimos_c',100):null}); if (!quiet) commandEvent('VISITANTES', consult, 'Executado', d); return d;}
+    try {const d = await remote(() => getJSON('/api/mestre?consulta=' + name, 18000)); state.visitors[consult] = d; state.visitorsOnline = true; if(consult==='diagnostico')state.visitorsDiagnosisAt=Date.now(); if(consult==='ping')deviceSample('visitantes',{rtt:value(d,'rtt_ms'),availability:100});if(consult==='diagnostico')deviceSample('visitantes',{cpu:d.cpu_valida?value(d,'cpu_total_decimos_percentual',10):null,core0:d.cpu_valida?value(d,'cpu_nucleo_0_decimos_percentual',10):null,core1:d.cpu_valida?value(d,'cpu_nucleo_1_decimos_percentual',10):null,heap:value(d,'heap_interno_livre',1024),temp:d.temperatura_valida?value(d,'temperatura_centesimos_c',100):null}); if (!quiet) commandEvent('VISITANTES', consult, 'Executado', d); return d;}
     catch (error) {if (consult === 'ping') {state.visitorsOnline = false; state.visitors.ping = {error:true};deviceSample('visitantes',{rtt:null,availability:0});}if(consult==='diagnostico'){state.visitors.diagnostico=null;deviceSample('visitantes',{cpu:null,core0:null,core1:null,heap:null,temp:null});} if (!quiet) commandEvent('VISITANTES', consult, error.name === 'AbortError' ? 'Tempo esgotado' : 'Falhou', null, error.message); return null;}
     finally {if(consult==='ping')state.visitorsChecked=true;state.polls[key] = false;set('visitantes-client-count',state.visitorsOnline&&Number.isFinite(state.visitors.diagnostico?.clientes_wifi)?String(state.visitors.diagnostico.clientes_wifi):'—');updateStatus(); renderGroup('visitantes');}
   }
@@ -468,70 +587,316 @@
     if (id === 'mestre') return !state.masterChecked ? 'Não consultado' : state.masterOnline ? 'Conectado' : 'Sem resposta';
     return !state.visitorsChecked ? 'Não consultado' : state.visitorsOnline ? 'Conectado' : 'Sem resposta';
   }
-  function deviceData(id) {
-    if (id === 'equipe') return state.local;
-    if (id === 'mestre') return state.master.diagnostico_mestre || state.master.ping;
-    return state.visitors.versao || state.visitors.ping;
-  }
-  function makeGroup(group) {
-    const root = $(group + '-content');
-    root.innerHTML = '<article id="'+group+'-details" class="card device-details"></article>';
-  }
   function renderGroup(group) {
-    if (!$(group+'-content').firstElementChild) makeGroup(group);
-    renderDevice(group,group);
-  }
-  function dataRows(id) {
-    const d = deviceData(id), no = 'Não disponível';
-    if (id === 'equipe') return [['Firmware',d?.versao_firmware || no],['CPU',d?.cpu_valida ? format(value(d,'cpu_total_decimos_percentual',10),'%',1) : no],['Temperatura interna',d?.temperatura_valida ? format(value(d,'temperatura_centesimos_c',100),'°C',1) : no],['Wi-Fi',d ? d.wifi_ssid + ' · ' + d.clientes_wifi + ' cliente(s)' : no],['UART RX',d ? String(d.uart_recepcoes_ok) : no],['Tempo ligado',d ? age(d.tempo_ativo_ms) : no],['Heap interno livre',d ? bytes(d.heap_interno_livre) : no],['PSRAM livre',d?.psram_total ? bytes(d.psram_livre) : no],['Último reinício',d ? 'Código ' + d.motivo_reinicio : no]];
-    if (id === 'mestre') {const diag=state.master.diagnostico_mestre,version=state.master.versao,ping=state.master.ping,sync=state.master.sincronizacao,health=state.masterOnline&&Date.now()-(state.lastHealthAt||0)<30000?state.master.saude:null;const causes=healthCauses.filter((_,index)=>((Number(health?.causas_ativas)||0)&(1<<index))!==0);return [['Firmware',version?.firmware || no],['Saúde do sistema',health?(['Normal','Recuperando','Operação degradada','Falha detectada'][health.estado]||no):no],['Causas ativas',health?causes.length?causes.join(', '):'Nenhuma':no],['CPU',diag?.cpu_valida ? format(value(diag,'cpu_total_decimos_percentual',10),'%',1) : no],['Temperatura interna',diag?.temperatura_valida ? format(value(diag,'temperatura_centesimos_c',100),'°C',1) : no],['Tempo ligado',ping ? age(ping.tempo_ativo_ms) : no],['Heap livre',diag ? bytes(diag.heap_livre) : no],['PSRAM',diag?.psram_disponivel ? bytes(diag.psram_livre) : no],['Último reinício',diag ? 'Código ' + diag.motivo_ultimo_reset : no],['Sincronização Google',sync ? sync.em_andamento ? 'Em andamento' : sync.sincronizacoes_finalizadas ? sync.ultimo_resultado_sincronizacao===0 ? 'Concluída' : 'Falhou' : 'Pronta' : no],['Arquivos pendentes no SD',sync ? String(sync.arquivos_pendentes) : no]];}
-    const ping=state.visitors.ping,version=state.visitors.versao,diag=state.visitors.diagnostico;
-    return [['Firmware',version?.firmware || no],['CPU',diag?.cpu_valida?format(value(diag,'cpu_total_decimos_percentual',10),'%',1):no],['CPU núcleo 0',diag?.cpu_valida?format(value(diag,'cpu_nucleo_0_decimos_percentual',10),'%',1):no],['CPU núcleo 1',diag?.cpu_valida?format(value(diag,'cpu_nucleo_1_decimos_percentual',10),'%',1):no],['Temperatura interna',diag?.temperatura_valida?format(value(diag,'temperatura_centesimos_c',100),'°C',1):no],['Heap interno livre',diag?bytes(diag.heap_interno_livre):no],['Heap mínimo',diag?bytes(diag.heap_interno_minimo):no],['Maior bloco interno',diag?bytes(diag.heap_interno_maior_bloco):no],['PSRAM livre',diag?.psram_total?bytes(diag.psram_livre):no],['Tarefas ativas',diag&&Number.isFinite(diag.tarefas_ativas)?String(diag.tarefas_ativas):no],['Tempo ligado',diag?age(diag.tempo_ativo_ms):ping&&!ping.error?age(ping.tempo_ativo_ms):no],['Último reinício',diag&&Number.isFinite(diag.motivo_reinicio)?'Código '+diag.motivo_reinicio:no],['Dispositivos no Wi-Fi',diag?String(diag.clientes_wifi):no]];
-  }
-  function renderDevice(group,id) {
-    const root=$(group+'-details'),d=devices[id],status=deviceStatus(id),rows=dataRows(id),rtt=id==='mestre'?state.master.ping?.rtt_ms:id==='visitantes'?state.visitors.ping?.rtt_ms:null;
-    const link=id==='equipe'?'Navegador → ESP da equipe':id==='mestre'?'Equipe → mestre, UART':'Equipe → mestre → visitantes';
-    const rate=id==='equipe'||id==='mestre' ? state.local&&state.local.valido ? format(value(state.local,'taxa_pacotes_centesimos_hz',100),'Hz',2) : 'Não disponível' : 'Não disponível';
-    const signature = id;
-    if (root.dataset.signature !== signature) {
-      root.dataset.signature=signature;
-      const communication=id==='visitantes'
-        ? '<div><dt>Ligação</dt><dd>'+link+'</dd></div><div><dt>Tempo da consulta</dt><dd id="device-rtt-'+group+'">Não disponível</dd></div><div><dt>Estado do enlace</dt><dd id="device-link-'+group+'">Aguardando consulta</dd></div>'
-        : '<div><dt>Ligação</dt><dd>'+link+'</dd></div><div><dt>Tempo da consulta</dt><dd id="device-rtt-'+group+'">Não disponível</dd></div><div><dt>Taxa de telemetria mestre → equipe</dt><dd id="device-rate-'+group+'">Não disponível</dd></div><div><dt>Perda estimada</dt><dd id="device-loss-'+group+'">Não disponível</dd></div>';
-      root.innerHTML='<div class="device-title"><div><h2>'+d.name+'</h2><p>'+d.id+' · ESP32-S3 · '+d.role+' · '+d.function+'</p></div><span id="device-status-'+group+'" class="badge muted"></span></div><div class="device-section"><h3>Dados e sistema</h3><dl id="device-rows-'+group+'"></dl></div><div class="device-section"><h3>Comunicação</h3><dl>'+communication+'</dl></div><section class="device-history-section" aria-label="Histórico de '+d.name+'"><div class="device-chart-head"><div><h3>Histórico do dispositivo</h3><p id="device-chart-label-'+group+'"></p></div><div class="device-chart-controls"><label>Esquerda<select id="device-chart-select-'+group+'" aria-label="Sinal do eixo esquerdo de '+d.name+'"></select></label><label>Direita<select id="device-chart-select2-'+group+'" aria-label="Sinal do eixo direito de '+d.name+'"></select></label></div></div><div id="device-chart-legend-'+group+'" class="device-chart-legend"></div><div class="device-chart"><canvas id="device-chart-'+group+'" role="img"></canvas></div></section>';
-      const glance=document.createElement('div');glance.className='device-glance';
-      [['cpu','CPU em uso'],['heap','Memória interna livre'],['temp','Temperatura interna']].forEach(([key,label])=>{
-        const item=document.createElement('div'),caption=document.createElement('span'),reading=document.createElement('strong');
-        caption.textContent=label;reading.id='device-glance-'+key+'-'+group;reading.textContent='Não disponível';item.append(caption,reading);glance.append(item);
-      });
-      root.querySelector('.device-title').after(glance);
-      const selector=$('device-chart-select-'+group),selector2=$('device-chart-select2-'+group);
-      deviceChartOptions[id].forEach(option=>{[selector,selector2].forEach(select=>{const item=document.createElement('option');item.value=option.key;item.textContent=option.key==='heap'?'Memória livre':option.key==='temp'?'Temperatura':option.label;item.title=option.label;select.append(item);});});
-      selector.value=state.deviceSignal[id];selector2.value=state.deviceSignalSecondary[id];
-      selector.addEventListener('change',()=>{const previous=state.deviceSignal[id];state.deviceSignal[id]=selector.value;if(state.deviceSignal[id]===state.deviceSignalSecondary[id]){state.deviceSignalSecondary[id]=previous;selector2.value=previous;}renderDevice(group,id);});
-      selector2.addEventListener('change',()=>{const previous=state.deviceSignalSecondary[id];state.deviceSignalSecondary[id]=selector2.value;if(state.deviceSignalSecondary[id]===state.deviceSignal[id]){state.deviceSignal[id]=previous;selector.value=previous;}renderDevice(group,id);});
+    const host = $(group + '-content');
+    if (!host.firstElementChild) {
+      const article = document.createElement('article');
+      article.id = group + '-details';
+      article.className = 'device-dashboard';
+      host.append(article);
     }
-    badge('device-status-'+group,status,status==='Conectado'?'good':status==='Sem resposta'?'bad':'muted');
-    const diagnosis=id==='mestre'?state.master.diagnostico_mestre:id==='equipe'?state.local:state.visitors.diagnostico;
-    set('device-glance-cpu-'+group,diagnosis?.cpu_valida?format(value(diagnosis,'cpu_total_decimos_percentual',10),'%',1):'Não disponível');
-    set('device-glance-heap-'+group,diagnosis?bytes(value(diagnosis,'heap_interno_livre')):'Não disponível');
-    set('device-glance-temp-'+group,diagnosis?.temperatura_valida?format(value(diagnosis,'temperatura_centesimos_c',100),'°C',1):'Não disponível');
-    root.querySelector('.device-glance').classList.toggle('stale',status!=='Conectado');
-    const dl=$('device-rows-'+group);
-    if(dl.children.length!==rows.length){dl.replaceChildren();rows.forEach(([label])=>{const div=document.createElement('div'),dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=label;div.append(dt,dd);dl.append(div);});}
-    rows.forEach(([,text],index)=>{const cell=dl.children[index].lastElementChild;if(cell.textContent!==text)cell.textContent=text;});
-    set('device-rtt-'+group,Number.isFinite(rtt)?rtt+' ms':'Não disponível');
-    if(id==='visitantes')set('device-link-'+group,status==='Conectado'?'Respondendo':status==='Sem resposta'?'Sem resposta':'Aguardando consulta');
-    else {set('device-rate-'+group,rate);set('device-loss-'+group,state.local&&state.local.valido?format(value(state.local,'taxa_perda_centesimos_percentual',100),'%',2):'Não disponível');}
-    const charts=selectedDeviceCharts(id);
-    set('device-chart-label-'+group,'Dois sinais · mesma linha do tempo · leituras nesta página');
-    const legend=$('device-chart-legend-'+group),signalSignature=charts.map(chart=>chart.key).join(':');
-    if(legend.dataset.signals!==signalSignature){legend.dataset.signals=signalSignature;legend.replaceChildren();charts.forEach((chart,index)=>{const item=document.createElement('span'),mark=document.createElement('i');mark.className='device-legend-key';mark.style.setProperty('--series-color',chart.color);item.append(mark,document.createTextNode((index?'Direita':'Esquerda')+' · '+chart.label+' ('+chart.unit+')'));legend.append(item);});}
-    $('device-chart-'+group).setAttribute('aria-label','Histórico de '+charts.map(chart=>chart.label+' em '+chart.unit).join(' e ')+' de '+d.name);requestAnimationFrame(()=>drawDeviceChart(group,id));
-    badge(group+'-auto',status+' · atualização automática',status==='Conectado'?'good':status==='Sem resposta'?'bad':'muted');
+    renderDevice(group, group);
   }
-  const actionNames={definir_marcha:'Preparar marcha',velocidade_maxima:'Preparar limite de velocidade',aceleracao_maxima:'Preparar limite de aceleração',parada_remota:'Solicitar parada remota',liberar_parada_remota:'Liberar pedido de parada',verificar_ota:'Verificar atualizações',autorizar_mestre:'Autorizar OTA do mestre',autorizar_equipe:'Autorizar OTA da Equipe',autorizar_visitantes:'Autorizar OTA de Visitantes',autorizar_todos:'Autorizar OTA de todos',cancelar_ota:'Cancelar OTA',alternar_relatorios:'Pausar ou retomar relatórios',resumo_terminal:'Solicitar resumo no terminal',sincronizar_google:'Solicitar sincronização',zerar_percurso:'Zerar percurso',intervalo_relatorio:'Alterar intervalo do relatório',intervalo_ota:'Alterar intervalo de verificação OTA',intervalo_telemetria_ota:'Alterar telemetria durante OTA',simulador_telemetria:'Alterar simulador de telemetria',wifi_test:'Testar nova rede Wi-Fi',wifi_conectar_salva:'Conectar rede salva',wifi_excluir_salva:'Excluir rede salva',wifi_primary:'Definir nova rede principal',wifi_restaurar_principal:'Restaurar rede principal',wifi_automatico:'Alterar conexão automática',wifi_politica:'Salvar política Wi-Fi'};
+
+  function deviceFacts(id, diagnosis) {
+    const missing = 'Não disponível';
+    const local = id === 'equipe';
+    const master = id === 'mestre';
+    const source = master ? state.master : state.visitors;
+    const uptime = diagnosis?.tempo_ativo_ms ?? source.ping?.tempo_ativo_ms;
+    const reset = diagnosis?.motivo_reinicio ?? diagnosis?.motivo_ultimo_reset;
+    const core = index => diagnosis?.cpu_valida
+      ? format(value(diagnosis, 'cpu_nucleo_' + index + '_decimos_percentual', 10), '%', 1)
+      : missing;
+    const rows = [
+      ['Firmware', (local ? diagnosis?.versao_firmware : source.versao?.firmware) || missing],
+      ['Tempo ligado', Number.isFinite(uptime) ? age(uptime) : missing],
+      ['CPU núcleo 0', core(0)],
+      ['CPU núcleo 1', core(1)],
+      ['PSRAM livre', diagnosis?.psram_disponivel || diagnosis?.psram_total ? bytes(diagnosis.psram_livre) : missing],
+      ['Último reinício', Number.isFinite(reset) ? 'Código ' + reset : missing]
+    ];
+
+    if (master) {
+      const sync = state.master.sincronizacao;
+      let syncStatus = missing;
+      if (sync) {
+        syncStatus = 'Pronta';
+        if (sync.em_andamento) syncStatus = 'Em andamento';
+        else if (sync.sincronizacoes_finalizadas) syncStatus = sync.ultimo_resultado_sincronizacao === 0 ? 'Concluída' : 'Falhou';
+      }
+      rows.push(
+        ['Heap livre (total)', bytes(value(diagnosis, 'heap_livre'))],
+        ['Sincronização Google', syncStatus],
+        ['Arquivos pendentes no SD', sync?.arquivos_pendentes ?? missing]
+      );
+    } else if (!local) {
+      rows.push(
+        ['Heap mínimo', bytes(value(diagnosis, 'heap_interno_minimo'))],
+        ['Maior bloco interno', bytes(value(diagnosis, 'heap_interno_maior_bloco'))],
+        ['Tarefas ativas', diagnosis?.tarefas_ativas ?? missing]
+      );
+    }
+    return rows;
+  }
+
+  function deviceLinkFacts(id, diagnosis) {
+    const missing = 'Não disponível';
+    const local = id === 'equipe';
+    const visitors = id === 'visitantes';
+    const ping = visitors ? state.visitors.ping : state.master.ping;
+    const rtt = local ? null : ping?.rtt_ms;
+    const route = local ? 'Navegador → equipe' : visitors ? 'Equipe → mestre → visitantes' : 'Equipe → mestre (UART)';
+    const rows = [['Trajeto', route]];
+    if (!local) rows.push(['Tempo de resposta', Number.isFinite(rtt) ? rtt + ' ms' : missing]);
+    if (!visitors) {
+      const telemetry = state.local?.valido ? state.local : null;
+      rows.push(
+        ['Taxa de telemetria', telemetry ? format(value(telemetry, 'taxa_pacotes_centesimos_hz', 100), 'Hz', 2) : missing],
+        ['Perda estimada', telemetry ? format(value(telemetry, 'taxa_perda_centesimos_percentual', 100), '%', 2) : missing]
+      );
+    }
+    if (local) {
+      rows.push(['Wi-Fi', diagnosis?.wifi_ssid || missing], ['UART RX', diagnosis?.uart_recepcoes_ok ?? missing]);
+    }
+    if (local || visitors) rows.push(['Clientes Wi-Fi', diagnosis?.clientes_wifi ?? missing]);
+    return rows;
+  }
+
+  function renderDeviceFacts(list, rows) {
+    rows.forEach(([label, text], index) => {
+      if (!list.children[index]) {
+        const row = document.createElement('div');
+        const term = document.createElement('dt');
+        term.textContent = label;
+        row.append(term, document.createElement('dd'));
+        list.append(row);
+      }
+      const cell = list.children[index].lastElementChild;
+      if (cell.textContent !== String(text)) cell.textContent = String(text);
+    });
+  }
+
+  function deviceHealthMarkup(group) {
+    const tag = group === 'mestre' ? 'summary' : 'div';
+    const summary = `
+      <${tag} class="device-health-band message-state" id="device-health-${group}" data-tone="info">
+        <span class="device-health-mark" aria-hidden="true"></span>
+        <span class="device-health-copy"><span>Saúde do sistema</span><strong id="device-health-status-${group}">Aguardando</strong></span>
+        <small id="device-health-note-${group}"></small>
+      </${tag}>`;
+    if (tag === 'div') return summary;
+    return `
+      <details id="health-diagnostics" class="health-diagnostics">
+        ${summary}
+        <div class="health-diagnostics-body">
+          <section aria-labelledby="health-diagnostics-causes-title">
+            <h2 id="health-diagnostics-causes-title">Causas ativas</h2>
+            <p id="health-diagnostics-empty">Aguardando leitura de saúde.</p>
+            <ul id="health-diagnostics-causes"></ul>
+          </section>
+          <p id="health-diagnostics-age"></p>
+          <div class="device-facts-grid health-diagnostics-grid">
+            <section hidden><h2>Memória e tarefas</h2><dl id="health-diagnostics-memory"></dl></section>
+            <section hidden><h2>Ocorrências acumuladas</h2><dl id="health-diagnostics-counters"></dl></section>
+          </div>
+        </div>
+      </details>`;
+  }
+
+  function readHealthFields(data, fields, format) {
+    return fields.flatMap(([label, field]) => {
+      const reading = value(data, field);
+      return reading === null ? [] : [[label, format(reading)]];
+    });
+  }
+
+  function renderHealthFields(id, rows) {
+    const list = $(id);
+    list.parentElement.hidden = !rows.length;
+    const signature = rows.map(([label]) => label).join('|');
+    if (list.dataset.fields !== signature) {
+      list.replaceChildren();
+      list.dataset.fields = signature;
+    }
+    renderDeviceFacts(list, rows);
+  }
+
+  function renderMasterHealthDiagnostics({health, fresh, causes, mask, receivedAt}) {
+    const panel = $('health-diagnostics');
+    if (!panel?.open) return;
+
+    set('health-diagnostics-causes-title', fresh || !receivedAt ? 'Causas ativas' : 'Últimas causas registradas');
+    const empty = $('health-diagnostics-empty');
+    empty.hidden = causes.length > 0;
+    set('health-diagnostics-empty', mask === null
+      ? receivedAt ? 'Causas indisponíveis nesta leitura.' : 'Aguardando leitura de saúde.'
+      : fresh ? 'Nenhuma causa ativa.' : 'Nenhuma causa na última leitura.');
+
+    const list = $('health-diagnostics-causes');
+    const causeSignature = causes.join('|');
+    if (list.dataset.causes !== causeSignature) {
+      list.dataset.causes = causeSignature;
+      list.replaceChildren(...causes.map(cause => {
+        const item = document.createElement('li');
+        item.textContent = cause;
+        return item;
+      }));
+    }
+
+    const diagnosis = state.master.diagnostico_mestre;
+    const diagnosisAt = state.masterDiagnosisAt;
+    const stale = !state.masterOnline || Date.now() - diagnosisAt >= healthFreshMs;
+    set('health-diagnostics-age', diagnosisAt
+      ? (stale ? 'Últimos detalhes técnicos · ' : 'Detalhes técnicos recebidos ') + healthAge(diagnosisAt)
+      : 'Aguardando detalhes técnicos.');
+
+    const memory = readHealthFields(diagnosis, [
+      ['Heap interno livre', 'heap_interno_livre'],
+      ['Heap interno mínimo', 'heap_interno_minimo'],
+      ['Maior bloco interno livre', 'heap_interno_maior_bloco']
+    ], bytes);
+    if (diagnosis?.psram_disponivel) {
+      memory.push(...readHealthFields(diagnosis, [
+        ['PSRAM livre', 'psram_livre'],
+        ['Maior bloco livre na PSRAM', 'psram_maior_bloco']
+      ], bytes));
+    }
+    if (!diagnosis) memory.push(...readHealthFields(health, [['Heap livre (total)', 'heap_livre']], bytes));
+    if (diagnosis?.pilha_valida && Number.isFinite(diagnosis.menor_pilha_livre_bytes)) {
+      memory.push(['Menor folga de pilha', number(diagnosis.menor_pilha_livre_bytes, 0) + ' B']);
+      if (diagnosis.tarefa_menor_pilha) memory.push(['Tarefa com menor folga', diagnosis.tarefa_menor_pilha]);
+    }
+    memory.push(...readHealthFields(diagnosis, [['Tarefas ativas', 'tarefas_ativas']], n => number(n, 0)));
+    renderHealthFields('health-diagnostics-memory', memory);
+
+    renderHealthFields('health-diagnostics-counters', [
+      ...readHealthFields(health, [['Total informado', 'erros_historicos']], n => number(n, 0)),
+      ...readHealthFields(diagnosis, [
+        ['Erros de sensor', 'erros_sensores'],
+        ['Erros I²C', 'erros_i2c'],
+        ['Erros UART', 'erros_uart'],
+        ['Descartes UART', 'descartes_uart'],
+        ['Falhas OTA', 'falhas_ota'],
+        ['Falhas de supervisão', 'falhas_supervisao']
+      ], n => number(n, 0))
+    ]);
+  }
+
+  function mountDevice(root, group, id) {
+    const name = devices[id].name;
+    root.innerHTML = `
+      ${deviceHealthMarkup(group)}
+      <dl class="device-metrics">
+        <div><dt>CPU</dt><dd id="device-glance-cpu-${group}">—</dd></div>
+        <div><dt>Heap interno livre</dt><dd id="device-glance-heap-${group}">—</dd></div>
+        <div><dt>Temperatura</dt><dd id="device-glance-temp-${group}">—</dd></div>
+      </dl>
+      <p class="device-read-time" id="device-read-time-${group}"></p>
+      <section class="device-history-section" aria-label="Histórico de ${name}">
+        <div class="device-chart-head">
+          <h2>Histórico</h2>
+          <div class="device-chart-controls">
+            <label>Eixo esquerdo<select id="device-chart-select-${group}"></select></label>
+            <label>Eixo direito<select id="device-chart-select2-${group}"></select></label>
+          </div>
+        </div>
+        <div id="device-chart-legend-${group}" class="device-chart-legend"></div>
+        <div class="device-chart"><canvas id="device-chart-${group}" role="img"></canvas></div>
+      </section>
+      <details class="device-facts">
+        <summary>Detalhes do ESP</summary>
+        <div class="device-facts-grid">
+          <section><h2>Sistema</h2><dl id="device-rows-${group}"></dl></section>
+          <section><h2>Enlace</h2><dl id="device-link-rows-${group}"></dl></section>
+        </div>
+      </details>`;
+    root.querySelector('.device-facts').open = matchMedia('(min-width: 900px)').matches;
+    root.querySelector('.health-diagnostics')?.addEventListener('toggle', () => renderMasterHealthDiagnostics(getSystemHealth()));
+
+    const selects = [$('device-chart-select-' + group), $('device-chart-select2-' + group)];
+    const signals = [state.deviceSignal, state.deviceSignalSecondary];
+    selects.forEach((select, index) => {
+      deviceChartOptions[id].forEach(option => {
+        const item = document.createElement('option');
+        item.value = option.key;
+        item.textContent = option.key === 'heap' ? 'Memória livre' : option.key === 'temp' ? 'Temperatura' : option.label;
+        item.title = option.label;
+        select.append(item);
+      });
+      select.value = signals[index][id];
+      select.addEventListener('change', () => {
+        const previous = signals[index][id];
+        signals[index][id] = select.value;
+        const other = 1 - index;
+        if (select.value === signals[other][id]) {
+          signals[other][id] = previous;
+          selects[other].value = previous;
+        }
+        renderDevice(group, id);
+      });
+    });
+  }
+
+  function renderDeviceSystemHealth(healthState = getSystemHealth()) {
+    const {label, tone, causes, fresh, receivedAt} = healthState;
+    const causeNote = fresh ? healthCauseSummary(causes) : '';
+    for (const group of Object.keys(devices)) {
+      const band = $('device-health-' + group);
+      if (!band) continue;
+      band.dataset.tone = tone;
+      set('device-health-status-' + group, label);
+      const note = group === 'mestre' && receivedAt
+        ? 'Lido ' + healthAge(receivedAt) : causeNote;
+      set('device-health-note-' + group, note);
+    }
+    renderMasterHealthDiagnostics(healthState);
+  }
+
+  function renderDevice(group, id) {
+    const root = $(group + '-details');
+    const status = deviceStatus(id);
+    const tone = status === 'Conectado' ? 'success' : status === 'Sem resposta' ? 'error' : 'info';
+    const online = tone === 'success';
+    const diagnosis = id === 'mestre' ? state.master.diagnostico_mestre
+      : id === 'equipe' ? state.local : state.visitors.diagnostico;
+    const readAt = id === 'mestre' ? state.masterDiagnosisAt : id === 'equipe' ? state.localAt : state.visitorsDiagnosisAt;
+    const link = $(group + '-auto');
+
+    if (!root.firstElementChild) mountDevice(root, group, id);
+    link.dataset.tone = tone;
+    set(group + '-auto', status === 'Não consultado' ? 'Aguardando enlace' : status);
+    renderDeviceSystemHealth();
+    set('device-glance-cpu-' + group, diagnosis?.cpu_valida ? format(value(diagnosis, 'cpu_total_decimos_percentual', 10), '%', 1) : '—');
+    set('device-glance-heap-' + group, diagnosis && Number.isFinite(diagnosis.heap_interno_livre) ? bytes(diagnosis.heap_interno_livre) : '—');
+    set('device-glance-temp-' + group, diagnosis?.temperatura_valida ? format(value(diagnosis, 'temperatura_centesimos_c', 100), '°C', 1) : '—');
+    root.querySelector('.device-metrics').classList.toggle('stale', !online && Boolean(readAt));
+    set('device-read-time-' + group, readAt ? (online ? 'Diagnóstico às ' : 'Último diagnóstico às ') + new Date(readAt).toLocaleTimeString('pt-BR') : 'Aguardando diagnóstico');
+    renderDeviceFacts($('device-rows-' + group), deviceFacts(id, diagnosis));
+    renderDeviceFacts($('device-link-rows-' + group), deviceLinkFacts(id, diagnosis));
+
+    const charts = selectedDeviceCharts(id);
+    const legend = $('device-chart-legend-' + group);
+    const signature = charts.map(chart => chart.key).join(':');
+    if (legend.dataset.signals !== signature) {
+      legend.dataset.signals = signature;
+      legend.replaceChildren();
+      charts.forEach((chart, index) => {
+        const item = document.createElement('span');
+        const mark = document.createElement('i');
+        mark.className = 'device-legend-key';
+        mark.style.setProperty('--series-color', chart.color);
+        item.append(mark, document.createTextNode((index ? 'Dir.' : 'Esq.') + ' · ' + chart.label + ' (' + chart.unit + ')'));
+        legend.append(item);
+      });
+    }
+    $('device-chart-' + group).setAttribute('aria-label', 'Histórico de ' + charts.map(chart => chart.label + ' em ' + chart.unit).join(' e ') + ' de ' + devices[id].name);
+    if (state.tab === group) requestAnimationFrame(() => drawDeviceChart(group, id));
+  }
+  const actionNames={velocidade_maxima:'Definir velocidade máxima',parada_remota:'Parada de emergência',liberar_parada_remota:'Rearmar',verificar_ota:'Verificar atualizações',autorizar_mestre:'Autorizar OTA do mestre',autorizar_equipe:'Autorizar OTA da Equipe',autorizar_visitantes:'Autorizar OTA de Visitantes',autorizar_todos:'Autorizar OTA de todos',cancelar_ota:'Cancelar OTA',alternar_relatorios:'Pausar ou retomar relatórios',resumo_terminal:'Solicitar resumo no terminal',sincronizar_google:'Solicitar sincronização',zerar_percurso:'Zerar percurso',intervalo_relatorio:'Alterar intervalo do relatório',intervalo_ota:'Alterar intervalo de verificação OTA',intervalo_telemetria_ota:'Alterar telemetria durante OTA',simulador_telemetria:'Alterar simulador de telemetria',wifi_test:'Testar nova rede Wi-Fi',wifi_conectar_salva:'Conectar rede salva',wifi_excluir_salva:'Excluir rede salva',wifi_primary:'Definir rede principal',wifi_restaurar_principal:'Restaurar rede principal',wifi_automatico:'Alterar conexão automática',wifi_politica:'Salvar política Wi-Fi'};
   const timeOf = time => new Date(time).toLocaleTimeString('pt-BR');
+  Object.assign(actionNames,{limite_marcha:'Definir marcha máxima',velocidade_maxima:'Salvar velocidade máxima',limite_acelerador:'Salvar acelerador máximo',zona_morta_pedal:'Definir zona morta',parada_remota:'Parada de emergência',liberar_parada_remota:'Rearmar'});
+  Object.assign(actionNames,{wifi_restaurar_politica:'Restaurar política Wi-Fi',logs_terminal:'Configurar logs do terminal',sensor_estado:'Alterar aquisição de sensores'});
   function runMeta(run) {
     const ids=run.requests.length ? 'Solicitação '+run.requests.map(id=>'#'+id).join(', ') : 'Número da solicitação ainda indisponível';
     const response=run.responses[run.responses.length-1];
@@ -555,9 +920,38 @@
       head.append(name,status);li.append(head,detail,meta);list.append(li);
     });
   }
+  const simulatorSourceButtons=document.querySelectorAll('[data-source-value]');
+  const reversePermissionButtons=document.querySelectorAll('[data-master-action="permitir_re"]');
+  const automaticRearmMs=30000;
+  const minimumRearmMs=5000;
   function availability(){
     const capabilities=state.master.versao?.capacidades;
-    document.querySelectorAll('[data-master-action]').forEach(button=>{const mask=Number(button.dataset.cap);button.disabled=button.dataset.masterAction==='parada_remota'?(!state.browserOnline||!!state.stopInFlight):state.busy||!state.masterOnline||!Number.isFinite(capabilities)||(capabilities&mask)!==mask;});
+    const control=state.master.controle_remoto;
+    const reverseSupported=(capabilities&CAP_REVERSE_PERMISSION)!==0&&typeof control?.reversao_permitida==='boolean';
+    for(const button of reversePermissionButtons){
+      const selected=reverseSupported&&(button.dataset.controlValue==='1')===control.reversao_permitida;
+      button.setAttribute('aria-pressed',String(selected));
+    }
+    set('reverse-permission-state',reverseSupported?control.reversao_permitida?'Ré permitida.':'Ré bloqueada.':Number.isFinite(capabilities)&&(capabilities&CAP_REVERSE_PERMISSION)===0?'Controle de ré indisponível neste firmware.':'Aguardando o Mestre.');
+    document.querySelectorAll('[data-master-action]').forEach(button=>{
+      const action=button.dataset.masterAction,mask=Number(button.dataset.cap);
+      button.disabled=action==='parada_remota'?(!state.browserOnline||!!state.stopInFlight):state.busy||!state.masterOnline||(capabilities&mask)!==mask;
+      if(action==='sensor_estado'&&(!state.master.sensores?.controle_permitido||!button.dataset.sensorValue))button.disabled=true;
+      if(action==='logs_terminal'&&!state.master.logs_terminal)button.disabled=true;
+      if(action==='permitir_re'&&!reverseSupported)button.disabled=true;
+    });
+    $('refresh-sensors').disabled=state.busy||!state.masterOnline||(capabilities&CAP_SENSORS)===0;
+    $('refresh-terminal-logs').disabled=state.busy||!state.masterOnline||(capabilities&CAP_TERMINAL_LOGS)===0;
+    const rearm=document.querySelector('[data-master-action="liberar_parada_remota"]');
+    const waitMs=control?.parada_solicitada?(control.rearme_restante_ms??Math.max(0,(control.parada_restante_ms||0)-(automaticRearmMs-minimumRearmMs))):0;
+    const wait=$('remote-rearm-wait');
+    wait.hidden=!(state.stopInFlight||waitMs>0);
+    set('remote-rearm-wait',state.stopInFlight?'Confirmando a parada…':waitMs>0?'Aguarde '+Math.ceil(waitMs/1000)+' s para rearmar.':'');
+    if(rearm){
+      const blocked=state.stopInFlight||waitMs>0||!control||control.partida_concluida===false||control.ota_em_andamento||!control.parada_solicitada;
+      rearm.disabled ||= blocked;
+      rearm.title=state.stopInFlight||waitMs>0?wait.textContent:control?.partida_concluida===false||control?.ota_em_andamento?'Aguarde a partida ou a atualização':control?.parada_solicitada===false?'A parada já está encerrada':'Solicitar rearme ao mestre';
+    }
     const sync=state.master.sincronizacao,syncButton=document.querySelector('[data-master-action="sincronizar_google"]');
     if(syncButton){
       if(sync&&(sync.em_andamento||!sync.iniciado||!sync.cartao_disponivel))syncButton.disabled=true;
@@ -572,6 +966,158 @@
     badge('master-command-status',state.masterChecked&&!state.masterOnline?'Mestre sem resposta':supported?'Comandos disponíveis':Number.isFinite(capabilities)?'Ações não anunciadas pelo mestre':'Aguardando resposta do mestre',state.masterChecked&&!state.masterOnline?'bad':supported?'good':'muted');
   }
   function setField(id,newValue){const field=$(id);if(field&&!field.dataset.edited&&document.activeElement!==field)field.value=String(newValue);}
+  const sensors=[
+    ['ADC','Entrada analógica'],
+    ['MPU6050','Aceleração, rotação e temperatura'],
+    ['Encoders','Pulsos e velocidade por roda'],
+    ['INA228','Tensão, corrente e diagnóstico'],
+    ['Temperatura do ESP','Sensor interno do Mestre']
+  ];
+  const sensorNames=sensors.map(([name])=>name);
+  $('sensor-list').innerHTML=sensors.map(([name,description],id)=>`
+    <li class="sensor-card">
+      <details>
+        <summary><span><strong>${name}</strong><small id="sensor-glance-${id}">${description}</small></span><span id="sensor-state-${id}" class="badge muted">Sem consulta</span></summary>
+        <dl id="sensor-facts-${id}" class="sensor-facts" hidden></dl>
+      </details>
+      <button type="button" class="button secondary" data-master-action="sensor_estado" data-sensor-id="${id}" data-cap="16384" disabled>Pausar</button>
+    </li>`).join('');
+  const terminalSources=['Wi-Fi','Rádio Wi-Fi','OTA','Transporte OTA','Google e SD','Telemetria','Sensores','Comunicação UART','Comandos','Supervisão','Sinalização','Relatórios','Cartão SD','Odômetro','Aceleração','I²C','Simulador','Terminal'];
+  const terminalLevels=['Silenciado','Erros','Avisos','Informações'];
+  function renderSensors(data){
+    const ina=data.ina228,i2c=data.i2c;
+    const encoder=reading=>number(reading?.contagem,0)+' pulsos · '+format(value(reading,'velocidade_kmh'),'km/h',2);
+    const axes=reading=>Array.isArray(reading)?reading.map((item,index)=>'XYZ'[index]+' '+number(item,0)).join(' · '):'Não disponível';
+    const hex=reading=>Number.isInteger(reading)?'0x'+(reading>>>0).toString(16).toUpperCase():'Não disponível';
+    const readings=[
+      [['Valor bruto',number(data.adc_bruto,0)]],
+      [['Aceleração bruta',axes(data.acelerometro_bruto)],['Rotação bruta',axes(data.giroscopio_bruto)],['Temperatura',format(value(data,'temperatura_mpu_c'),'°C')]],
+      [['Roda esquerda',encoder(data.esquerda)],['Roda direita',encoder(data.direita)]],
+      [['Barramento',format(value(ina,'tensao_v'),'V',3)],['Corrente',format(value(ina,'corrente_a'),'A',3)],['Tensão no shunt',format(value(ina,'queda_shunt_mv'),'mV',3)],['Temperatura',format(value(ina,'temperatura_c'),'°C')],['Registro de diagnóstico',hex(ina?.diagnostico)]],
+      [['Temperatura interna',format(value(data,'temperatura_esp_c'),'°C')]]
+    ];
+    const highlights=[readings[0][0],readings[1][2],readings[2][0],readings[3][0],readings[4][0]];
+    sensorNames.forEach((name,index)=>{
+      const active=(data.ativos&(1<<index))!==0;
+      const valid=active&&(data.validos&(1<<index))!==0;
+      const button=document.querySelector('[data-sensor-id="'+index+'"]');
+      const facts=$('sensor-facts-'+index);
+      badge('sensor-state-'+index,active?(valid?'Lendo':'Sem leitura'):'Pausado',active?(valid?'good':'warn'):'muted');
+      set('sensor-glance-'+index,valid?highlights[index].join(' · '):sensors[index][1]);
+      facts.hidden=!valid;
+      if(valid)renderDeviceFacts(facts,readings[index]);
+      button.dataset.sensorValue=active?'0':'1';
+      button.textContent=active?'Pausar':'Retomar';
+      button.setAttribute('aria-label',button.textContent+' '+name);
+    });
+    set('sensor-status','Consultado às '+timeOf(Date.now())+(data.controle_permitido?'':' · Somente leitura com atuação física habilitada'));
+    set('sensor-i2c',i2c?number(i2c.erros,0)+' erros':'Sem diagnóstico');
+    const busFacts=$('sensor-i2c-facts');
+    busFacts.hidden=!i2c;
+    if(i2c)renderDeviceFacts(busFacts,[['Operações bem-sucedidas',number(i2c.operacoes_ok,0)],['Erros',number(i2c.erros,0)],['Sondagens bem-sucedidas',number(i2c.sondagens_ok,0)],['Endereços ausentes',number(i2c.enderecos_ausentes,0)],['Último erro',i2c.ultimo_erro===0?'Nenhum':hex(i2c.ultimo_erro)]]);
+  }
+  function showTerminalLogOptions(){
+    const type=Number($('terminal-log-type').value),source=Number($('terminal-log-source').value);
+    const data=state.master.logs_terminal;
+    $('terminal-log-source-field').hidden=type!==3;
+    const options=type===1?['Restaurar níveis','Apenas avisos NEXUS']:type===2?['Desativadas','Ativadas']:terminalLevels;
+    const current=type===1?Number(data?.apenas_avisos_projeto):type===2?Number(data?.cores):type===3?data?.fontes?.find(item=>item.id===source)?.nivel:data?.nivel_global;
+    $('terminal-log-value').replaceChildren(...options.map((label,index)=>new Option(label,index,false,index===current)));
+  }
+  function renderTerminalLogs(data){
+    set('terminal-log-status',(terminalLevels[data.nivel_global]??'—')+' · '+(data.apenas_avisos_projeto?'Perfil NEXUS ativo':'Perfil normal')+' · Cores '+(data.cores?'ativas':'desativadas'));
+    const rows=(data.fontes||[]).map(source=>{
+      const li=document.createElement('li'),name=document.createElement('strong'),level=document.createElement('span');
+      name.textContent=terminalSources[source.id]??('Fonte '+source.id);
+      level.textContent=terminalLevels[source.nivel_efetivo]??'—';
+      li.append(name,level);
+      return li;
+    });
+    $('terminal-log-levels').replaceChildren(...rows);
+    showTerminalLogOptions();
+  }
+  $('terminal-log-source').replaceChildren(...terminalSources.map((name,index)=>new Option(name,index)));
+  $('terminal-log-type').addEventListener('change',showTerminalLogOptions);
+  $('terminal-log-source').addEventListener('change',showTerminalLogOptions);
+  showTerminalLogOptions();
+  for(const [panel,button,query,cap,status] of [
+    ['sensor-command','refresh-sensors','sensores',CAP_SENSORS,'sensor-status'],
+    ['terminal-logs','refresh-terminal-logs','logs_terminal',CAP_TERMINAL_LOGS,'terminal-log-status']
+  ]){
+    const refresh=async()=>{
+      const capabilities=state.master.versao?.capacidades??(await masterQuery('versao'))?.capacidades;
+      if(!Number.isFinite(capabilities)){set(status,'Mestre sem resposta.');return;}
+      if((capabilities&cap)===0){set(status,'Atualize o firmware do mestre para usar.');return;}
+      if(!await masterQuery(query)){
+        delete state.master[query];
+        set(status,'Sem resposta · dados anteriores.');
+        availability();
+      }
+    };
+    $(button).addEventListener('click',refresh);
+    $(panel).addEventListener('toggle',()=>{if($(panel).open)refresh();});
+  }
+  const taskStates=['Executando','Pronta','Bloqueada','Suspensa','Excluída'];
+  const taskPageSize=5;
+  const taskBatchSize=3;
+  let taskPage,taskPageLoading=false;
+  async function readMasterTaskPage(start){
+    // Cada resposta UART traz até três tarefas. A página web usa uma só coleta.
+    const readBatch=async offset=>{
+      const data=await getJSON('/api/mestre?consulta=tarefas_mestre&inicio='+offset,18000);
+      if(!data.valido)throw Error('Coleta de tarefas indisponível.');
+      return data;
+    };
+    for(let attempt=0;attempt<2;attempt++){
+      const initialOffset=Math.floor(start/taskBatchSize)*taskBatchSize;
+      const first=await readBatch(initialOffset);
+      const lastStart=Math.floor(Math.max(0,first.total-1)/taskPageSize)*taskPageSize;
+      const pageStart=Math.min(start,lastStart);
+      const pageEnd=Math.min(pageStart+taskPageSize,first.total);
+      const tasks=[];
+      for(let offset=Math.floor(pageStart/taskBatchSize)*taskBatchSize;offset<pageEnd;offset+=taskBatchSize){
+        const batch=offset===initialOffset?first:await readBatch(offset);
+        if(batch.coletado_em_ms!==first.coletado_em_ms||batch.total!==first.total)break;
+        tasks.push(...batch.tarefas.slice(Math.max(0,pageStart-offset),pageEnd-offset));
+      }
+      if(tasks.length===pageEnd-pageStart)return {inicio:pageStart,total:first.total,tarefas:tasks};
+    }
+    throw Error('A coleta mudou durante a consulta. Tente novamente.');
+  }
+  async function loadMasterTasks(start=0){
+    if(taskPageLoading)return;
+    taskPageLoading=true;
+    const first=$('master-task-first'),previous=$('master-task-previous'),next=$('master-task-next');
+    first.disabled=previous.disabled=next.disabled=true;
+    set('master-task-status','Consultando tarefas…');
+    try{
+      const capabilities=state.master.versao?.capacidades??(await masterQuery('versao'))?.capacidades;
+      if(!Number.isFinite(capabilities))throw Error('Mestre sem resposta.');
+      if((capabilities&CAP_MASTER_TASKS)===0)throw Error('Atualize o firmware do mestre para consultar tarefas.');
+      const data=await remote(()=>readMasterTaskPage(start));
+      const rows=data.tarefas.map(task=>{
+        const row=document.createElement('li'),info=document.createElement('div'),name=document.createElement('strong'),detail=document.createElement('p');
+        name.textContent=task.nome;
+        detail.textContent=[taskStates[task.estado]??'Estado indeterminado','Prioridade '+task.prioridade,Number.isInteger(task.nucleo)&&task.nucleo>=0?'Núcleo '+task.nucleo:'Núcleo livre',task.cpu_valida?'CPU '+number(task.cpu_decimos/10)+'%':'CPU —','Pilha livre '+number(task.pilha_minima_livre_bytes,0)+' B de '+number(task.pilha_reservada_bytes,0)+' B'].join(' · ');
+        info.append(name,detail);row.append(info);return row;
+      });
+      $('master-task-list').replaceChildren(...rows);
+      set('master-task-status',rows.length?(data.inicio+1)+'–'+(data.inicio+rows.length)+' de '+data.total+' tarefas':'Nenhuma tarefa.');
+      taskPage=data;
+    }catch(error){
+      const reason=error.name==='AbortError'?'Consulta de tarefas expirou.':error.message;
+      set('master-task-status',reason+(taskPage?' Última página consultada mantida.':''));
+    }finally{
+      taskPageLoading=false;
+      first.disabled=false;
+      previous.disabled=!taskPage||taskPage.inicio===0;
+      next.disabled=!taskPage||taskPage.inicio+taskPage.tarefas.length>=taskPage.total;
+    }
+  }
+  $('master-task-first').addEventListener('click',()=>loadMasterTasks());
+  $('master-task-previous').addEventListener('click',()=>loadMasterTasks(Math.max(0,taskPage.inicio-taskPageSize)));
+  $('master-task-next').addEventListener('click',()=>loadMasterTasks(taskPage.inicio+taskPageSize));
+  $('master-tasks').addEventListener('toggle',()=>{if($('master-tasks').open&&!taskPage)loadMasterTasks();});
   const otaMasterStates=['Desabilitado','Inicializando','Aguardando rede','Verificando','Atualizado','Aguardando autorização','Baixando','Aplicado','Cancelado','Falha'];
   const otaSatelliteStates=['Desconhecido','Indisponível','Não suportado','Atualizado','Aguardando autorização','Transferindo','Reiniciando','Concluído','Cancelado','Falha'];
   const otaTargets=['Nenhum','Todos','Mestre','Equipe','Visitantes'];
@@ -652,6 +1198,8 @@
     }else updateRun(run,'Preparando','O mestre aceitou a solicitação; a tarefa ainda não informou o resultado final.','warn');
   }
   function updateMasterUI(consult,data){
+    if(consult==='sensores')renderSensors(data);
+    if(consult==='logs_terminal')renderTerminalLogs(data);
     if(consult==='versao'){
       availability();
       if(Number.isFinite(data.capacidades)&&(data.capacidades&CAP_SYNC)===0){badge('sync-badge','Não suportado','muted');set('sync-summary','O firmware atual do mestre não informa o andamento da sincronização. Atualize o mestre para habilitar esse acompanhamento.');set('sync-checked','Consulta detalhada indisponível neste mestre.');}
@@ -664,6 +1212,7 @@
       setField('ota-interval',data.intervalo_ota_minutos);
       setField('telemetry-ota-interval',data.intervalo_telemetria_ota_ms);
       setField('wifi-auto',data.wifi_automatico?'1':'0');
+      set('wifi-primary-current',data.rede_principal?'Principal atual: '+data.rede_principal+(data.principal_alterada?' · definida pelo usuário':' · padrão do firmware'):'Nenhuma rede principal configurada.');
       setField('wifi-attempts',data.tentativas_wifi);
       setField('wifi-attempt-time',data.tempo_tentativa_wifi_ms/1000);
       setField('wifi-retry-interval',data.intervalo_tentativas_wifi_ms/1000);
@@ -672,15 +1221,28 @@
     if(consult==='ota')renderOtaState(data);
     if(consult==='sincronizacao')renderSyncState(data);
     if(consult==='controle_remoto'){
-      set('remote-state',data.atuacao_habilitada?'Estado de atuação incompatível com esta versão do painel.':'Preparado no mestre · sem atuação física');
-      set('remote-gear-current',['Neutro','Frente','Ré'][data.marcha_solicitada]||'Desconhecida');
+      const gear=['Nenhuma','L','M','H'];
+      const controlStatus=data.ota_em_andamento?'Atualização em andamento · carro desarmado':data.partida_concluida===false?'Inicializando mestre · carro desarmado':data.armamento_inicial_pendente?'Aguardando condições para armar':data.parada_solicitada?'Parada ativa':data.corte_por_rele_solicitado?'Controle bloqueado':'Controle armado';
+      controlNotice(controlStatus, data.parada_solicitada?'emergency':data.bloqueios?'warning':'info');
+      badge('actuation-status',data.atuacao_habilitada?'Atuação física habilitada':'Atuação física desabilitada',data.atuacao_habilitada?'good':'muted');
+      const armLabel=data.atuacao_habilitada&&controlStatus==='Controle armado'?'Carro armado':controlStatus==='Controle armado'?'Controle armado · saídas desligadas':controlStatus;
+      badge('vehicle-arm-badge',armLabel,controlStatus==='Controle armado'?'good':data.parada_solicitada||data.ota_em_andamento?'bad':'warn');
+      set('remote-gear-physical',gear[data.faixa_marcha_fisica]||'Desconhecida');
+      set('remote-gear-current',data.corte_por_rele_solicitado?'Bloqueada':gear[data.faixa_marcha_solicitada]||'Desconhecida');
+      set('remote-gear-limit-current',gear[data.faixa_marcha_maxima]||'Desconhecida');
+      set('remote-reverse-current',data.reversao_solicitada?'Ré':'Frente');
       set('remote-speed-current',format(value(data,'velocidade_maxima_centesimos_kmh',100),'km/h',2));
-      set('remote-accel-current',format(value(data,'aceleracao_maxima_milesimos_ms2',1000),'m/s²',3));
-      set('remote-stop-current',data.parada_solicitada?'Solicitada (sem atuação)':'Liberado (sem atuação)');
+      set('remote-throttle-max-current',format(value(data,'acelerador_maximo_decimos_percentual',10),'%',0));
+      set('remote-pedal-status',data.pedal_disponivel?'Pedal: '+format(value(data,'tensao_pedal_mv',1000),'V',2)+' · DAC: '+(data.dac_disponivel?'presente':'indisponível')+(data.atuacao_habilitada?' · Saída '+format(value(data,'tensao_dac_mv',1000),'V',2):''):'Pedal indisponível');
+      if(document.activeElement!==$('remote-deadzone'))$('remote-deadzone').value=String(data.zona_morta_decimos_percentual/10);
+      set('remote-stop-current',data.parada_solicitada?'Ativa'+(data.parada_restante_ms?' · '+Math.ceil(data.parada_restante_ms/1000)+' s':''):'Inativa'+(data.corte_por_rele_solicitado?' · corte mantido':''));
+      document.querySelector('.remote-stop-reading')?.classList.toggle('is-stopped',!!data.parada_solicitada);
+      document.querySelectorAll('[data-master-action="limite_marcha"]').forEach(button=>
+        button.setAttribute('aria-pressed',String(Number(button.dataset.controlValue)===data.faixa_marcha_maxima)));
       set('remote-checked','Estado consultado às '+timeOf(Date.now())+' · revisão '+data.revisao);
     }
     if(consult==='simulador'){
-      if(document.activeElement!==$('simulator-toggle'))$('simulator-toggle').value=data.ativo?'1':'0';
+      simulatorSourceButtons.forEach(button=>button.setAttribute('aria-pressed',String((button.dataset.sourceValue==='1')===data.ativo)));
       badge('simulator-badge',data.ativo?'Simulação ativa':'Sensores reais',data.ativo?'warn':'good');
       set('simulator-state',(data.ativo?'Telemetria simulada ativa':'Telemetria real ativa')+' · padrão do firmware: '+(data.padrao_firmware?'simulação':'sensores reais')+' · '+(Number(data.amostras_geradas)||0)+' amostras simuladas nesta inicialização.');
       set('simulator-checked','Estado confirmado no mestre às '+new Date().toLocaleTimeString('pt-BR')+'. A alteração via web é temporária e se perde ao reiniciar.');
@@ -709,6 +1271,7 @@
     try{return await work;}finally{if(state.polls.savedNetworks?.promise===work)state.polls.savedNetworks=null;}
   }
   document.querySelectorAll('#command-center input,#command-center select').forEach(field=>field.addEventListener('input',()=>{field.dataset.edited='1';}));
+  $('wifi-primary-source').addEventListener('change',event=>set('wifi-primary-help',event.target.value==='saved'?'Escolha uma opção em Redes salvas.':'Preencha os dados em Nova rede.'));
   $('report-group').addEventListener('change',()=>{const config=state.master.configuracao;if(config?.intervalos_relatorios_ms){$('report-interval').dataset.edited='';setField('report-interval',config.intervalos_relatorios_ms[Number($('report-group').value)]);}});
   function bytesLength(text){return new TextEncoder().encode(text).length;}
   function numberField(id){
@@ -721,35 +1284,70 @@
     if(!raw||!Number.isFinite(seconds)||seconds<min||seconds>max)throw new Error('Confira '+(input.closest('label')?.textContent.trim()||id)+' ('+min+' a '+max+' s).');
     return String(Math.round(seconds*1000));
   }
-  function permission(){const field=$('wifi-permission'),secret=field.value;if(!secret||/[\r\n]/.test(secret)||bytesLength(secret)>=108){field.closest('details').open=true;field.focus();throw new Error('Informe a permissão administrativa para esta ação protegida.');}return secret;}
+  function permission(id='wifi-permission'){const field=$(id),secret=field.value;if(!secret||/[\r\n]/.test(secret)||bytesLength(secret)>=108){field.closest('details').open=true;field.focus();throw new Error('Informe a senha de permissão.');}return secret;}
   function preparedNetwork(){const ssid=$('wifi-ssid').value,password=$('wifi-password').value,length=bytesLength(password);if(!ssid||bytesLength(ssid)>32||(length!==0&&length<8)||length>63||/[\r\n]/.test(ssid)||/[\r\n]/.test(password))throw new Error('Informe SSID de até 32 bytes; deixe a senha vazia para rede aberta ou use 8 a 63 bytes.');return ssid+'\n'+password;}
   function savedIndex(){const index=$('wifi-saved').value;if(!/^[1-5]$/.test(index))throw new Error('Selecione uma rede salva informada pelo mestre.');return index;}
-  function buildPlan(action){
-    const name=actionNames[action];if(!name)throw new Error('Comando desconhecido.');
+  function buildPlan(action,button){
+    const name=action==='permitir_re'?(button.dataset.controlValue==='1'?'Permitir ré':'Bloquear ré'):actionNames[action];
+    if(!name)throw new Error('Comando desconhecido.');
     const plan={name,action,steps:[{code:action,body:''}],refresh:[],secret:false};
     if(['verificar_ota','autorizar_mestre','autorizar_equipe','autorizar_visitantes','autorizar_todos','cancelar_ota'].includes(action))plan.refresh=['ota'];
     if(action==='alternar_relatorios')plan.refresh=['configuracao'];
     if(action==='zerar_percurso')plan.note='O percurso atualizado aparece na página Telemetria; a API não relaciona essa leitura ao comando.';
-    if(action==='resumo_terminal')plan.note='O resumo é emitido no terminal físico do mestre; a API não devolve seu conteúdo.';
+    if(action==='resumo_terminal')plan.note='Resumo solicitado no serial do mestre.';
+    if(action==='sensor_estado'){
+      const id=Number(button.dataset.sensorId),enabled=button.dataset.sensorValue==='1';
+      plan.name=(enabled?'Retomar ':'Pausar ')+(id===255?'todos os sensores':sensorNames[id]);
+      plan.steps=[{code:'sensores',body:id+'\n'+Number(enabled)}];
+      plan.refresh=['sensores'];plan.expectedSensor={mask:id===255?(1<<sensorNames.length)-1:1<<id,enabled};
+    }
+    if(action==='logs_terminal'){
+      const type=Number($('terminal-log-type').value),source=type===3?Number($('terminal-log-source').value):0,level=Number($('terminal-log-value').value);
+      plan.steps[0].body=[type,level,source,permission('terminal-log-permission')].join('\n');
+      plan.refresh=['logs_terminal'];plan.expectedLog={type,source,level};
+    }
     if(action==='sincronizar_google')plan.refresh=['sincronizacao'];
-    if(['definir_marcha','velocidade_maxima','aceleracao_maxima','parada_remota','liberar_parada_remota'].includes(action)){
-      const fields={definir_marcha:['remote-gear',1,2,'marcha_solicitada'],velocidade_maxima:['remote-speed',100,35,'velocidade_maxima_centesimos_kmh'],aceleracao_maxima:['remote-accel',1000,5,'aceleracao_maxima_milesimos_ms2']};
+    if(action==='permitir_re'){
+      const enabled=button.dataset.controlValue==='1';
+      plan.steps[0].body=String(Number(enabled));
+      plan.refresh=['controle_remoto'];
+      plan.expected={field:'reversao_permitida',value:enabled};
+      plan.prompt=enabled?'A ré ficará disponível para seleção.':'Se houver uma ré solicitada, o Mestre vai iniciar a parada.';
+    }
+    if(['limite_marcha','velocidade_maxima','limite_acelerador','zona_morta_pedal','parada_remota','liberar_parada_remota'].includes(action)){
+      const fields={limite_marcha:[null,1,3,'faixa_marcha_maxima'],velocidade_maxima:['remote-speed',100,35,'velocidade_maxima_centesimos_kmh'],limite_acelerador:['remote-throttle-max',10,100,'acelerador_maximo_decimos_percentual'],zona_morta_pedal:['remote-deadzone',10,30,'zona_morta_decimos_percentual']};
       let value,field;
-      if(fields[action]){const [id,scale,max,key]=fields[action],raw=$(id).value.trim(),n=Number(raw);if(!raw||!Number.isFinite(n)||n<0||n>max||Math.abs(n*scale-Math.round(n*scale))>1e-6)throw Error('Confira a faixa e a precisão do valor informado.');value=Math.round(n*scale);field=key;}
+      if(fields[action]){const [id,scale,max,key]=fields[action],raw=button.dataset.controlValue??$(id)?.value.trim(),n=Number(raw);if(!raw||!Number.isFinite(n)||n<0||n>max||Math.abs(n*scale-Math.round(n*scale))>1e-6)throw Error('Confira a faixa e a precisão do valor informado.');value=Math.round(n*scale);field=key;}
       else{value=action==='parada_remota'?1:0;field='parada_solicitada';plan.steps[0].code='parada_remota';}
       plan.steps[0].body=String(value);plan.refresh=['controle_remoto'];plan.expected={field,value:field==='parada_solicitada'?!!value:value};
-      plan.note='Pedido preparado no mestre, sem atuação física sobre o veículo.';
+      plan.note='O painel consulta o estado após enviar.';
     }
-    if(action==='simulador_telemetria'){const enabled=$('simulator-toggle').value==='1';plan.steps[0].body=enabled?'1':'0';plan.refresh=['simulador'];plan.expected={field:'ativo',value:enabled,label:'Simulador de telemetria'};}
+    if(action==='simulador_telemetria'){
+      const enabled=button.dataset.sourceValue==='1';
+      plan.name=enabled?'Ativar telemetria simulada':'Usar sensores reais';
+      plan.steps[0].body=String(Number(enabled));
+      plan.refresh=['simulador'];
+      plan.expected={field:'ativo',value:enabled,label:'Fonte da telemetria'};
+    }
     if(action==='intervalo_relatorio'){const group=Number($('report-group').value),interval=Number(numberField('report-interval'));plan.steps[0].body=group+'\n'+interval;plan.refresh=['configuracao'];plan.expected={field:'intervalos_relatorios_ms',index:group,value:interval,label:'Intervalo do relatório'};}
     if(action==='intervalo_ota'){const interval=Number(numberField('ota-interval'));plan.steps[0].body=String(interval);plan.refresh=['configuracao'];plan.expected={field:'intervalo_ota_minutos',value:interval,label:'Verificação OTA'};}
     if(action==='intervalo_telemetria_ota'){const interval=Number(numberField('telemetry-ota-interval'));plan.steps[0].body=String(interval);plan.refresh=['configuracao'];plan.expected={field:'intervalo_telemetria_ota_ms',value:interval,label:'Telemetria durante OTA'};}
     if(action==='wifi_test'){plan.expectedSsid=$('wifi-ssid').value;plan.steps=[{code:'wifi_preparar',body:preparedNetwork()},{code:'wifi_conectar_preparada',body:''}];plan.saveNetwork=$('wifi-save').checked;if(plan.saveNetwork)plan.steps.push({code:'wifi_salvar_preparada',body:''});plan.secret=true;plan.refresh=['wifi','configuracao'];}
-    if(action==='wifi_primary'){plan.expectedSsid=$('wifi-ssid').value;const network=preparedNetwork(),secret=permission();plan.steps=[{code:'wifi_preparar',body:network},{code:'wifi_alterar_principal',body:secret}];plan.secret=true;plan.refresh=['wifi','configuracao'];}
+    if(action==='wifi_primary'){
+      if($('wifi-primary-source').value==='saved'){
+        const index=savedIndex();plan.expectedSsid=($('wifi-saved').selectedOptions[0]?.textContent||'').split(' · ').slice(1).join(' · ');
+        plan.steps=[{code:'wifi_principal_salva',body:index+'\n'+permission()}];
+      }else{
+        plan.expectedSsid=$('wifi-ssid').value;
+        plan.steps=[{code:'wifi_preparar',body:preparedNetwork()},{code:'wifi_alterar_principal',body:permission()}];
+      }
+      plan.secret=true;plan.refresh=['configuracao'];
+    }
     if(action==='wifi_conectar_salva'||action==='wifi_excluir_salva'){plan.steps[0].body=savedIndex();plan.refresh=['wifi','configuracao'];plan.expectedSsid=($('wifi-saved').selectedOptions[0]?.textContent||'').split(' · ').slice(1).join(' · ');}
-    if(action==='wifi_restaurar_principal'){plan.steps[0].body=permission();plan.secret=true;plan.refresh=['wifi','configuracao'];}
+    if(action==='wifi_restaurar_principal'){plan.steps[0].body=permission();plan.secret=true;plan.refresh=['configuracao'];}
     if(action==='wifi_automatico'){const enabled=$('wifi-auto').value==='1';plan.steps[0].body=(enabled?'1':'0')+'\n'+permission();plan.secret=true;plan.refresh=['configuracao'];plan.expected={field:'wifi_automatico',value:enabled,label:'Conexão automática'};}
     if(action==='wifi_politica'){const values=[numberField('wifi-attempts'),wifiSecondsField('wifi-attempt-time'),wifiSecondsField('wifi-retry-interval'),wifiSecondsField('wifi-session-limit')];plan.steps[0].body=values.join('\n')+'\n'+permission();plan.expectedPolicy=values.map(Number);plan.secret=true;plan.refresh=['configuracao'];}
+    if(action==='wifi_restaurar_politica'){plan.steps[0].body=permission();plan.secret=true;plan.refresh=['configuracao'];}
     return plan;
   }
   function observedConfiguration(plan,config){
@@ -794,9 +1392,9 @@
   async function sendStopNow(){
     if(state.stopInFlight)return;
     state.stopInFlight=true;availability();
-    const run={name:'Solicitar parada remota',action:'parada_remota',time:Date.now(),requests:[],responses:[],step:1,status:'Enviando',text:'Pedido enviado ao mestre; aguardando resposta.',tone:'warn',checkedAt:0,hasRefresh:true,refreshQueries:['controle_remoto'],followUntil:Date.now()+30000};
+    const run={name:'Parada de emergência',action:'parada_remota',time:Date.now(),requests:[],responses:[],step:1,status:'Enviando',text:'Comando enviado ao mestre; aguardando resposta.',tone:'warn',checkedAt:0,hasRefresh:true,refreshQueries:['controle_remoto'],followUntil:Date.now()+30000};
     state.commandRuns.unshift(run);state.commandRuns.length=Math.min(state.commandRuns.length,12);renderMasterCommandHistory();
-    message('Enviando pedido de parada ao mestre. Ainda não há confirmação.');
+    message('Enviando parada…');
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),20000);
     try{
       const response=await fetch('/api/mestre?consulta=parada_remota',{method:'POST',headers:{'Content-Type':'text/plain; charset=utf-8'},body:'1',cache:'no-store',signal:controller.signal});
@@ -804,20 +1402,20 @@
       if(!response.ok||!result.ok)throw Error(result.erro||'Pedido recusado');
       if(Number.isFinite(result.solicitacao))run.requests.push(result.solicitacao);
       run.responses.push({duracao_ms:result.duracao_ms,tentativas:result.tentativas});
-      updateRun(run,'Resposta recebida','Mestre aceitou o pedido; consultando o estado. Sem atuação física nesta versão.','warn');
-      message('Pedido recebido pelo mestre. Consultando o estado registrado.','success');
+      updateRun(run,'Resposta recebida','Consultando a parada no mestre.','warn');
+      message('Parada recebida. Consultando estado…');
       try{
         const current=await getJSON('/api/mestre?consulta=controle_remoto',7000);
         state.master.controle_remoto=current;updateMasterUI('controle_remoto',current);run.checkedAt=Date.now();
-        updateRun(run,current.parada_solicitada?'Pedido confirmado':'Estado divergente',current.parada_solicitada?'Parada solicitada no mestre. Sem atuação física.':'O mestre não informa parada solicitada; confira a comunicação.',current.parada_solicitada?'good':'warn');
-        message(current.parada_solicitada?'Pedido de parada registrado no mestre; sem atuação física.':'O estado consultado difere do pedido.',current.parada_solicitada?'success':'error');
-      }catch(_){updateRun(run,'Estado não confirmado','O mestre respondeu, mas a consulta posterior não confirmou o estado.','warn');message('Pedido recebido; estado posterior sem resposta.','error');}
-    }catch(error){updateRun(run,error.name==='AbortError'?'Sem resposta':'Falhou',error.name==='AbortError'?'Prazo de resposta esgotado. Estado do pedido desconhecido.':error.message,'bad');message('Pedido de parada sem confirmação: '+(error.name==='AbortError'?'tempo esgotado':error.message),'error');}
+        updateRun(run,current.parada_solicitada?'Parada ativa':'Estado divergente',current.parada_solicitada?'Acelerador lógico em zero. Confira a parada física.':'Parada sem confirmação.',current.parada_solicitada?'good':'warn');
+        message(current.parada_solicitada?'Acelerador lógico em zero. Confira a parada física.':'O estado consultado difere do comando.',current.parada_solicitada?'emergency':'error');
+      }catch(_){updateRun(run,'Estado não confirmado','O mestre respondeu, mas a consulta posterior não confirmou o estado.','warn');message('Parada recebida. Estado sem confirmação.','warning');}
+    }catch(error){updateRun(run,error.name==='AbortError'?'Sem resposta':'Falhou',error.name==='AbortError'?'Prazo de resposta esgotado. Estado da parada desconhecido.':error.message,'bad');message('Parada sem confirmação: '+(error.name==='AbortError'?'tempo esgotado':error.message),'error');}
     finally{clearTimeout(timer);state.stopInFlight=false;availability();}
   }
   async function postMaster(code,body,run){
     commandEvent('MESTRE',code,'Enviando');
-    const timeout=['wifi_conectar_preparada','wifi_conectar_salva','wifi_alterar_principal'].includes(code)?200000:20000;
+    const timeout=['wifi_conectar_preparada','wifi_conectar_salva','wifi_alterar_principal','wifi_principal_salva'].includes(code)?200000:20000;
     try{const result=await remote(async()=>{const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeout);try{const response=await fetch('/api/mestre?consulta='+encodeURIComponent(code),{method:'POST',headers:{'Content-Type':'text/plain; charset=utf-8'},body,cache:'no-store',signal:controller.signal});const data=await response.json();if(!response.ok||!data.ok){const error=new Error(data.erro||'Comando recusado');error.requestId=data.solicitacao;throw error;}return data;}finally{clearTimeout(timer);}});if(Number.isFinite(result.solicitacao))run.requests.push(result.solicitacao);if(run.followSync&&Number.isFinite(result.sincronizacao_id))run.syncGeneration=result.sincronizacao_id;run.responses.push({duracao_ms:result.duracao_ms,tentativas:result.tentativas});run.responseAt=Date.now();commandEvent('MESTRE',code,'Recebido',result);return result;}
     catch(error){if(Number.isFinite(error.requestId))run.requests.push(error.requestId);commandEvent('MESTRE',code,error.name==='AbortError'?'Tempo esgotado':'Falhou',null,error.message);throw error;}
   }
@@ -825,6 +1423,7 @@
     const run={name:plan.name,action:plan.action,time:Date.now(),requests:[],responses:[],step:0,status:'Preparando',text:'Preparando o envio ao mestre.',tone:'muted',checkedAt:0,hasRefresh:plan.refresh.length>0||plan.action==='zerar_percurso',refreshQueries:plan.refresh,expected:plan.expected,expectedSsid:plan.expectedSsid,followUntil:Date.now()+300000,followOta:plan.refresh.includes('ota'),followSync:plan.refresh.includes('sincronizacao'),syncGeneration:null};
     state.commandRuns.unshift(run);state.commandRuns.length=Math.min(state.commandRuns.length,12);renderMasterCommandHistory();
     state.busy=true;availability();
+    message(plan.name+'…');
     try{
       for(let index=0;index<plan.steps.length;index++){
         run.step=index+1;
@@ -833,6 +1432,8 @@
         updateRun(run,'Resposta recebida','O mestre respondeu à etapa '+(index+1)+' de '+plan.steps.length+'. A execução posterior ainda pode estar em andamento.','warn');
       }
       run.followUntil=Date.now()+120000;
+      if(plan.action==='wifi_restaurar_politica')for(const id of ['wifi-attempts','wifi-attempt-time','wifi-retry-interval','wifi-session-limit'])delete $(id).dataset.edited;
+      if(plan.action==='logs_terminal')$('terminal-log-permission').value='';
       let checked=0;const observed={};
       for(const query of plan.refresh){const result=await masterQuery(query);if(result){checked++;observed[query]=result;run.checkedAt=Date.now();}if(query==='configuracao'&&result)observed.savedNetworks=await loadSavedNetworks(result.quantidade_redes_wifi);}
       if(plan.action==='wifi_test'||plan.action==='wifi_conectar_salva'){
@@ -850,55 +1451,115 @@
         return;
       }
       if(plan.action==='wifi_primary'||plan.action==='wifi_restaurar_principal'){
-        updateRun(run,'Gravação aceita',plan.action==='wifi_primary'?'O mestre confirmou a gravação de '+plan.expectedSsid+' como rede principal. A conexão será testada na próxima sessão Wi-Fi.':'O mestre confirmou a restauração da rede principal padrão. A conexão será testada na próxima sessão Wi-Fi.','good');
-        message(plan.name+': gravação confirmada pelo mestre.','success');
+        const config=observed.configuracao,matched=config&&(plan.action==='wifi_primary'?config.principal_alterada&&config.rede_principal===plan.expectedSsid:!config.principal_alterada);
+        updateRun(run,matched?'Rede principal confirmada':'Alteração aceita',matched?'O mestre informa '+config.rede_principal+' como principal. A conexão foi testada antes da gravação; o rádio voltou ao repouso.':'O mestre aceitou a alteração, mas a consulta posterior não confirmou a rede principal. Atualize o estado para conferir.',matched?'good':'warn');
+        message(plan.name+': '+(matched?'rede principal confirmada.':'confira o estado da rede principal.'),matched?'success':'error');
         $('wifi-password').value='';$('wifi-permission').value='';
         return;
       }
       if(plan.refresh.length&&!checked){
         const unsupported=run.followSync&&Number.isFinite(state.master.versao?.capacidades)&&(state.master.versao.capacidades&CAP_SYNC)===0;
         updateRun(run,unsupported?'Sem acompanhamento':'Acompanhar estado',unsupported?'O mestre aceitou a ação, mas seu firmware não oferece o andamento detalhado. Atualize o mestre para acompanhar esta sincronização.':'O mestre respondeu ao comando, mas a consulta do estado não retornou. A atualização automática tentará novamente.','warn');
-        message(plan.name+': resposta recebida; '+(unsupported?'o mestre não oferece consulta detalhada.':'não foi possível consultar o estado atualizado.'),unsupported?'':'error');
+        message('Comando recebido. Estado sem confirmação.','warning');
       }
       else if(!run.followSync&&!run.followOta){
-        const otaObserved=run.followOta&&state.master.ota&&checked?' Último estado observado: '+(otaMasterStates[state.master.ota.estado]||'desconhecido')+'.':'';
         const configObserved=observed.configuracao?observedConfiguration(plan,observed.configuracao):null;
-        if(configObserved)updateRun(run,configObserved.matches?'Valor observado':'Valor divergente',configObserved.text+' A resposta inicial confirma o aceite; esta leitura mostra a configuração atual.',configObserved.matches?'good':'warn');
-        else if(observed.controle_remoto){const matches=observed.controle_remoto[plan.expected.field]===plan.expected.value;updateRun(run,matches?'Pedido confirmado':'Estado divergente',matches?'Valor solicitado confirmado no mestre. Sem atuação física sobre o veículo.':'O estado consultado difere do pedido; confira os valores atuais.',matches?'good':'warn');}
-        else if(observed.simulador)updateRun(run,observed.simulador.ativo===plan.expected?.value?'Estado confirmado':'Estado divergente','O mestre informa telemetria '+(observed.simulador.ativo?'simulada':'real')+'. O padrão após reiniciar é '+(observed.simulador.padrao_firmware?'simulado':'real')+'.',observed.simulador.ativo===plan.expected?.value?'good':'warn');
-        else if(plan.steps[0].code==='alternar_relatorios'&&observed.configuracao)updateRun(run,'Estado consultado','Relatórios no mestre: '+(observed.configuracao.relatorios_pausados?'pausados':'ativos')+'. A consulta mostra o estado atual após a solicitação.','good');
-        else if(observed.wifi)updateRun(run,'Wi-Fi consultado',observed.wifi.conectado?'Mestre conectado a '+(observed.wifi.rede||'uma rede não identificada')+'.':'O mestre ainda não informa conexão Wi-Fi ativa. Consulte novamente após a operação.','warn');
-        else updateRun(run,run.followOta?'Acompanhar OTA':'Resposta recebida',run.followOta?'O mestre respondeu ao comando.'+otaObserved+' Confira o estado de cada dispositivo abaixo para acompanhar a conclusão.':plan.note|| (checked?'O mestre respondeu ao comando e o estado foi consultado. Confira os dados atuais antes de considerar a operação concluída.':'O mestre respondeu ao comando. A API não informa a conclusão posterior desta ação.'),run.followOta?'warn':checked?'good':'warn');
-        message(plan.name+': resposta recebida pelo mestre.'+(checked?' Estado consultado.':''),'success');
+        if(configObserved){
+          updateRun(run,configObserved.matches?'Valor observado':'Valor divergente',configObserved.text+' A resposta inicial confirma o aceite; esta leitura mostra a configuração atual.',configObserved.matches?'good':'warn');
+          message(plan.name+': '+(configObserved.matches?'configuração confirmada no mestre.':'comando recebido, mas o valor consultado difere.'),configObserved.matches?'success':'error');
+        }else if(observed.controle_remoto){
+          const matches=observed.controle_remoto[plan.expected.field]===plan.expected.value;
+          updateRun(run,matches?'Comando confirmado':'Estado divergente',matches?'Valor confirmado no mestre.':'O mestre informou outro estado.',matches?'good':'warn');
+          if(matches&&plan.action==='liberar_parada_remota')document.querySelectorAll('.global-toast.emergency').forEach(toast=>toast.remove());
+          message(plan.name+': '+(matches?'estado confirmado no mestre.':'o mestre informou outro estado.'),matches?'success':'error');
+        }else if(observed.simulador){
+          const matches=observed.simulador.ativo===plan.expected?.value;
+          updateRun(run,matches?'Estado confirmado':'Estado divergente','O mestre informa telemetria '+(observed.simulador.ativo?'simulada':'real')+'. O padrão após reiniciar é '+(observed.simulador.padrao_firmware?'simulado':'real')+'.',matches?'good':'warn');
+          message(plan.name+': '+(matches?'estado confirmado no mestre.':'o mestre informou outro estado.'),matches?'success':'error');
+        }else if(observed.sensores||observed.logs_terminal){
+          const sensor=plan.expectedSensor,log=plan.expectedLog,data=observed.logs_terminal;
+          const actualLog=log&&data?[data.nivel_global,Number(data.apenas_avisos_projeto),Number(data.cores),data.fontes?.find(item=>item.id===log.source)?.nivel][log.type]:null;
+          const matches=sensor?(observed.sensores.ativos&sensor.mask)===(sensor.enabled?sensor.mask:0):actualLog===log.level;
+          const detail=matches?'Estado confirmado no mestre.':'O mestre informou outro estado.';
+          updateRun(run,matches?'Confirmado':'Estado divergente',detail,matches?'good':'warn');
+          message(detail,matches?'success':'warning');
+        }else if(plan.action==='wifi_restaurar_politica'&&observed.configuracao){
+          updateRun(run,'Política consultada','Valores atualizados no formulário.', 'good');
+          message('Política padrão restaurada.','success');
+        }else if(plan.steps[0].code==='alternar_relatorios'&&observed.configuracao){
+          updateRun(run,'Estado consultado','Relatórios no mestre: '+(observed.configuracao.relatorios_pausados?'pausados':'ativos')+'. A consulta mostra o estado atual após a solicitação.','good');
+          message('Relatórios '+(observed.configuracao.relatorios_pausados?'pausados':'ativos')+' no mestre.','success');
+        }else if(observed.wifi){
+          updateRun(run,'Wi-Fi consultado',observed.wifi.conectado?'Mestre conectado a '+(observed.wifi.rede||'uma rede não identificada')+'.':'O mestre ainda não informa conexão Wi-Fi ativa. Consulte novamente após a operação.','warn');
+          message(plan.name+': comando recebido. Confira o estado do Wi-Fi.');
+        }else{
+          updateRun(run,'Resposta recebida',plan.note||(checked?'O mestre respondeu; confira o estado atual.':'O mestre respondeu, mas ainda não há confirmação da conclusão.'),checked?'good':'warn');
+          message(plan.name+': comando recebido'+(checked?'; estado consultado.':'; confirmação pendente.'));
+        }
       }
-      else message(plan.name+': resposta recebida. O andamento aparece no painel de '+(run.followSync?'sincronização':'OTA')+'.','success');
+      else message(plan.name+': comando recebido. Acompanhe o estado de '+(run.followSync?'sincronização':'OTA')+' no painel.');
       if(plan.secret){
         if(['wifi_test','wifi_primary'].includes(plan.action))$('wifi-password').value='';
-        if(['wifi_primary','wifi_restaurar_principal','wifi_automatico','wifi_politica'].includes(plan.action))$('wifi-permission').value='';
+        if(['wifi_primary','wifi_restaurar_principal','wifi_automatico','wifi_politica','wifi_restaurar_politica'].includes(plan.action))$('wifi-permission').value='';
       }
-    }catch(error){const timeout=error.name==='AbortError',reason=timeout?'O tempo de resposta esgotou':error.message;updateRun(run,timeout?'Sem resposta':'Falhou','Etapa '+run.step+' de '+plan.steps.length+': '+reason+'. A etapa não teve confirmação de sucesso. Confira o estado antes de repetir a ação.',timeout?'warn':'bad');message(plan.name+': '+reason+'. Confira o estado antes de repetir a ação.','error');}
+    }catch(error){const timeout=error.name==='AbortError',reason=timeout?'O tempo de resposta esgotou':error.message;updateRun(run,timeout?'Sem resposta':'Falhou','Etapa '+run.step+' de '+plan.steps.length+': '+reason+'. A etapa não teve confirmação de sucesso. Confira o estado antes de repetir a ação.',timeout?'warn':'bad');message(reason+'. Confira o estado antes de repetir.',timeout?'warning':'error');}
     finally{state.busy=false;availability();}
+  }
+  const criticalConfirmationActions=new Set([
+    'permitir_re','liberar_parada_remota','zerar_percurso',
+    'autorizar_mestre','autorizar_equipe','autorizar_visitantes','autorizar_todos'
+  ]);
+  const confirmationDelayMs=3000;
+  const confirmDialog=$('confirm-dialog');
+  const confirmButton=$('confirm-action');
+  const confirmWait=$('confirm-wait');
+  let confirmAfter=0,confirmTimer;
+  function showCommandConfirmation(plan,destructive){
+    clearTimeout(confirmTimer);
+    const delayed=criticalConfirmationActions.has(plan.action);
+    set('confirm-title',plan.name);
+    set('confirm-text',plan.prompt||'Enviar ao mestre?');
+    confirmButton.className='button'+(destructive?' danger':'');
+    confirmButton.textContent=delayed||destructive?'Confirmar':'Enviar comando';
+    confirmDialog.returnValue='';
+    confirmAfter=performance.now()+(delayed?confirmationDelayMs:0);
+    const update=()=>{
+      const remaining=Math.max(0,confirmAfter-performance.now());
+      confirmButton.disabled=remaining>0;
+      confirmWait.hidden=!delayed;
+      set('confirm-wait',remaining>0?'Confirmação disponível em '+Math.ceil(remaining/1000)+' s.':'Você já pode confirmar.');
+      if(remaining>0)confirmTimer=setTimeout(update,Math.min(1000,remaining));
+    };
+    update();
+    confirmDialog.showModal();
   }
   document.querySelectorAll('[data-master-action]').forEach(button=>button.addEventListener('click',()=>{
     if(button.dataset.masterAction==='parada_remota'){sendStopNow();return;}
     if(state.busy||button.disabled)return;
-    const wifiAction=button.dataset.masterAction.startsWith('wifi_');
+    if(button.getAttribute('aria-pressed')==='true')return;
+    const action=button.dataset.masterAction;
+    const wifiAction=action.startsWith('wifi_');
     if(wifiAction)$('wifi-form-error').hidden=true;
     try{
-      state.pending=buildPlan(button.dataset.masterAction);
-      $('confirm-title').textContent=state.pending.name;
-      $('confirm-text').textContent='Enviar '+state.pending.steps.length+' solicitação(ões) ao mestre? A resposta confirma o recebimento; operações como OTA e Wi-Fi podem continuar depois.';
-      const destructive=['zerar_percurso','wifi_excluir_salva','wifi_primary','wifi_restaurar_principal','cancelar_ota'].includes(button.dataset.masterAction);
-      $('confirm-action').className='button'+(destructive?' danger':'');
-      $('confirm-action').textContent=destructive?'Confirmar ação':'Enviar comando';
-      if(state.pending.refresh.includes('controle_remoto'))$('confirm-text').textContent='Registrar este pedido no mestre? Esta versão apenas prepara o estado, sem acionar motor ou freio.';
-      $('confirm-dialog').showModal();
+      const plan=buildPlan(action,button);
+      if(plan.refresh.includes('controle_remoto')&&!criticalConfirmationActions.has(action)){executePlan(plan);return;}
+      state.pending=plan;
+      const destructive=['zerar_percurso','wifi_excluir_salva','wifi_primary','wifi_restaurar_principal','wifi_restaurar_politica','cancelar_ota'].includes(action)||button.dataset.sensorValue==='0';
+      showCommandConfirmation(plan,destructive);
     }catch(error){
       if(wifiAction){$('wifi-form-error').textContent=error.message;$('wifi-form-error').hidden=false;$('wifi-form-error').scrollIntoView({block:'nearest'});}
       else message(error.message,'error');
     }
   }));
-  $('confirm-dialog').addEventListener('close',()=>{const plan=state.pending;state.pending=null;if($('confirm-dialog').returnValue==='confirm'&&plan)executePlan(plan);});
+  confirmDialog.querySelector('form').addEventListener('submit',event=>{
+    if(event.submitter?.value==='confirm'&&performance.now()<confirmAfter)event.preventDefault();
+  });
+  confirmDialog.addEventListener('close',()=>{
+    const plan=state.pending;
+    state.pending=null;
+    clearTimeout(confirmTimer);
+    if(confirmDialog.returnValue==='confirm'&&plan&&performance.now()>=confirmAfter)executePlan(plan);
+  });
   $('run-master-query').addEventListener('click',async()=>{
     if(state.busy)return;state.busy=true;availability();
     const query=$('master-query').value;commandEvent('MESTRE',query,'Enviando');
@@ -938,7 +1599,7 @@
     if(canvas.width!==width||canvas.height!==height){canvas.width=width;canvas.height=height;}
     const ctx=canvas.getContext('2d');ctx.setTransform(ratio,0,0,ratio,0,0);ctx.clearRect(0,0,rect.width,rect.height);return {ctx,w:rect.width,h:rect.height};
   }
-  const chartInfo={speed:{label:'Velocidade',unit:'km/h',color:'#59D9F7',digits:1},accel:{label:'Aceleração',unit:'m/s²',color:'#FFCA64',digits:2},power:{label:'Potência',unit:'W',color:'#59D9F7',digits:2},current:{label:'Corrente',unit:'A',color:'#FFCA64',digits:2},voltage:{label:'Tensão',unit:'V',color:'#4CE0A2',digits:3},soc:{label:'SoC · simulado',unit:'%',color:'#C8A8FF',digits:2},autonomy:{label:'Autonomia · simulada',unit:'km',color:'#A8DA88',digits:2},shunt:{label:'Queda no shunt · INA228',unit:'mV',color:'#FF9297',digits:3},inaTemp:{label:'Temperatura · INA228',unit:'°C',color:'#D4A9F7',digits:2},inaEnergy:{label:'Energia acumulada · INA228',unit:'Wh',color:'#69D6CC',digits:2},inaCharge:{label:'Carga acumulada · INA228',unit:'Ah',color:'#E7B4DE',digits:3}};
+  const chartInfo={speed:{label:'Velocidade',unit:'km/h',color:'#59D9F7',digits:1},accel:{label:'Aceleração',unit:'m/s²',color:'#FFCA64',digits:2},power:{label:'Potência',unit:'W',color:'#59D9F7',digits:2},current:{label:'Corrente',unit:'A',color:'#FFCA64',digits:2},voltage:{label:'Tensão',unit:'V',color:'#4CE0A2',digits:3},soc:{label:'SoC · simulado',unit:'%',color:'#C8A8FF',digits:2},autonomy:{label:'Autonomia · simulada',unit:'km',color:'#A8DA88',digits:2},shunt:{label:'Tensão no shunt · INA228',unit:'mV',color:'#FF9297',digits:3},inaTemp:{label:'Temperatura · INA228',unit:'°C',color:'#D4A9F7',digits:2},inaEnergy:{label:'Energia acumulada · INA228',unit:'Wh',color:'#69D6CC',digits:2},inaCharge:{label:'Carga acumulada · INA228',unit:'Ah',color:'#E7B4DE',digits:3}};
   function chartRange(key,values){
     if(key==='speed')return [0,Math.max(30,Math.ceil(Math.max(0,...values)*1.08/5)*5)];
     if(key==='accel'){const limit=Math.max(2,Math.ceil(Math.max(0,...values.map(Math.abs))*1.15*2)/2);return [-limit,limit];}
@@ -950,10 +1611,13 @@
     const step=Math.pow(10,Math.floor(Math.log10((max-min)/4)));
     return [key==='rtt'?0:Math.floor(min/step)*step,Math.ceil(max/step)*step];
   }
-  const chartFrame=(w,h)=>({left:58,right:Math.max(59,w-58),top:26,bottom:Math.max(27,h-29)});
+  const chartFrame=(w,h,expanded=false)=>{
+    const side=expanded?46:58,top=expanded?20:26,bottomMargin=expanded?24:29;
+    return {left:side,right:Math.max(side+1,w-side),top,bottom:Math.max(top+1,h-bottomMargin)};
+  };
   function plot(canvasId,keys){
     const canvas=$(canvasId);if(!canvas||!canvas.getBoundingClientRect().width)return;
-    const {ctx,w,h}=setupCanvas(canvas),frame=chartFrame(w,h),{left,right,top,bottom}=frame;
+    const {ctx,w,h}=setupCanvas(canvas),frame=chartFrame(w,h,true),{left,right,top,bottom}=frame;
     const end=Date.now(),start=end-state.range*1000,samples=state.samples.filter(s=>s.time>=start&&s.time<=end);
     const x=time=>left+(time-start)/(end-start)*(right-left);
     const series=keys.map(key=>{const info=chartInfo[key],values=samples.filter(s=>!s.gap&&Number.isFinite(s[key])).map(s=>s[key]);return {...info,key,available:values.length>0,range:chartRange(key,values)};});
@@ -993,17 +1657,15 @@
     plot('motion-chart',['speed','accel']);plot('electric-chart',selectedElectricKeys());
     const primary=chartInfo[state.signal],secondary=chartInfo[state.signalSecondary];
     const extra=state.signalTertiary==='none'?null:chartInfo[state.signalTertiary];
-    set('electric-caption','À esquerda, '+primary.label.toLowerCase()+' ('+primary.unit+'); à direita, '+secondary.label.toLowerCase()+' ('+secondary.unit+').'+(extra?' Curva tracejada: escala própria indicada na legenda; toque para ler o valor.':''));
+    set('electric-caption','À esquerda, '+primary.label.toLowerCase()+' ('+primary.unit+'); à direita, '+secondary.label.toLowerCase()+' ('+secondary.unit+').'+(extra?' Curva tracejada com escala própria; toque ou passe o cursor para ler o valor.':''));
     [["electric-legend-primary",primary],["electric-legend-secondary",secondary]].forEach(([id,info])=>{
       const legend=$(id),mark=legend.querySelector('.legend-key');mark.style.backgroundColor=info.color;
       if(legend.lastChild?.textContent!==info.label)legend.replaceChildren(mark,document.createTextNode(info.label));
     });
     const third=$('electric-legend-tertiary');third.hidden=!extra;
     if(extra){
-      const key=state.signalTertiary,now=Date.now(),readings=state.samples.filter(sample=>!sample.gap&&sample.time>=now-state.range*1000&&Number.isFinite(sample[key])).map(sample=>sample[key]);
-      const [min,max]=chartRange(key,readings),scale=readings.length?' · '+number(min,extra.digits)+'–'+number(max,extra.digits)+' '+extra.unit:' · sem leitura';
       third.querySelector('.legend-key').style.backgroundColor=extra.color;
-      set('electric-tertiary-label',extra.label+scale);
+      set('electric-tertiary-label',extra.label);
     }
   }
   function drawDeviceChart(group,id){
@@ -1024,7 +1686,7 @@
   function chartTooltip(canvasId,tipId,keys){
     const canvas=$(canvasId),tip=$(tipId);
     const move=e=>{
-      const rect=canvas.getBoundingClientRect(),px=e.clientX-rect.left,start=Date.now()-state.range*1000,frame=chartFrame(rect.width,rect.height),ts=start+(px-frame.left)/Math.max(1,frame.right-frame.left)*state.range*1000;
+      const rect=canvas.getBoundingClientRect(),px=e.clientX-rect.left,start=Date.now()-state.range*1000,frame=chartFrame(rect.width,rect.height,true),ts=start+(px-frame.left)/Math.max(1,frame.right-frame.left)*state.range*1000;
       const list=state.samples.filter(s=>!s.gap&&Math.abs(s.time-ts)<state.range*1000/12);
       if(!list.length){tip.hidden=true;state.hover={};drawCharts();return;}
       const sample=list.reduce((a,b)=>Math.abs(a.time-ts)<Math.abs(b.time-ts)?a:b),chosen=canvasId==='electric-chart'?selectedElectricKeys():keys;
@@ -1064,8 +1726,8 @@
           set('simulator-state','O firmware atual do mestre não informa o estado do simulador.');
         }
         if(Number.isFinite(capabilities)&&(capabilities&8192)!==0){
-          if(!await masterQuery('controle_remoto')){set('remote-state','Sem resposta · estado solicitado não confirmado');set('remote-checked','A última leitura pode estar desatualizada.');}
-        }else{set('remote-state','Este mestre ainda não oferece preparação de controle remoto.');}
+          if(!await masterQuery('controle_remoto')){controlNotice('Mestre sem resposta. Estado não confirmado.','warning');set('remote-checked','A última leitura pode estar desatualizada.');badge('vehicle-arm-badge','Estado do carro indisponível','muted');}
+        }else{controlNotice('Controle indisponível neste firmware.','warning');}
         state.lastCommandPoll=Date.now();
       }
       if(state.busy)return;
@@ -1158,7 +1820,7 @@
   setupWifiPanel('equipe');setupWifiPanel('visitantes');
   setInterval(()=>{pollWifiClients('equipe');if(state.tab==='comandos')pollWifiClients('visitantes');},10000);
   setInterval(()=>{document.querySelectorAll('.wifi-client-row span[data-connected-ms]').forEach(el=>{el.textContent='Conectado há '+age(Number(el.dataset.connectedMs)+Date.now()-Number(el.dataset.checkedAt));});},1000);
-  makeGroup('equipe');makeGroup('visitantes');showTab(location.hash.slice(1));renderEvents();renderMasterCommandHistory();availability();updateStatus();
+  showTab(location.hash.slice(1));renderEvents();renderMasterCommandHistory();availability();updateStatus();
   pollTelemetry();pollLocal();pollRemote();pollCommandStates();pollWifiClients('equipe');
   setInterval(pollLocal,3000);setInterval(pollRemote,10000);
   setInterval(pollCommandStates,1000);

@@ -21,7 +21,7 @@ use a [pinagem](pinagem.md); para o formato dos pacotes, use [protocolos](protoc
 | **OTA** (*over-the-air*) | Atualização do firmware sem cabo. O mestre baixa imagens por HTTPS e, para os satélites, transfere blocos confirmados por UART. O bootloader pode reverter uma imagem que não seja validada após a partida. |
 | **SHA-256** (*Secure Hash Algorithm*, 256 bits) | Função de hash que produz um resumo da imagem. O tamanho e o SHA-256 do arquivo baixado são comparados com o manifesto antes da instalação; isso detecta arquivo incompleto ou diferente. Não substitui a validação da origem do manifesto. |
 | **RSSI** (*received signal strength indicator*) | Intensidade aproximada do sinal Wi-Fi recebido, normalmente em dBm. Valores mais próximos de zero indicam sinal mais forte; não medem, sozinhos, a qualidade completa da conexão. |
-| **SPI / I²C / I²S** | Barramentos distintos: SPI2 liga o mestre ao microSD; I²C compartilha dois fios entre MPU6050, INA228 e OLED; I²S recebe áudio digital do microfone na função temporária de treinamento. |
+| **SPI / I²C** | Barramentos distintos: SPI2 liga o mestre ao microSD; I²C compartilha dois fios entre MPU6050, INA228 e OLED. |
 | **MPU6050 / INA228 / OLED** | MPU6050 mede aceleração e rotação; INA228 mede tensão e corrente por meio de um shunt e acumula energia/carga; OLED é a tela local. Compartilham o I²C com endereços distintos. |
 | **P/R** | Pulsos por revolução do encoder. Os modelos documentados têm 600 P/R; o firmware conta as quatro bordas dos canais A e B, obtendo 2.400 contagens por giro. Isso não implica, nesta configuração, leitura do sentido. |
 | **CRC-16/CCITT-FALSE** | Variante de CRC-16 fixada pelo protocolo de telemetria. Os três firmwares precisam usar a mesma variante e a mesma ordem dos bytes. |
@@ -63,11 +63,10 @@ use a [pinagem](pinagem.md); para o formato dos pacotes, use [protocolos](protoc
 | **I²C** | MPU6050, INA228 e OLED usam o mesmo par SDA/SCL com endereços diferentes, economizando GPIOs. O driver concentra acesso e contabiliza falhas. | Um dispositivo ausente ou barramento preso pode atrasar uma transação; a falha é tratada sem atribuir zero a uma medição inválida. |
 | **SPI2 e DMA** | O mestre acessa o microSD para CSV, logs e cópia de configuração. O barramento e buffers compatíveis permitem transferências eficientes enquanto a aquisição segue em outra tarefa. | Cartão e sistema de arquivos podem atrasar ou falhar; por isso as amostras chegam ao escritor por fila. |
 | **ADC em leitura pontual** | Lê a entrada analógica apenas quando solicitada pelo ciclo de aquisição; é simples para a medição bruta atual. | A contagem de 0 a 4095 exige condicionamento e calibração antes de virar tensão física confiável. |
-| **I²S** | Recebe o fluxo digital do INMP441 sem amostrar cada bit em software; é usado apenas na gravação temporária de áudio para treinamento. | Não participa da telemetria contínua e disputa recursos com gravação no SD. |
 | **LEDC** | Produz PWM para o buzzer passivo e troca tons sem laços de espera que prendam a CPU. | O buzzer deve ter acionamento elétrico adequado à corrente exigida. |
 | **Wi-Fi** | Os satélites criam redes locais para os painéis. O mestre abre sessões temporárias de estação para consulta OTA e envio ao Google. | Disponibilidade de rádio e internet não deve bloquear a aquisição ou o enlace UART. |
 
-`PCNT`, `UART`, `I²C`, `SPI2`, `ADC`, `I²S` e `LEDC` são periféricos ou
+`PCNT`, `UART`, `I²C`, `SPI2`, `ADC` e `LEDC` são periféricos ou
 controladores do chip. **PSRAM e NVS são recursos de memória**, e FreeRTOS é o
 sistema de tarefas; a distinção importa ao escolher onde guardar dados e
 quem deve executar cada operação.

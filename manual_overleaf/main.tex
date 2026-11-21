@@ -25,12 +25,12 @@ Théos Schultz Tompsen
 Prof. Dr. Paulo César Vargas Luz\par
 \end{minipage}
 \vfill
-{\small Revisão documental 2.2 --- baseada no repositório em 11/11/2026\\Cachoeira do Sul, RS --- 2026\par}
+{\small Revisão documental 3.0 --- baseada no repositório em 12/11/2026\\Cachoeira do Sul, RS --- 2026\par}
 \end{titlepage}
 \pagenumbering{roman}
 \chapter*{Controle do documento}
 \addcontentsline{toc}{chapter}{Controle do documento}
-Este manual descreve o NEXUS a partir dos arquivos de firmware, da documentação do projeto e das decisões de escopo comunicadas pela equipe até 11 de novembro de 2026. Algumas rotinas legadas ainda podem existir no código, embora estejam fora do escopo desta revisão. \textbf{Configuração no código não comprova montagem física ou ensaio concluído.} Onde a placa instalada, a calibração ou um resultado experimental não estão identificados, o texto registra essa limitação de forma explícita. Antes de alterar conexões ou operar o protótipo, confronte a revisão física com os esquemas e as definições do firmware.
+Este manual descreve o NEXUS a partir dos firmwares, das ferramentas e da documentação do projeto consultados em 12 de novembro de 2026. \textbf{Configuração no código não comprova montagem física ou ensaio concluído.} Onde a placa instalada, a calibração ou um resultado experimental não estão identificados, o texto registra essa limitação. Antes de alterar conexões ou operar o protótipo, confronte a revisão física com os esquemas e as definições do firmware.
 \begin{table}[htbp]\centering
 \caption{Histórico de revisões do manual}\label{tab:revisoes}
 \begin{tabularx}{\textwidth}{@{}llX@{}}\toprule
@@ -39,7 +39,9 @@ Revisão & Data & Conteúdo\\\midrule
 1.0 & 10/11/2026 & Redação técnica baseada no repositório: arquitetura, ligações, aquisição, protocolos, operação, atualização e pontos de validação.\\
 2.0 & 10/11/2026 & Aprofundamento de eletrônica, Wi-Fi, comandos, memória, Google, OTA, rollback, falhas, OLED e procedimentos de bancada.\\
 2.1 & 10/11/2026 & Revisão de arquitetura, sensores, firmware e tabelas; retirada da leitura analógica de tensão e do áudio; diagramas, ligações e marca d'água.\\
-2.2 & 11/11/2026 & Acesso HTTP, redes abertas e varredura Wi-Fi, leitura INA228 em Operação e sensores, terminal e logs, gráfico elétrico opcional e ajuste dos diagramas.\\\bottomrule
+2.2 & 11/11/2026 & Acesso HTTP, redes abertas e varredura Wi-Fi, leitura INA228 em Operação e sensores, terminal e logs, gráfico elétrico opcional e ajuste dos diagramas.\\
+2.3 & 12/11/2026 & Rede principal escolhida entre perfil novo ou salvo, confirmação no painel e perfil serial de avisos do NEXUS.\\
+3.0 & 12/11/2026 & Manual consolidado em seis capítulos; versionamento e ferramentas de release detalhados; painéis, estados e diagramas revistos.\\\bottomrule
 \end{tabularx}\end{table}
 \begin{nota}{Leitura correta dos estados}
 \textbf{Implementado} significa presente no código analisado; \textbf{configurado} é um valor definido no firmware; \textbf{a verificar} requer confronto com a montagem; \textbf{não validado} significa que não há registro de ensaio suficiente no material consultado. Telemetria simulada serve para demonstração e nunca deve ser confundida com medição.
@@ -88,21 +90,15 @@ VSHUNT & Tensão diferencial entre os terminais de medição do shunt usada para
       {\includegraphics[width=\nexusWatermarkWidth]{imagens/logo_carro_eletrico.png}};
   \end{tikzpicture}%
 }
-\input{capitulos/01_introducao}
-\input{capitulos/02_arquitetura}
-\input{capitulos/03_hardware}
-\input{capitulos/07_eletronica_placa}
-\input{capitulos/04_firmware}
-\input{capitulos/11_comandos_controle}
-\input{capitulos/08_wifi_paineis}
-\input{capitulos/09_memorias_google}
-\input{capitulos/10_ota_rollback}
-\input{capitulos/12_diagnostico_oled}
-\input{capitulos/06_operacao_testes}
-\appendix
-\chapter{Fontes e rastreabilidade}
-\section{Fontes internas utilizadas}
+\input{capitulos/01_sistema}
+\input{capitulos/02_hardware}
+\input{capitulos/03_paineis_comandos}
+\input{capitulos/04_dados_diagnostico}
+\input{capitulos/05_atualizacoes}
+\input{capitulos/06_operacao}
+\section{Fontes e rastreabilidade}
+\subsection{Fontes internas utilizadas}
 O conteúdo foi conferido principalmente em \path{README.md}, \path{documentacao/arquitetura.md}, \path{documentacao/filosofia.md}, \path{documentacao/mestre.md}, \path{documentacao/satelites.md}, \path{documentacao/pinagem.md}, \path{documentacao/hardware.md}, \path{documentacao/protocolos.md}, \path{documentacao/ota.md}, \path{documentacao/google.md}, \path{documentacao/controle-remoto.md} e \path{documentacao/conceitos.md}. A referência executável é o código em \path{firmware/mestre-s3}, \path{firmware/equipe-s3}, \path{firmware/visitantes-s3} e \path{firmware/compartilhado}. Os esquemas e placas candidatos estão em \path{hardware/kicad/KiCad_pcb_telemetria}. Para a seção elétrica, foram consultadas a folha de dados do INA228 e a nota sobre pull-ups I\textsuperscript{2}C da Texas Instruments, além das diretrizes de hardware do ESP32-S3 da Espressif. O valor de shunt de 1 m$\Omega$ e a capacidade de 75 A foram informados pelo projeto e precisam ser confirmados no componente instalado.
-\section{Registro de configuração para cada ensaio}
+\subsection{Registro de configuração para cada ensaio}
 Em todo ensaio, anotar: data e responsável; identificação impressa da placa e do chicote; revisão do esquema e da PCB; commit do repositório; versões de cada firmware; configuração de sensores e rodas; instrumentos de referência e sua calibração; condições de alimentação; arquivos brutos do microSD; resultado observado e eventual incidente. O repositório consultado não associa uma revisão física única à placa instalada nem contém um relatório de validação geral. Essas informações devem acompanhar a próxima revisão deste manual.
 \end{document}

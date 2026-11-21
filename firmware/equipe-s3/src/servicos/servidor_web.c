@@ -184,6 +184,12 @@ static codigo_comando_t localizar_consulta_mestre(const char *consulta)
     if (strcmp(consulta, "wifi") == 0) return COMANDO_OBTER_ESTADO_WIFI;
     if (strcmp(consulta, "diagnostico_mestre") == 0)
         return COMANDO_OBTER_DIAGNOSTICO_MESTRE;
+    if (strcmp(consulta, "sensores") == 0)
+        return COMANDO_OBTER_SENSORES_MESTRE;
+    if (strcmp(consulta, "logs_terminal") == 0)
+        return COMANDO_OBTER_LOGS_TERMINAL;
+    if (strcmp(consulta, "tarefas_mestre") == 0)
+        return COMANDO_OBTER_TAREFAS_MESTRE;
     if (strcmp(consulta, "configuracao") == 0)
         return COMANDO_OBTER_CONFIGURACAO_MESTRE;
     if (strcmp(consulta, "sincronizacao") == 0)
@@ -215,7 +221,12 @@ static codigo_comando_t localizar_consulta_mestre(const char *consulta)
     if (strcmp(consulta, "cancelar_ota") == 0) return COMANDO_CANCELAR_OTA;
     if (strcmp(consulta, "resumo_terminal") == 0)
         return COMANDO_SOLICITAR_RESUMO_TERMINAL;
-    if (strcmp(consulta, "definir_marcha") == 0 ||
+    if (strcmp(consulta, "limite_marcha") == 0 ||
+        strcmp(consulta, "limite_acelerador") == 0 ||
+        strcmp(consulta, "zona_morta_pedal") == 0 ||
+        strcmp(consulta, "tensao_minima_dac") == 0 ||
+        strcmp(consulta, "definir_reversao") == 0 ||
+        strcmp(consulta, "permitir_re") == 0 ||
         strcmp(consulta, "velocidade_maxima") == 0 ||
         strcmp(consulta, "aceleracao_maxima") == 0 ||
         strcmp(consulta, "parada_remota") == 0 ||
@@ -232,8 +243,10 @@ static codigo_comando_t localizar_consulta_mestre(const char *consulta)
         strcmp(consulta, "wifi_excluir_salva") == 0 ||
         strcmp(consulta, "wifi_automatico") == 0 ||
         strcmp(consulta, "wifi_alterar_principal") == 0 ||
+        strcmp(consulta, "wifi_principal_salva") == 0 ||
         strcmp(consulta, "wifi_restaurar_principal") == 0 ||
         strcmp(consulta, "wifi_politica") == 0 ||
+        strcmp(consulta, "wifi_restaurar_politica") == 0 ||
         strcmp(consulta, "simulador_telemetria") == 0) {
         return COMANDO_EXECUTAR_ACAO_MESTRE;
     }
@@ -260,7 +273,18 @@ static bool comando_exige_confirmacao(codigo_comando_t comando)
 
 static acao_mestre_t localizar_acao_mestre(const char *consulta)
 {
-    if (strcmp(consulta, "definir_marcha") == 0) return ACAO_MESTRE_DEFINIR_MARCHA;
+    if (strcmp(consulta, "sensores") == 0)
+        return ACAO_MESTRE_DEFINIR_SENSOR;
+    if (strcmp(consulta, "wifi_restaurar_politica") == 0)
+        return ACAO_MESTRE_RESTAURAR_POLITICA_WIFI;
+    if (strcmp(consulta, "logs_terminal") == 0)
+        return ACAO_MESTRE_DEFINIR_LOGS_TERMINAL;
+    if (strcmp(consulta, "limite_marcha") == 0) return ACAO_MESTRE_DEFINIR_LIMITE_MARCHA;
+    if (strcmp(consulta, "limite_acelerador") == 0) return ACAO_MESTRE_DEFINIR_LIMITE_ACELERADOR;
+    if (strcmp(consulta, "zona_morta_pedal") == 0) return ACAO_MESTRE_DEFINIR_ZONA_MORTA_PEDAL;
+    if (strcmp(consulta, "tensao_minima_dac") == 0) return ACAO_MESTRE_DEFINIR_TENSAO_MINIMA_DAC;
+    if (strcmp(consulta, "definir_reversao") == 0) return ACAO_MESTRE_DEFINIR_REVERSAO;
+    if (strcmp(consulta, "permitir_re") == 0) return ACAO_MESTRE_PERMITIR_REVERSAO;
     if (strcmp(consulta, "velocidade_maxima") == 0) return ACAO_MESTRE_DEFINIR_VELOCIDADE_MAXIMA;
     if (strcmp(consulta, "aceleracao_maxima") == 0) return ACAO_MESTRE_DEFINIR_ACELERACAO_MAXIMA;
     if (strcmp(consulta, "parada_remota") == 0) return ACAO_MESTRE_DEFINIR_PARADA_REMOTA;
@@ -290,6 +314,8 @@ static acao_mestre_t localizar_acao_mestre(const char *consulta)
         return ACAO_MESTRE_DEFINIR_WIFI_AUTOMATICO;
     if (strcmp(consulta, "wifi_alterar_principal") == 0)
         return ACAO_MESTRE_ALTERAR_REDE_WIFI_PRINCIPAL;
+    if (strcmp(consulta, "wifi_principal_salva") == 0)
+        return ACAO_MESTRE_DEFINIR_REDE_WIFI_SALVA_COMO_PRINCIPAL;
     if (strcmp(consulta, "wifi_restaurar_principal") == 0)
         return ACAO_MESTRE_RESTAURAR_REDE_WIFI_PRINCIPAL;
     if (strcmp(consulta, "wifi_politica") == 0)
@@ -352,6 +378,46 @@ static bool preparar_acao_mestre(const char *consulta, char *corpo,
     char *campo = NULL;
     uint32_t valor = 0;
     switch ((acao_mestre_t)solicitacao->acao) {
+        case ACAO_MESTRE_DEFINIR_SENSOR:
+            if (!converter_uint32(proximo_campo(&cursor), &valor) ||
+                (valor > SENSOR_MESTRE_TEMPERATURA_ESP && valor != SENSOR_MESTRE_TODOS))
+                return false;
+            solicitacao->alvo = (uint8_t)valor;
+            campo = proximo_campo(&cursor);
+            if (campo == NULL || cursor != NULL ||
+                (strcmp(campo, "0") != 0 && strcmp(campo, "1") != 0))
+                return false;
+            solicitacao->valor = (uint32_t)(campo[0] - '0');
+            return true;
+        case ACAO_MESTRE_RESTAURAR_POLITICA_WIFI:
+            campo = proximo_campo(&cursor);
+            if (campo == NULL || cursor != NULL || !campo[0] ||
+                strlen(campo) >= sizeof(solicitacao->texto))
+                return false;
+            strcpy(solicitacao->texto, campo);
+            return true;
+        case ACAO_MESTRE_DEFINIR_LOGS_TERMINAL: {
+            uint32_t ajuste = 0;
+            uint32_t alvo = 0;
+            if (!converter_uint32(proximo_campo(&cursor), &ajuste) ||
+                ajuste > AJUSTE_LOG_TERMINAL_FONTE ||
+                !converter_uint32(proximo_campo(&cursor), &valor) ||
+                valor > COMANDO_NIVEL_LOG_INFORMACOES ||
+                !converter_uint32(proximo_campo(&cursor), &alvo))
+                return false;
+            if ((ajuste == AJUSTE_LOG_TERMINAL_FONTE ? alvo >= COMANDO_FONTES_LOG_TERMINAL : alvo != 0) ||
+                ((ajuste == AJUSTE_LOG_TERMINAL_CORES || ajuste == AJUSTE_LOG_TERMINAL_APENAS_PROJETO) && valor > 1))
+                return false;
+            campo = proximo_campo(&cursor);
+            if (campo == NULL || cursor != NULL || !campo[0] ||
+                strlen(campo) >= sizeof(solicitacao->texto))
+                return false;
+            solicitacao->alvo = (uint8_t)alvo;
+            solicitacao->valor = valor;
+            solicitacao->valor_2 = ajuste;
+            strcpy(solicitacao->texto, campo);
+            return true;
+        }
         case ACAO_MESTRE_DEFINIR_INTERVALO_RELATORIO:
             campo = proximo_campo(&cursor);
             if (!converter_uint32(campo, &valor) || valor > 3) return false;
@@ -366,7 +432,11 @@ static bool preparar_acao_mestre(const char *consulta, char *corpo,
                 return false;
             solicitacao->valor = valor;
             return true;
-        case ACAO_MESTRE_DEFINIR_MARCHA:
+        case ACAO_MESTRE_DEFINIR_LIMITE_MARCHA:
+        case ACAO_MESTRE_DEFINIR_LIMITE_ACELERADOR:
+        case ACAO_MESTRE_DEFINIR_ZONA_MORTA_PEDAL:
+        case ACAO_MESTRE_DEFINIR_TENSAO_MINIMA_DAC:
+        case ACAO_MESTRE_DEFINIR_REVERSAO:
         case ACAO_MESTRE_DEFINIR_VELOCIDADE_MAXIMA:
         case ACAO_MESTRE_DEFINIR_ACELERACAO_MAXIMA:
         case ACAO_MESTRE_DEFINIR_PARADA_REMOTA:
@@ -376,6 +446,7 @@ static bool preparar_acao_mestre(const char *consulta, char *corpo,
             solicitacao->valor = valor;
             return true;
         case ACAO_MESTRE_DEFINIR_SIMULADOR:
+        case ACAO_MESTRE_PERMITIR_REVERSAO:
             if (!converter_uint32(proximo_campo(&cursor), &valor) || valor > 1 ||
                 cursor != NULL) return false;
             solicitacao->valor = valor;
@@ -411,6 +482,15 @@ static bool preparar_acao_mestre(const char *consulta, char *corpo,
             campo = proximo_campo(&cursor);
             if (campo == NULL || strlen(campo) >= sizeof(solicitacao->texto))
                 return false;
+            strcpy(solicitacao->texto, campo);
+            return true;
+        case ACAO_MESTRE_DEFINIR_REDE_WIFI_SALVA_COMO_PRINCIPAL:
+            if (!converter_uint32(proximo_campo(&cursor), &valor) ||
+                valor < 1 || valor > 5) return false;
+            solicitacao->alvo = (uint8_t)(valor - 1);
+            campo = proximo_campo(&cursor);
+            if (campo == NULL || !campo[0] ||
+                strlen(campo) >= sizeof(solicitacao->texto)) return false;
             strcpy(solicitacao->texto, campo);
             return true;
         case ACAO_MESTRE_DEFINIR_POLITICA_WIFI: {
@@ -484,7 +564,11 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
         return enviar_json_comando(requisicao, "400 Bad Request",
                                    "{\"ok\":false,\"erro\":\"consulta ausente\"}");
     }
-    const codigo_comando_t comando = localizar_consulta_mestre(consulta);
+    const codigo_comando_t comando =
+        requisicao->method == HTTP_POST &&
+                (strcmp(consulta, "sensores") == 0 || strcmp(consulta, "logs_terminal") == 0)
+            ? COMANDO_EXECUTAR_ACAO_MESTRE
+            : localizar_consulta_mestre(consulta);
     if (comando == 0) {
         return enviar_json_comando(requisicao, "400 Bad Request",
                                    "{\"ok\":false,\"erro\":\"consulta desconhecida\"}");
@@ -505,6 +589,8 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
     solicitacao_rede_wifi_salva_t solicitacao_rede = {0};
     solicitacao_consulta_satelite_t solicitacao_satelite = {0};
     solicitacao_gestao_wifi_satelite_t solicitacao_wifi_satelite = {0};
+    uint8_t inicio_tarefas = 0;
+    const uint8_t formato_controle_remoto = CONTROLE_REMOTO_FORMATO;
     char corpo[256] = {0};
     TickType_t tempo_limite = pdMS_TO_TICKS(1500);
     if (comando == COMANDO_GERIR_WIFI_SATELITE) {
@@ -551,10 +637,29 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
                 ACAO_MESTRE_CONECTAR_REDE_WIFI_PREPARADA ||
             solicitacao_acao.acao == ACAO_MESTRE_CONECTAR_REDE_WIFI_SALVA ||
             solicitacao_acao.acao ==
-                ACAO_MESTRE_ALTERAR_REDE_WIFI_PRINCIPAL) {
+                ACAO_MESTRE_ALTERAR_REDE_WIFI_PRINCIPAL ||
+            solicitacao_acao.acao ==
+                ACAO_MESTRE_DEFINIR_REDE_WIFI_SALVA_COMO_PRINCIPAL) {
             // A política do mestre permite sessões Wi-Fi de até 180 s.
             tempo_limite = pdMS_TO_TICKS(185000);
         }
+    } else if (comando == COMANDO_OBTER_CONTROLE_REMOTO) {
+        carga_solicitacao = &formato_controle_remoto;
+        tamanho_carga_solicitacao = sizeof(formato_controle_remoto);
+    } else if (comando == COMANDO_OBTER_TAREFAS_MESTRE) {
+        char inicio_texto[8] = {0};
+        uint32_t inicio = 0;
+        const esp_err_t leitura = httpd_query_key_value(consulta_url, "inicio", inicio_texto,
+                                                       sizeof(inicio_texto));
+        if (leitura != ESP_ERR_NOT_FOUND &&
+            (leitura != ESP_OK || !converter_uint32(inicio_texto, &inicio) ||
+             inicio >= COMANDO_MAXIMO_TAREFAS_MESTRE || inicio % COMANDO_TAREFAS_MESTRE_POR_PAGINA != 0)) {
+            return enviar_json_comando(requisicao, "400 Bad Request",
+                "{\"ok\":false,\"erro\":\"página de tarefas inválida\"}");
+        }
+        inicio_tarefas = (uint8_t)inicio;
+        carga_solicitacao = &inicio_tarefas;
+        tamanho_carga_solicitacao = sizeof(inicio_tarefas);
     } else if (comando == COMANDO_OBTER_REDE_WIFI_SALVA) {
         char indice_texto[8] = {0};
         uint32_t indice = 0;
@@ -614,6 +719,14 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
             comando, &solicitacao_acao, sizeof(solicitacao_acao), resposta,
             sizeof(resposta), &tamanho_resposta, &resultado, tempo_limite,
             &informacoes);
+    }
+    if (erro == ESP_OK && resultado == RESPOSTA_COMANDO_CARGA_INVALIDA &&
+        comando == COMANDO_OBTER_CONTROLE_REMOTO) {
+        // O mestre anterior a v7 aceita apenas a consulta sem carga.
+        tamanho_resposta = 0;
+        erro = servico_comandos_satelite_solicitar_detalhado(
+            comando, NULL, 0, resposta, sizeof(resposta), &tamanho_resposta,
+            &resultado, tempo_limite, &informacoes);
     }
     if (erro != ESP_OK) {
         if (acao) {
@@ -696,6 +809,101 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
             (unsigned long)dados.causas_ativas,
             (unsigned long)dados.tempo_ativo_ms, (unsigned long)dados.heap_livre,
             (unsigned long)dados.erros_historicos);
+    } else if (comando == COMANDO_OBTER_TAREFAS_MESTRE) {
+        resposta_tarefas_mestre_t dados;
+        if (tamanho_resposta != sizeof(dados) || resposta[0] != COMANDO_FORMATO_TAREFAS_MESTRE)
+            return enviar_json_comando(requisicao, "502 Bad Gateway",
+                "{\"ok\":false,\"erro\":\"formato de tarefas não suportado\"}");
+        memcpy(&dados, resposta, sizeof(dados));
+        const unsigned disponiveis = dados.total > dados.inicio ? dados.total - dados.inicio : 0;
+        if (dados.inicio != inicio_tarefas || dados.total > COMANDO_MAXIMO_TAREFAS_MESTRE ||
+            dados.quantidade > COMANDO_TAREFAS_MESTRE_POR_PAGINA || dados.quantidade > disponiveis)
+            return enviar_json_comando(requisicao, "502 Bad Gateway",
+                "{\"ok\":false,\"erro\":\"página de tarefas incompatível\"}");
+        tamanho = snprintf(json, sizeof(json),
+            "{\"ok\":true,\"consulta\":\"tarefas_mestre\",\"comando\":%u,\"solicitacao\":%lu,"
+            "\"resultado\":0,\"tentativas\":%u,\"duracao_ms\":%lu,\"versao_formato\":%u,\"valido\":%s,"
+            "\"coletado_em_ms\":%llu,\"inicio\":%u,\"total\":%u,\"quantidade\":%u,\"tarefas\":[",
+            (unsigned)comando, (unsigned long)informacoes.identificador,
+            (unsigned)informacoes.tentativas, (unsigned long)informacoes.duracao_ms,
+            (unsigned)dados.versao_formato, dados.valido ? "true" : "false",
+            (unsigned long long)dados.coletado_em_ms, (unsigned)dados.inicio,
+            (unsigned)dados.total, (unsigned)dados.quantidade);
+        for (unsigned i = 0; i < dados.quantidade && tamanho >= 0 && tamanho < (int)sizeof(json); ++i) {
+            tarefa_diagnostico_mestre_t *tarefa = &dados.tarefas[i];
+            char nome[sizeof(tarefa->nome) * 2];
+            tarefa->nome[sizeof(tarefa->nome) - 1] = '\0';
+            escapar_texto_json(nome, sizeof(nome), tarefa->nome);
+            const int escrito = snprintf(json + tamanho, sizeof(json) - (size_t)tamanho,
+                "%s{\"nome\":\"%s\",\"pilha_reservada_bytes\":%lu,\"pilha_minima_livre_bytes\":%lu,"
+                "\"prioridade\":%u,\"nucleo\":%d,\"estado\":%u,\"cpu_decimos\":%u,\"cpu_valida\":%s}",
+                i == 0 ? "" : ",", nome, (unsigned long)tarefa->pilha_reservada_bytes,
+                (unsigned long)tarefa->pilha_minima_livre_bytes, (unsigned)tarefa->prioridade,
+                (int)tarefa->nucleo, (unsigned)tarefa->estado, (unsigned)tarefa->cpu_decimos,
+                tarefa->cpu_valida ? "true" : "false");
+            tamanho = escrito < 0 ? escrito : tamanho + escrito;
+        }
+        if (tamanho >= 0 && tamanho < (int)sizeof(json))
+            tamanho += snprintf(json + tamanho, sizeof(json) - (size_t)tamanho, "]}");
+    } else if (comando == COMANDO_OBTER_LOGS_TERMINAL) {
+        resposta_logs_terminal_t dados;
+        if (tamanho_resposta != sizeof(dados) || resposta[0] != COMANDO_FORMATO_LOGS_TERMINAL)
+            return enviar_json_comando(requisicao, "502 Bad Gateway",
+                "{\"ok\":false,\"erro\":\"formato de logs do terminal não suportado\"}");
+        memcpy(&dados, resposta, sizeof(dados));
+        tamanho = snprintf(json, sizeof(json),
+            "{\"ok\":true,\"consulta\":\"logs_terminal\",\"comando\":%u,\"solicitacao\":%lu,"
+            "\"resultado\":0,\"tentativas\":%u,\"duracao_ms\":%lu,\"versao_formato\":%u,"
+            "\"nivel_global\":%u,\"apenas_avisos_projeto\":%s,\"cores\":%s,\"fontes\":[",
+            (unsigned)comando, (unsigned long)informacoes.identificador,
+            (unsigned)informacoes.tentativas, (unsigned long)informacoes.duracao_ms,
+            (unsigned)dados.versao_formato, (unsigned)dados.nivel_global,
+            dados.apenas_avisos_projeto ? "true" : "false", dados.cores ? "true" : "false");
+        for (unsigned i = 0; i < COMANDO_FONTES_LOG_TERMINAL &&
+                             tamanho >= 0 && tamanho < (int)sizeof(json); ++i) {
+            const unsigned nivel = dados.niveis_fontes[i];
+            const unsigned efetivo = dados.apenas_avisos_projeto && nivel > COMANDO_NIVEL_LOG_AVISOS
+                                        ? COMANDO_NIVEL_LOG_AVISOS : nivel;
+            const int escrito = snprintf(json + tamanho, sizeof(json) - (size_t)tamanho,
+                "%s{\"id\":%u,\"nivel\":%u,\"nivel_efetivo\":%u}", i == 0 ? "" : ",", i, nivel, efetivo);
+            tamanho = escrito < 0 ? escrito : tamanho + escrito;
+        }
+        if (tamanho >= 0 && tamanho < (int)sizeof(json))
+            tamanho += snprintf(json + tamanho, sizeof(json) - (size_t)tamanho, "]}");
+    } else if (comando == COMANDO_OBTER_SENSORES_MESTRE) {
+        resposta_sensores_mestre_t dados;
+        if (tamanho_resposta != sizeof(dados) || resposta[0] != COMANDO_FORMATO_SENSORES_MESTRE)
+            return enviar_json_comando(requisicao, "502 Bad Gateway",
+                "{\"ok\":false,\"erro\":\"formato de sensores não suportado\"}");
+        memcpy(&dados, resposta, sizeof(dados));
+        tamanho = snprintf(json, sizeof(json),
+            "{\"ok\":true,\"consulta\":\"sensores\",\"comando\":%u,\"solicitacao\":%lu,"
+            "\"resultado\":0,\"tentativas\":%u,\"duracao_ms\":%lu,"
+            "\"versao_formato\":%u,\"ativos\":%u,\"validos\":%u,\"controle_permitido\":%s,"
+            "\"adc_bruto\":%u,\"acelerometro_bruto\":[%d,%d,%d],\"giroscopio_bruto\":[%d,%d,%d],"
+            "\"temperatura_mpu_c\":%.2f,\"temperatura_esp_c\":%.2f,"
+            "\"esquerda\":{\"contagem\":%llu,\"velocidade_kmh\":%.2f},"
+            "\"direita\":{\"contagem\":%llu,\"velocidade_kmh\":%.2f},"
+            "\"ina228\":{\"tensao_v\":%.4f,\"corrente_a\":%.4f,\"queda_shunt_mv\":%.4f,"
+            "\"temperatura_c\":%.2f,\"diagnostico\":%u},"
+            "\"i2c\":{\"operacoes_ok\":%lu,\"erros\":%lu,\"sondagens_ok\":%lu,"
+            "\"enderecos_ausentes\":%lu,\"ultimo_erro\":%ld}}",
+            (unsigned)comando, (unsigned long)informacoes.identificador,
+            (unsigned)informacoes.tentativas, (unsigned long)informacoes.duracao_ms,
+            (unsigned)dados.versao_formato, (unsigned)dados.ativos,
+            (unsigned)dados.validos, dados.controle_permitido ? "true" : "false",
+            (unsigned)dados.adc_bruto,
+            dados.acelerometro_bruto[0], dados.acelerometro_bruto[1], dados.acelerometro_bruto[2],
+            dados.giroscopio_bruto[0], dados.giroscopio_bruto[1], dados.giroscopio_bruto[2],
+            (double)dados.temperatura_mpu_c, dados.temperatura_esp_centesimos / 100.0,
+            (unsigned long long)dados.contagem_esquerda, (double)dados.velocidade_esquerda_kmh,
+            (unsigned long long)dados.contagem_direita, (double)dados.velocidade_direita_kmh,
+            (double)dados.tensao_ina_v, (double)dados.corrente_ina_a,
+            (double)dados.queda_shunt_mv, (double)dados.temperatura_ina_c,
+            (unsigned)dados.diagnostico_ina,
+            (unsigned long)dados.i2c_operacoes_ok, (unsigned long)dados.i2c_erros,
+            (unsigned long)dados.i2c_sondagens_ok, (unsigned long)dados.i2c_enderecos_ausentes,
+            (long)dados.i2c_ultimo_erro);
     } else if (comando == COMANDO_OBTER_DIAGNOSTICO_MESTRE &&
                tamanho_resposta == sizeof(resposta_diagnostico_mestre_t)) {
         resposta_diagnostico_mestre_t dados;
@@ -879,7 +1087,11 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
     } else if (comando == COMANDO_OBTER_CONFIGURACAO_MESTRE &&
                tamanho_resposta == sizeof(resposta_configuracao_mestre_t)) {
         resposta_configuracao_mestre_t dados;
+        char rede_principal[200];
         memcpy(&dados, resposta, sizeof(dados));
+        dados.rede_principal[sizeof(dados.rede_principal) - 1] = '\0';
+        escapar_texto_json(rede_principal, sizeof(rede_principal),
+                           dados.rede_principal);
         tamanho = snprintf(json, sizeof(json),
             "{\"ok\":true,\"consulta\":\"configuracao\",\"comando\":%u,"
             "\"solicitacao\":%lu,\"resultado\":0,\"tentativas\":%u,"
@@ -889,6 +1101,7 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
             "\"cartao_disponivel\":%s,\"amostras_sd\":%lu,"
             "\"arquivos_pendentes\":%lu,\"arquivos_enviados\":%lu,"
             "\"quantidade_redes_wifi\":%u,\"wifi_automatico\":%s,"
+            "\"rede_principal\":\"%s\",\"principal_alterada\":%s,"
             "\"tentativas_wifi\":%u,\"tempo_tentativa_wifi_ms\":%lu,"
             "\"intervalo_tentativas_wifi_ms\":%lu,\"tempo_limite_wifi_ms\":%lu}",
             (unsigned)comando, (unsigned long)informacoes.identificador,
@@ -907,26 +1120,77 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
             (unsigned long)dados.arquivos_enviados,
             (unsigned)dados.quantidade_redes_wifi,
             dados.wifi_automatico ? "true" : "false",
+            rede_principal, dados.principal_alterada ? "true" : "false",
             (unsigned)dados.tentativas_wifi,
             (unsigned long)dados.tempo_tentativa_wifi_ms,
             (unsigned long)dados.intervalo_tentativas_wifi_ms,
             (unsigned long)dados.tempo_limite_wifi_ms);
-    } else if (comando == COMANDO_OBTER_CONTROLE_REMOTO &&
-               tamanho_resposta == sizeof(estado_controle_remoto_t)) {
-        estado_controle_remoto_t dados;
-        memcpy(&dados, resposta, sizeof(dados));
-        if (dados.formato != CONTROLE_REMOTO_FORMATO)
-            return httpd_resp_send_err(requisicao, HTTPD_500_INTERNAL_SERVER_ERROR, "Formato de controle remoto incompatível");
+    } else if (comando == COMANDO_OBTER_CONTROLE_REMOTO) {
+        const bool atual = tamanho_resposta == sizeof(estado_controle_remoto_t) &&
+            resposta[0] == CONTROLE_REMOTO_FORMATO;
+        const bool legado = tamanho_resposta == CONTROLE_REMOTO_TAMANHO_LEGADO &&
+            resposta[0] == CONTROLE_REMOTO_FORMATO_LEGADO;
+        if (!atual && !legado)
+            return enviar_json_comando(requisicao, "502 Bad Gateway",
+                "{\"ok\":false,\"erro\":\"formato de controle remoto incompatível\"}");
+        estado_controle_remoto_t dados = {0};
+        memcpy(&dados, resposta, tamanho_resposta);
+        char rearme_restante[11] = "null";
+        if (atual)
+            snprintf(rearme_restante, sizeof(rearme_restante), "%lu",
+                (unsigned long)dados.rearme_restante_ms);
         tamanho = snprintf(json, sizeof(json),
             "{\"ok\":true,\"formato\":%u,\"atuacao_habilitada\":%s,"
-            "\"marcha_solicitada\":%u,\"parada_solicitada\":%s,"
-            "\"velocidade_maxima_centesimos_kmh\":%lu,\"aceleracao_maxima_milesimos_ms2\":%lu,"
-            "\"revisao\":%lu,\"alterado_em_ms\":%lu}",
+            "\"faixa_marcha_solicitada\":%u,\"faixa_marcha_fisica\":%u,"
+            "\"faixa_marcha_maxima\":%u,"
+            "\"parada_solicitada\":%s,\"corte_por_rele_solicitado\":%s,"
+            "\"modo_a_aterrar_solicitado\":%s,\"modo_b_aterrar_solicitado\":%s,"
+            "\"reversao_solicitada\":%s,\"reversao_acionar_solicitado\":%s,"
+            "\"reversao_permitida\":%s,\"rearme_restante_ms\":%s,"
+            "\"estado_operacao\":%u,\"bloqueios\":%u,"
+            "\"acelerador_maximo_decimos_percentual\":%u,"
+            "\"acelerador_lido_decimos_percentual\":%u,"
+            "\"acelerador_permitido_decimos_percentual\":%u,"
+            "\"velocidade_maxima_centesimos_kmh\":%lu,"
+            "\"velocidade_medida_centesimos_kmh\":%lu,\"aceleracao_medida_milesimos_ms2\":%ld,"
+            "\"parada_restante_ms\":%lu,\"amostra_pedal_restante_ms\":%lu,"
+            "\"revisao\":%lu,\"alterado_em_ms\":%lu,"
+            "\"zona_morta_decimos_percentual\":%u,"
+            "\"tensao_minima_saida_mv\":%u,"
+            "\"tensao_pedal_mv\":%u,\"tensao_dac_mv\":%u,"
+            "\"dac_disponivel\":%s,\"pedal_disponivel\":%s,"
+            "\"partida_concluida\":%s,\"armamento_inicial_pendente\":%s,"
+            "\"ota_em_andamento\":%s,"
+            "\"dac_zero_confirmado\":%s}",
             dados.formato, dados.atuacao_habilitada ? "true" : "false",
-            dados.marcha_solicitada, dados.parada_solicitada ? "true" : "false",
+            dados.faixa_marcha_solicitada, dados.faixa_marcha_fisica,
+            dados.faixa_marcha_maxima,
+            dados.parada_solicitada ? "true" : "false",
+            dados.corte_por_rele_solicitado ? "true" : "false",
+            dados.modo_a_aterrar_solicitado ? "true" : "false",
+            dados.modo_b_aterrar_solicitado ? "true" : "false",
+            dados.reversao_solicitada ? "true" : "false",
+            dados.reversao_acionar_solicitado ? "true" : "false",
+            dados.reversao_permitida ? "true" : "false", rearme_restante,
+            dados.estado_operacao, dados.bloqueios,
+            dados.acelerador_maximo_decimos_percentual,
+            dados.acelerador_lido_decimos_percentual,
+            dados.acelerador_permitido_decimos_percentual,
             (unsigned long)dados.velocidade_maxima_centesimos_kmh,
-            (unsigned long)dados.aceleracao_maxima_milesimos_ms2,
-            (unsigned long)dados.revisao, (unsigned long)dados.alterado_em_ms);
+            (unsigned long)dados.velocidade_medida_centesimos_kmh,
+            (long)dados.aceleracao_medida_milesimos_ms2,
+            (unsigned long)dados.parada_restante_ms,
+            (unsigned long)dados.amostra_pedal_restante_ms,
+            (unsigned long)dados.revisao, (unsigned long)dados.alterado_em_ms,
+            dados.zona_morta_decimos_percentual,
+            dados.tensao_minima_saida_mv, dados.tensao_pedal_mv,
+            dados.tensao_dac_mv,
+            dados.dac_disponivel ? "true" : "false",
+            dados.pedal_disponivel ? "true" : "false",
+            dados.partida_concluida ? "true" : "false",
+            dados.armamento_inicial_pendente ? "true" : "false",
+            dados.ota_em_andamento ? "true" : "false",
+            dados.dac_zero_confirmado ? "true" : "false");
     } else if (comando == COMANDO_OBTER_ESTADO_SIMULADOR &&
                tamanho_resposta == sizeof(resposta_simulador_mestre_t)) {
         resposta_simulador_mestre_t dados;

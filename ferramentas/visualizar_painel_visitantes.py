@@ -7,6 +7,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from previa_painel import adicionar_opcoes_acesso, selecionar_endereco, servir_previa
+
 WEB_DIR = Path(__file__).resolve().parents[1] / "firmware" / "visitantes-s3" / "web"
 sys.path.insert(0, str(WEB_DIR))
 from gerar_painel import montar_html
@@ -15,7 +17,7 @@ from gerar_painel import montar_html
 def telemetria_simulada(inicio: float) -> dict:
     segundos = max(0.0, time.monotonic() - inicio)
     semente = int(inicio * 1_000_000) & 0xffffffff
-    episodio, fase_s = divmod(segundos, 45.0)
+    episodio, fase_s = divmod(min(segundos, 220.0), 45.0)
     episodio = int(episodio)
 
     def sorteio(indice: int, canal: int) -> float:
@@ -85,8 +87,13 @@ def telemetria_simulada(inicio: float) -> dict:
                 acelerador = 8 + velocidade * 0.42
             break
 
-    carga = max(35, 82 - (percurso - 1200) / 1000 * 0.4)
-    corrente = -freio * 0.12 * min(1, velocidade / 10) if freio else (2 + acelerador * 0.28 if acelerador else 0.8)
+    carga = max(0.0, 88.0 - int(segundos / 0.25) * 0.1)
+    if carga == 0.0:
+        marcha = 0
+        velocidade = aceleracao = acelerador = freio = 0.0
+    corrente = 0.0 if carga == 0.0 else (
+        -freio * 0.12 * min(1, velocidade / 10) if freio else
+        (2 + acelerador * 0.28 if acelerador else 0.8))
     tensao = 13.1 - (100 - carga) * 0.006 - corrente * 0.004
     potencia = round(tensao * corrente)
     return {
@@ -112,9 +119,9 @@ def telemetria_simulada(inicio: float) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--porta", type=int, default=8765, help="porta local (padrão: 8765)")
-    parser.add_argument("--rede", action="store_true", help="permitir acesso de outros dispositivos na rede local")
+    adicionar_opcoes_acesso(parser, 8765)
     args = parser.parse_args()
+    endereco = selecionar_endereco(args.rede)
     inicio = time.monotonic()
 
     class Handler(BaseHTTPRequestHandler):
@@ -139,16 +146,8 @@ def main() -> None:
             self.end_headers()
             self.wfile.write(body)
 
-    endereco = "0.0.0.0" if args.rede else "127.0.0.1"
     with ThreadingHTTPServer((endereco, args.porta), Handler) as servidor:
-        print(f"No PC: http://127.0.0.1:{args.porta}/", flush=True)
-        if args.rede:
-            print(f"No celular: http://<IP_IPV4_DO_PC>:{args.porta}/ (mesma rede Wi-Fi)", flush=True)
-        print("Ctrl+C encerra.", flush=True)
-        try:
-            servidor.serve_forever()
-        except KeyboardInterrupt:
-            print("\nPrévia encerrada.")
+        servir_previa(servidor)
 
 
 if __name__ == "__main__":

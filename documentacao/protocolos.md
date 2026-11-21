@@ -107,6 +107,12 @@ cada botão da interface. Consultas de configuração e de redes salvas permanec
 separadas por não terem efeito colateral. A repetição de uma solicitação devolve
 a resposta memorizada e não executa a ação novamente.
 
+`ACAO_MESTRE_DEFINIR_REDE_WIFI_SALVA_COMO_PRINCIPAL` (ação 21) recebe o índice
+da rede secundária e a permissão administrativa. O mestre testa a conexão,
+grava o perfil como principal e retira essa rede da lista de secundárias.
+`resposta_configuracao_mestre_t` inclui o SSID principal e se ele foi alterado
+em relação ao padrão do firmware, permitindo a confirmação posterior na página.
+
 `COMANDO_OBTER_ESTADO_SIMULADOR` (código 37) consulta o simulador e
 `ACAO_MESTRE_DEFINIR_SIMULADOR` (ação 16, valor 0 ou 1) altera sua fonte.
 A resposta informa estado atual, padrão compilado, dinâmica e total de amostras geradas. A mudança
@@ -142,9 +148,14 @@ duplicação e retorno, além da recuperação do parser após quadro incompleto
 corrompido. Ela não é incluída no firmware normal e pode ser executada com o
 executor de testes do PlatformIO no ambiente do mestre.
 
-## Preparação de controle remoto
+## Controle de marcha e acelerador
 
-A Equipe pode solicitar marcha, limites de velocidade e aceleração e parada
-remota ao mestre. O estado é apenas preparatório, sem atuação física. Consulte
-[Controle remoto](controle-remoto.md) para o contrato UART/HTTP, intertravamentos,
-reinício, acompanhamento no painel e requisitos da integração futura.
+A Equipe usa ações do comando UART 31 para faixa L/M/H, faixa máxima, sentido,
+limites de velocidade e pedal, e parada. Não há comando remoto para acelerar.
+A consulta UART 41 retorna o estado compactado
+no formato 6, incluindo marcha física, bloqueios, estado da partida, armamento inicial e OTA, medições, zona morta, tensão mínima,
+estado do pedal e do DAC e prazos restantes. O quadro de
+comandos permanece v1; os campos e unidades novos estão em
+[`controle_remoto.h`](../firmware/compartilhado/protocolos/controle_remoto.h).
+Consulte [Controle de marcha e acelerador](controle-remoto.md) para os IDs,
+faixas, intertravamentos e limite da integração sem atuadores.
