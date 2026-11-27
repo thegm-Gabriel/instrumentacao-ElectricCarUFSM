@@ -30,7 +30,5 @@ esp_err_t gerenciador_uart_iniciar(void);
 
 // Funções genéricas para protocolos atuais e futuros.
 esp_err_t gerenciador_uart_enviar(const void *dados, size_t tamanho);
-esp_err_t gerenciador_uart_enviar_com_timeout(const void *dados, size_t tamanho,
-                                              TickType_t tempo_limite);
 int gerenciador_uart_receber(void *buffer, size_t capacidade, TickType_t tempo_limite);
 void gerenciador_uart_obter_estatisticas(estatisticas_gerenciador_uart_t *estatisticas);

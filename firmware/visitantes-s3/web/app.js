@@ -4,23 +4,29 @@
   const $ = id => document.getElementById(id);
   const format = (value, digits = 1) => value.toLocaleString('pt-BR', {minimumFractionDigits:digits, maximumFractionDigits:digits});
   const finite = value => typeof value === 'number' && Number.isFinite(value);
-  const speedGaugeMax = 35;
+  const speedScaleMax = 35;
   const powerVisualMaxW = 1000;
   const consumptionMinMeters = 20;
+
+  function setScaleFill(id, value, maximum = 100) {
+    const percentage = value === null ? 0 : Math.min(100, Math.max(0, value / maximum * 100));
+    $(id).style.setProperty('--fill-level', percentage + '%');
+  }
+
   function updatePedal(id, value) {
     const valid = finite(value) && value >= 0 && value <= 100;
     animateValue(id + '-value', valid ? value : null, 0, '', '%', current => {
-      $(id + '-fill').style.setProperty('--fill-level', Math.max(0, Math.min(100, current || 0)) + '%');
+      setScaleFill(id + '-fill', current);
     });
   }
   const state = {
-    lastData:null, lastSampleAt:0, firstSampleAt:0, lastSequence:null,
+    lastData:null, lastSampleAt:0, lastSequence:null,
     lastArrivalAt:0, observedPeriodMs:500,
     previousSpeedForTone:null, speedToneTimer:null,
-    samples:[], gapOpen:false, rangeMinutes:1, chartSignal:'power-current',
-    firstDistance:null, previousEnergy:null, energyWh:null,
+    samples:[], gapOpen:false, rangeMinutes:1, electricKeys:['power','current'],
+    previousEnergy:null,
     consumptionWh:0, consumptionMeters:0,
-    chartLimits:{}, hovering:{}, fetching:false,
+    hovering:{}, fetching:false,
   };
 
   function setValue(id, text, unit = '') {
@@ -65,37 +71,35 @@
     Object.keys(animatedValues).forEach(id => {if (animatedValues[id].frame) cancelAnimationFrame(animatedValues[id].frame); delete animatedValues[id];});
   }
 
-  const speedPeak = {last:null,lastAt:0,candidate:0,candidateAt:0,armed:true,trough:0,cooldownUntil:0,timer:null,labelTimer:null};
-  function hideSpeedPeak() {
-    clearTimeout(speedPeak.timer);
-    clearTimeout(speedPeak.labelTimer);
-    speedPeak.timer=null;speedPeak.labelTimer=null;
-    $('speed-peak-marker').classList.remove('is-visible');
-    $('speed-peak-label').classList.remove('visible');
+  function hidePeak(peak) {
+    clearTimeout(peak.timer);
+    peak.timer = null;
+    $(peak.markerId).classList.remove('is-visible');
   }
-  function resetSpeedPeak() {
-    hideSpeedPeak();
-    Object.assign(speedPeak,{last:null,lastAt:0,candidate:0,candidateAt:0,armed:true,trough:0,cooldownUntil:0});
-  }
-  function showSpeedPeak(value) {
-    const angle=Math.PI*(1-Math.min(1,value/speedGaugeMax));
-    const point=radius=>[(160+radius*Math.cos(angle)).toFixed(2),(165-radius*Math.sin(angle)).toFixed(2)];
-    const from=point(113.5),to=point(119);
-    const marker=$('speed-peak-marker');
-    marker.querySelectorAll('line').forEach(line=>{
-      line.setAttribute('x1',from[0]);line.setAttribute('y1',from[1]);
-      line.setAttribute('x2',to[0]);line.setAttribute('y2',to[1]);
-    });
+
+  function showPeak(peak, percentage, regenerating = false) {
+    const marker = $(peak.markerId);
+    const position = Math.min(100, Math.max(0, percentage));
+    marker.style.setProperty('--peak-position', position + '%');
+    marker.style.setProperty('--peak-duration', peak.durationMs + 'ms');
+    marker.classList.toggle('is-regen', regenerating);
     marker.classList.remove('is-visible');
     void marker.getBoundingClientRect();
     marker.classList.add('is-visible');
-    $('speed-peak-label').textContent='Pico '+format(value,1)+' km/h';
-    $('speed-peak-label').classList.add('visible');
-    clearTimeout(speedPeak.timer);
-    clearTimeout(speedPeak.labelTimer);
-    speedPeak.labelTimer=setTimeout(()=>$('speed-peak-label').classList.remove('visible'),1050);
-    speedPeak.timer=setTimeout(hideSpeedPeak,1600);
+    clearTimeout(peak.timer);
+    peak.timer = setTimeout(() => hidePeak(peak), peak.durationMs);
   }
+
+  const speedPeak = {
+    markerId:'speed-peak-marker', durationMs:1600, timer:null,
+    last:null, lastAt:0, candidate:0, candidateAt:0, armed:true, trough:0, cooldownUntil:0,
+  };
+
+  function resetSpeedPeak() {
+    hidePeak(speedPeak);
+    Object.assign(speedPeak,{last:null,lastAt:0,candidate:0,candidateAt:0,armed:true,trough:0,cooldownUntil:0});
+  }
+
   function trackSpeedPeak(speed) {
     const now=performance.now();
     if(!finite(speed)){resetSpeedPeak();return;}
@@ -109,7 +113,7 @@
       if(now-speedPeak.candidateAt>3500){speedPeak.candidate=speedPeak.last;speedPeak.candidateAt=speedPeak.lastAt;}
       if(speed>speedPeak.candidate){speedPeak.candidate=speed;speedPeak.candidateAt=now;}
       else if(speedPeak.candidate>=5&&speedPeak.candidate-speed>=1.4&&dropRate>=2.3&&now>=speedPeak.cooldownUntil){
-        showSpeedPeak(speedPeak.candidate);
+        showPeak(speedPeak, speedPeak.candidate / speedScaleMax * 100);
         speedPeak.armed=false;speedPeak.trough=speed;speedPeak.cooldownUntil=now+3800;
       }
     }else{
@@ -119,26 +123,16 @@
     speedPeak.last=speed;speedPeak.lastAt=now;
   }
 
-  const powerPeak={candidate:null,candidateAt:0,lastAt:0,cooldownUntil:0,timer:null};
-  function hidePowerPeak() {
-    clearTimeout(powerPeak.timer);
-    powerPeak.timer=null;
-    $('power-peak-marker').classList.remove('is-visible');
-  }
+  const powerPeak = {
+    markerId:'power-peak-marker', durationMs:1000, timer:null,
+    candidate:null, candidateAt:0, lastAt:0, cooldownUntil:0,
+  };
+
   function resetPowerPeak() {
-    hidePowerPeak();
+    hidePeak(powerPeak);
     Object.assign(powerPeak,{candidate:null,candidateAt:0,lastAt:0,cooldownUntil:0});
   }
-  function showPowerPeak(value) {
-    const marker=$('power-peak-marker');
-    marker.style.setProperty('--power-peak-position', Math.min(99, Math.max(1, Math.abs(value) / powerVisualMaxW * 100)) + '%');
-    marker.classList.toggle('is-regen',value<0);
-    marker.classList.remove('is-visible');
-    void marker.getBoundingClientRect();
-    marker.classList.add('is-visible');
-    clearTimeout(powerPeak.timer);
-    powerPeak.timer=setTimeout(hidePowerPeak,1000);
-  }
+
   function trackPowerPeak(value) {
     const now=performance.now();
     if(!finite(value)){resetPowerPeak();return;}
@@ -151,7 +145,7 @@
     const signChanged=Math.sign(value)!==Math.sign(candidate)&&Math.abs(value)>20;
     const fell=Math.abs(candidate)-Math.abs(value)>=Math.max(55,Math.abs(candidate)*.25);
     if(Math.abs(candidate)>=120&&fell&&now>=powerPeak.cooldownUntil){
-      showPowerPeak(candidate);
+      showPeak(powerPeak, Math.abs(candidate) / powerVisualMaxW * 100, candidate < 0);
       powerPeak.cooldownUntil=now+2500;
       powerPeak.candidate=value;powerPeak.candidateAt=now;
     }else if(signChanged||Math.abs(value)>Math.abs(candidate)||now-powerPeak.candidateAt>3500){
@@ -174,9 +168,15 @@
   }
 
   function updateAge() {
-    $('last-update').textContent = state.lastSampleAt ? 'Última leitura ' + elapsedText(Date.now() - state.lastSampleAt) : 'Sem leitura';
-    if (state.firstSampleAt) {const elapsed=Date.now()-state.firstSampleAt;setValue('session-value',elapsed<60000?format(Math.floor(elapsed/1000),0)+' s':format(elapsed/60000,1)+' min');}
+    const lastUpdate = $('last-update');
+    lastUpdate.hidden = !state.lastSampleAt;
+    if (state.lastSampleAt) {
+      const age = elapsedText(Date.now() - state.lastSampleAt);
+      const heldSimulation = state.lastData?.simulado === true && document.body.dataset.feed !== 'demo';
+      lastUpdate.textContent = (heldSimulation ? 'Simulação · ' : 'Última leitura ') + age;
+    }
     if (state.lastSampleAt && Date.now() - state.lastSampleAt > 2500 && !state.gapOpen) addGap();
+    updateVehicleMotion();
   }
 
   function resetSession() {
@@ -189,20 +189,19 @@
     $('speed-card').classList.remove('is-slowing');
     state.samples = [];
     state.gapOpen = false;
-    state.firstSampleAt = 0;
-    state.firstDistance = null;
     state.previousEnergy = null;
-    state.energyWh = null;
     state.consumptionWh = 0;
     state.consumptionMeters = 0;
-    state.chartLimits = {};
+    state.hovering = {};
+    $('speed-tip').hidden = true;
+    $('power-tip').hidden = true;
     state.lastArrivalAt = 0;
     state.observedPeriodMs = 500;
   }
 
   function addGap() {
     if (state.gapOpen || !state.samples.length) return;
-    state.samples.push({time:Date.now(), speed:null, power:null, accel:null, battery:null, current:null, voltage:null});
+    state.samples.push({time:Date.now()});
     state.gapOpen = true;
     state.previousEnergy = null;
     drawCharts();
@@ -212,15 +211,33 @@
     return finite(data[key]) ? data[key] / divisor : null;
   }
 
-  function updateReadings(data) {
-    const simulated = data.simulado === true;
-    const electrical = data.eletrica_disponivel === true;
-    const speed = readNumber(data, 'velocidade_centesimos_kmh', 100);
-    const power = electrical ? readNumber(data, 'potencia_w') : null;
-    const charge = simulated ? readNumber(data, 'carga_decimos_percentual', 10) : null;
-    const voltage = electrical ? readNumber(data, 'tensao_pacote_mv', 1000) : null;
-    const current = electrical ? readNumber(data, 'corrente_centesimos_a', 100) : null;
-    const range = readNumber(data, 'autonomia_decimos_km', 10);
+  const trackMotion = $('vehicle-track-lines').animate?.(
+    [{transform: 'translateX(0)'}, {transform: 'translateX(var(--track-step))'}],
+    {duration: 540, iterations: Infinity}
+  );
+  trackMotion?.pause();
+
+  function updateVehicleMotion() {
+    if (!trackMotion) return;
+
+    const feed = document.body.dataset.feed;
+    const speed = state.lastData ? readNumber(state.lastData, 'velocidade_centesimos_kmh', 100) : null;
+    const fresh = (feed === 'live' || feed === 'demo') && Date.now() - state.lastSampleAt < 2000;
+    if (!fresh || speed === null || speed < 0.5 || reducedMotion.matches || document.hidden) {
+      if (trackMotion.playState !== 'paused') trackMotion.pause();
+      return;
+    }
+
+    const rate = speed / 12;
+    if (trackMotion.playbackRate !== rate) {
+      if (trackMotion.updatePlaybackRate) trackMotion.updatePlaybackRate(rate);
+      else trackMotion.playbackRate = rate;
+    }
+    if (trackMotion.playState !== 'running') trackMotion.play();
+  }
+
+  function updateReadings(data, sample, distance) {
+    const {speed, power, battery:charge, voltage, current, range, consumption} = sample;
 
     const previousSpeed=state.previousSpeedForTone;
     if(finite(speed)&&finite(previousSpeed)&&previousSpeed-speed>=.18){
@@ -235,19 +252,16 @@
     state.previousSpeedForTone=speed;
     trackSpeedPeak(speed);
     animateValue('speed-value', speed, 1, '', '', current => {
-      const fraction = current === null ? 0 : Math.min(1, Math.max(0, current / speedGaugeMax));
-      $('speed-arc').style.strokeDasharray = (fraction * 100) + ' 101';
-      $('speed-arc').style.opacity = fraction === 0 ? '0' : String(Math.min(1, fraction * 70));
+      setScaleFill('speed-fill', current, speedScaleMax);
     });
-    $('motion-state').textContent = speed === null ? 'Aguardando dados' : speed < 0.5 ? 'Parado' : 'Em movimento';
-    $('speed-source').textContent = simulated ? 'Leitura simulada' : 'Leitura do veículo';
+    $('motion-state').textContent = speed === null ? 'Sem leitura' : speed < 0.5 ? 'Parado' : 'Em movimento';
     updatePedal('throttle', readNumber(data, 'acelerador_decimos_percentual', 10));
     updatePedal('brake', readNumber(data, 'freio_decimos_percentual', 10));
 
     animateValue('battery-value', charge, 2, charge === null ? '' : '%', '', current => {
-      $('battery-fill').style.width = current === null ? '0%' : Math.max(0, Math.min(100, current)) + '%';
+      setScaleFill('battery-fill', current);
     });
-    $('battery-hint').textContent = charge === null ? '' : 'Estimativa simulada';
+    $('battery-hint').textContent = charge === null ? '' : 'Estimativa';
 
     const powerUnit = power === null ? '' : Math.abs(power) >= 1000 ? 'kW' : 'W';
     const powerScale = powerUnit === 'kW' ? 1000 : 1;
@@ -256,16 +270,11 @@
     const powerCard = $('power-motion-card');
     const rail = $('power-rail');
     powerCard.hidden = power === null;
-    document.querySelector('.primary-stack').classList.toggle('has-power', power !== null);
     trackPowerPeak(power);
     animateValue('power-rail-value', powerDisplay, powerDigits, powerUnit, '', reading => {
       const watts = reading === null ? null : reading * powerScale;
-      const intensity = watts === null ? 0 : Math.min(1, Math.abs(watts) / powerVisualMaxW);
-      const level = (intensity * 100) + '%';
-      powerCard.style.setProperty('--power-intensity', level);
-      powerCard.style.setProperty('--power-glow', (intensity * .3).toFixed(3));
       powerCard.classList.toggle('is-regen', watts !== null && watts < 0);
-      $('power-rail-fill').style.setProperty('--fill-level', level);
+      setScaleFill('power-rail-fill', Math.abs(watts ?? 0), powerVisualMaxW);
       const flow = watts === null ? '' : watts < 0 ? 'Regeneração' : watts > 0 ? 'Consumo' : 'Sem fluxo elétrico';
       $('power-flow').textContent = flow;
       rail.setAttribute('aria-label', watts === null ? 'Potência elétrica sem leitura' :
@@ -273,35 +282,18 @@
     });
 
     animateValue('range-value', range, 1, '', ' km');
-    $('range-hint').textContent = range === null ? '' : simulated ? 'Estimativa simulada' : 'Estimativa do veículo';
-    const consumption = power !== null && state.consumptionMeters >= consumptionMinMeters
-      ? state.consumptionWh / (state.consumptionMeters / 1000) : null;
+    $('range-hint').textContent = range === null ? '' : 'Estimativa';
     animateValue('consumption-value', consumption, 1, '', ' Wh/km');
     $('consumption-hint').textContent = power !== null && consumption === null
-      ? 'Mínimo de ' + consumptionMinMeters + ' m com dados elétricos.' : '';
+      ? 'Mínimo de ' + consumptionMinMeters + ' m com dados.' : '';
 
-    const distance = readNumber(data, 'percurso_metros');
     animateValue('trip-value', distance === null ? null : distance / 1000, 2, distance === null ? '' : 'km');
-    $('trip-hint').textContent = distance === null ? '' : simulated ? 'Odômetro simulado' : 'Leitura do veículo';
-    const hasElectricData = charge !== null || power !== null || voltage !== null || current !== null;
-    const showEnergy = hasElectricData || range !== null;
+    const showEnergy = electricChartKeys.some(key => finite(sample[key]));
     $('energy-live-grid').hidden = !showEnergy;
     $('energy-unavailable').hidden = showEnergy;
     $('energy-unavailable').textContent = 'Medição elétrica indisponível no momento.';
-    const showSessionEnergy = power !== null || state.energyWh !== null;
-    $('session-energy-card').hidden = !showSessionEnergy;
-    $('session-grid').classList.toggle('compact', !showSessionEnergy);
-    $('electric-chart-card').hidden = !hasElectricData;
-    $('visitor-chart-grid').classList.toggle('single', !hasElectricData);
     animateValue('voltage-value', voltage, 2, '', ' V');
     animateValue('current-value', current, 2, '', ' A');
-    animateValue('energy-value', state.energyWh, 1, '', ' Wh');
-    if (distance !== null) {
-      if (state.firstDistance === null || distance < state.firstDistance) state.firstDistance = distance;
-      animateValue('distance-value', Math.max(0, distance - state.firstDistance) / 1000, 2, '', ' km');
-    }
-    $('data-note').hidden = !simulated;
-    if (simulated) $('data-note').textContent = 'Demonstração · Os valores apresentados são simulados.';
   }
 
   // Energia e distância do consumo médio devem cobrir os mesmos intervalos.
@@ -314,7 +306,6 @@
         if (before >= 0 && power >= 0) consumed = (before + power) / 2;
         else if (before > 0) consumed = before * before / (2 * (before - power));
         else if (power > 0) consumed = power * power / (2 * (power - before));
-        state.energyWh = (state.energyWh || 0) + consumed * hours;
         if (finite(distance) && finite(state.previousEnergy.distance) && distance >= state.previousEnergy.distance) {
           state.consumptionWh += consumed * hours;
           state.consumptionMeters += distance - state.previousEnergy.distance;
@@ -335,16 +326,28 @@
       if (period >= 200 && period <= 1800) state.observedPeriodMs = state.observedPeriodMs * .75 + period * .25;
     }
     state.lastArrivalAt = now;
-    if (!state.firstSampleAt) state.firstSampleAt = now;
-    const power = data.eletrica_disponivel ? readNumber(data, 'potencia_w') : null;
+    const electrical = data.eletrica_disponivel === true;
+    const power = electrical ? readNumber(data, 'potencia_w') : null;
     accumulateEnergy(power, distance, now);
-    state.samples.push({time:now, speed:readNumber(data, 'velocidade_centesimos_kmh', 100), power,accel:data.aceleracao_disponivel?readNumber(data,'aceleracao_milesimos_ms2',1000):null,battery:data.simulado?readNumber(data,'carga_decimos_percentual',10):null,current:data.eletrica_disponivel?readNumber(data,'corrente_centesimos_a',100):null,voltage:data.eletrica_disponivel?readNumber(data,'tensao_pacote_mv',1000):null});
+    const sample = {
+      time: now,
+      speed: readNumber(data, 'velocidade_centesimos_kmh', 100),
+      accel: data.aceleracao_disponivel ? readNumber(data, 'aceleracao_milesimos_ms2', 1000) : null,
+      voltage: electrical ? readNumber(data, 'tensao_pacote_mv', 1000) : null,
+      current: electrical ? readNumber(data, 'corrente_centesimos_a', 100) : null,
+      power,
+      battery: readNumber(data, 'carga_decimos_percentual', 10),
+      range: readNumber(data, 'autonomia_decimos_km', 10),
+      consumption: power !== null && state.consumptionMeters >= consumptionMinMeters
+        ? state.consumptionWh / (state.consumptionMeters / 1000) : null,
+    };
+    state.samples.push(sample);
     state.samples = state.samples.filter(sample => now - sample.time <= 610000);
     state.gapOpen = false;
     state.lastData = data;
     state.lastSampleAt = now - Math.min(Math.max(data.idade_ms, 0), 2000);
     state.lastSequence = data.sequencia;
-    updateReadings(data);
+    updateReadings(data, sample, distance);
     drawCharts();
   }
 
@@ -358,8 +361,8 @@
       if (!response.ok) throw new Error('Sem resposta');
       const data = await response.json();
       if (data.valido === true && finite(data.idade_ms) && data.idade_ms < 2000) {
-        if (data.sequencia !== state.lastSequence) acceptSample(data);
-        setStatus(data.simulado ? 'demo' : 'live', data.simulado ? 'Simulação ativa' : 'Leituras atuais');
+        if (data.sequencia !== state.lastSequence || data.simulado !== state.lastData?.simulado) acceptSample(data);
+        setStatus(data.simulado ? 'demo' : 'live', data.simulado ? 'Dados simulados' : 'Leituras atuais');
       } else {
         setStatus('stale', 'Dados desatualizados');
         addGap();
@@ -392,20 +395,22 @@
     return Math.ceil(value / step) * step;
   }
 
+  const chartSlots = ['speed', 'power'];
+  const chartColors = {};
+
   const chartSeries={
-    speed:{label:'Velocidade',unit:'km/h',digits:1,axisDigits:0,color:'#63d9f2'},
-    accel:{label:'Aceleração',unit:'m/s²',digits:2,axisDigits:1,color:'#f4bf70'},
-    power:{label:'Potência',unit:'W',digits:0,axisDigits:0,color:'#78d7ae'},
-    current:{label:'Corrente',unit:'A',digits:2,axisDigits:1,color:'#f4bf70'},
-    voltage:{label:'Tensão',unit:'V',digits:1,axisDigits:0,color:'#9bbcf3'},
-    battery:{label:'Carga',unit:'%',digits:1,axisDigits:0,color:'#9bbcf3'}
+    speed:{label:'Velocidade',unit:'km/h',digits:1,axisDigits:0},
+    accel:{label:'Aceleração',unit:'m/s²',digits:2,axisDigits:1},
+    voltage:{label:'Tensão',unit:'V',digits:1,axisDigits:0},
+    current:{label:'Corrente',unit:'A',digits:2,axisDigits:1},
+    power:{label:'Potência',unit:'W',digits:0,axisDigits:0},
+    battery:{label:'Carga da bateria',unit:'%',digits:1,axisDigits:0},
+    range:{label:'Autonomia restante',unit:'km',digits:1,axisDigits:1},
+    consumption:{label:'Consumo médio',unit:'Wh/km',digits:1,axisDigits:1},
   };
-  const chartPairs={
-    'power-current':['power','current'],
-    'voltage-current':['voltage','current'],
-    'power-voltage':['power','voltage'],
-    'battery-power':['battery','power']
-  };
+  const chartTones = ['primary', 'secondary'];
+  const motionChartKeys = ['speed', 'accel'];
+  const electricChartKeys = ['voltage', 'current', 'power', 'battery', 'range', 'consumption'];
   function chartLimit(key, points) {
     const numeric=points.map(point=>point[key]).filter(finite);
     const highest=numeric.length?Math.max(0,...numeric):0;
@@ -420,64 +425,138 @@
     return {min:lowest<0?-niceCeiling(Math.abs(lowest)*1.12,base):0,max:niceCeiling(highest*1.12,base)};
   }
   function drawChart(slot) {
-    const keys=slot==='speed'?['speed','accel']:chartPairs[state.chartSignal];
+    const motion = slot === 'speed';
+    const keys = motion ? motionChartKeys : state.electricKeys;
     const setup=chartSetup($(slot+'-chart'));
     if(!setup)return;
     const {ctx,width:w,height:h}=setup;
-    const plot={left:53,right:w-50,top:27,bottom:h-27};
+    const plot={left:w<360?40:51,right:w-(w<360?41:51),top:24,bottom:h-24};
     const end=Date.now(),start=end-state.rangeMinutes*60000;
     const points=state.samples.filter(point=>point.time>=start&&point.time<=end);
     const limits=keys.map(key=>chartLimit(key,points));
     const x=time=>plot.left+(time-start)/(end-start)*(plot.right-plot.left);
     const y=(value,index)=>Math.max(plot.top,Math.min(plot.bottom,plot.bottom-(value-limits[index].min)/(limits[index].max-limits[index].min)*(plot.bottom-plot.top)));
-    $(slot+'-empty').hidden=points.some(point=>keys.some(key=>finite(point[key])));
-    ctx.font='11px Inter, Segoe UI, sans-serif';ctx.lineWidth=1;
+    const available = keys.map(key => points.some(point => finite(point[key])));
+    const hasPoints = available.some(Boolean);
+    $(slot+'-empty').hidden = hasPoints;
+    const legend = $(motion ? 'speed-chart-legend' : 'electric-chart-legend');
+    Array.from(legend.children).forEach((item, index) => {
+      item.querySelector('small').hidden = !hasPoints || available[index];
+    });
+
+    const palette = chartColors[slot];
+    const colors = chartTones.map(tone => palette[tone]);
+    ctx.font='11px system-ui, sans-serif';ctx.lineWidth=1;
+    ctx.strokeStyle=palette.grid;
     keys.forEach((key,index)=>{
       const series=chartSeries[key];
-      ctx.fillStyle=series.color;ctx.textAlign=index?'right':'left';
+      ctx.fillStyle=colors[index];ctx.textAlign=index?'right':'left';
       ctx.fillText(series.unit,index?w-2:2,14);
     });
     for(let index=0;index<=4;index++){
       const yy=plot.top+(plot.bottom-plot.top)*index/4;
-      ctx.strokeStyle='#385365';ctx.beginPath();ctx.moveTo(plot.left,yy);ctx.lineTo(plot.right,yy);ctx.stroke();
+      ctx.beginPath();ctx.moveTo(plot.left,yy);ctx.lineTo(plot.right,yy);ctx.stroke();
       keys.forEach((key,axis)=>{
+        if (!available[axis]) return;
         const series=chartSeries[key],limit=limits[axis];
         const value=limit.max-(limit.max-limit.min)*index/4;
-        ctx.fillStyle=series.color;ctx.textAlign=axis?'left':'right';
-        ctx.fillText(format(value,series.axisDigits),axis?plot.right+7:plot.left-7,yy+4);
+        ctx.fillStyle=colors[axis];ctx.textAlign=axis?'left':'right';
+        const labelWidth = (axis ? w - plot.right : plot.left) - 9;
+        ctx.fillText(format(value,series.axisDigits),axis?plot.right+7:plot.left-7,yy+4,labelWidth);
       });
     }
-    for(let index=0;index<=2;index++){
-      const xx=plot.left+(plot.right-plot.left)*index/2;
-      ctx.strokeStyle='#2b4354';ctx.beginPath();ctx.moveTo(xx,plot.top);ctx.lineTo(xx,plot.bottom);ctx.stroke();
-      ctx.fillStyle='#b7cbd4';ctx.textAlign=index===0?'left':index===2?'right':'center';
-      ctx.fillText(new Date(start+(end-start)*index/2).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}),xx,h-7);
+    const divisions = w < 360 ? 2 : 4;
+    for (let index = 0; index <= divisions; index++) {
+      const fraction = index / divisions;
+      const xx = plot.left + (plot.right - plot.left) * fraction;
+      ctx.beginPath();ctx.moveTo(xx,plot.top);ctx.lineTo(xx,plot.bottom);ctx.stroke();
+      ctx.fillStyle=palette.axis;ctx.textAlign=index===0?'left':index===divisions?'right':'center';
+      const seconds = Math.round((end - start) * (1 - fraction) / 1000);
+      let label = 'Agora';
+      if (seconds >= 60) label = '−' + Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0');
+      else if (seconds > 0) label = '−' + seconds + ' s';
+      ctx.fillText(label,xx,h-7);
     }
     ctx.save();ctx.beginPath();ctx.rect(plot.left,plot.top,plot.right-plot.left,plot.bottom-plot.top);ctx.clip();
     keys.forEach((key,index)=>{
-      const series=chartSeries[key];
-      ctx.strokeStyle=series.color;ctx.lineWidth=2.4;ctx.lineJoin='round';ctx.lineCap='round';
-      let open=false,count=0,only=null;
-      for(const point of points){
-        if(!finite(point[key])){if(open)ctx.stroke();open=false;continue;}
-        count++;only=point;
-        if(!open){ctx.beginPath();ctx.moveTo(x(point.time),y(point[key],index));open=true;}
-        else ctx.lineTo(x(point.time),y(point[key],index));
+      const color = colors[index];
+      ctx.strokeStyle=color;ctx.lineWidth=index===0?3:1.9;ctx.lineJoin='round';ctx.lineCap='round';
+      let first = null, last = null;
+      const finishSegment = () => {
+        if (!last) return;
+        if (first === last) {
+          ctx.fillStyle = color;
+          ctx.beginPath();ctx.arc(x(last.time),y(last[key],index),2.5,0,Math.PI*2);ctx.fill();
+        } else {
+          ctx.stroke();
+          if (index === 0) {
+            ctx.lineTo(x(last.time), plot.bottom);
+            ctx.lineTo(x(first.time), plot.bottom);
+            ctx.closePath();
+            ctx.fillStyle = palette.fill;
+            ctx.fill();
+          }
+        }
+        first = last = null;
+      };
+      for (const point of points) {
+        if (!finite(point[key])) {
+          finishSegment();
+          continue;
+        }
+        if (first) ctx.lineTo(x(point.time), y(point[key], index));
+        else {
+          ctx.beginPath();ctx.moveTo(x(point.time),y(point[key],index));
+          first = point;
+        }
+        last = point;
       }
-      if(open)ctx.stroke();
+      finishSegment();
       const hover=state.hovering[slot];
-      const dot=hover&&finite(hover[key])&&hover.time>=start&&hover.time<=end?hover:count===1?only:null;
-      if(dot){ctx.fillStyle=series.color;ctx.beginPath();ctx.arc(x(dot.time),y(dot[key],index),hover===dot?4:3,0,Math.PI*2);ctx.fill();}
+      if (hover && finite(hover[key]) && hover.time >= start && hover.time <= end) {
+        ctx.fillStyle=color;ctx.beginPath();ctx.arc(x(hover.time),y(hover[key],index),4,0,Math.PI*2);ctx.fill();
+      }
     });
     ctx.restore();
     state[slot+'ChartGeometry']={start,end,plot,x,y,keys};
   }
 
-  function drawCharts() {
-    const keys=chartPairs[state.chartSignal];
-    $('electric-chart-legend').innerHTML=keys.map(key=>'<span style="--series-color:'+chartSeries[key].color+'">'+chartSeries[key].label+' · '+chartSeries[key].unit+'</span>').join('');
+  function updateChartLegend(id, keys) {
+    $(id).innerHTML = keys.map((key, index) => {
+      const {label, unit} = chartSeries[key];
+      return '<span style="--series-color:var(--chart-' + chartTones[index] + ')">' + label + ' · ' + unit +
+        '<small hidden>· Sem leitura</small></span>';
+    }).join('');
+  }
+
+  function updateElectricChartLabels() {
+    const keys = state.electricKeys;
+    updateChartLegend('electric-chart-legend', keys);
     $('power-chart').setAttribute('aria-label','Gráfico de '+keys.map(key=>chartSeries[key].label.toLowerCase()).join(' e ')+' ao longo do tempo');
-    drawChart('speed');drawChart('power');
+  }
+
+  function drawCharts() {
+    chartSlots.forEach(drawChart);
+  }
+
+  const themeRoot = document.documentElement;
+  const themeToggle = $('theme-toggle');
+  function applyTheme(theme) {
+    const light = theme === 'light';
+    themeRoot.dataset.theme = theme;
+    themeToggle.setAttribute('aria-pressed', String(light));
+    themeToggle.title = light ? 'Ativar tema escuro' : 'Ativar tema claro';
+
+    const style = getComputedStyle(themeRoot);
+    const colors = [...chartTones, 'grid', 'axis', 'fill'];
+    for (const slot of chartSlots) {
+      const plotStyle = getComputedStyle($(slot + '-chart'));
+      chartColors[slot] = Object.fromEntries(
+        colors.map(name => [name, plotStyle.getPropertyValue('--chart-' + name).trim()])
+      );
+    }
+    document.querySelector('meta[name="theme-color"]').content = style.getPropertyValue('--background').trim();
+    drawCharts();
   }
 
   function showTooltip(slot,event) {
@@ -501,7 +580,7 @@
     drawChart(slot);
   }
 
-  ['speed','power'].forEach(key => {
+  chartSlots.forEach(key => {
     const canvas = $(key + '-chart');
     canvas.addEventListener('pointermove', event => showTooltip(key, event));
     let touchTimer;
@@ -519,11 +598,35 @@
   });
   document.querySelectorAll('.range').forEach(button => button.addEventListener('click', () => {
     state.rangeMinutes = Number(button.dataset.minutes);
-    state.chartLimits = {};
     document.querySelectorAll('.range').forEach(other => {const active = other === button;other.classList.toggle('active', active);other.setAttribute('aria-pressed', String(active));});
     drawCharts();
   }));
-  $('visitor-chart-signal').addEventListener('change',event=>{state.chartSignal=event.target.value;state.hovering.power=null;$('power-tip').hidden=true;drawCharts();});
+  const electricSelectors = [$('visitor-chart-left'), $('visitor-chart-right')];
+  electricSelectors.forEach((select, index) => {
+    for (const key of electricChartKeys) select.add(new Option(chartSeries[key].label, key));
+    select.value = state.electricKeys[index];
+    select.addEventListener('change', () => {
+      const other = 1 - index;
+      if (select.value === state.electricKeys[other]) {
+        state.electricKeys[other] = state.electricKeys[index];
+        electricSelectors[other].value = state.electricKeys[other];
+      }
+      state.electricKeys[index] = select.value;
+      state.hovering.power = null;
+      $('power-tip').hidden = true;
+      updateElectricChartLabels();
+      drawChart('power');
+    });
+  });
+  themeToggle.addEventListener('click', () => {
+    const theme = themeRoot.dataset.theme === 'dark' ? 'light' : 'dark';
+    applyTheme(theme);
+    try {
+      localStorage.setItem(themeRoot.dataset.themeStorage, theme);
+    } catch {
+      // O tema continua aplicado na página aberta.
+    }
+  });
   const infoDisclosures=[...document.querySelectorAll('.info-disclosure')];
   infoDisclosures.forEach(item=>item.addEventListener('toggle',()=>{
     if(item.open)infoDisclosures.forEach(other=>{if(other!==item)other.open=false;});
@@ -535,9 +638,15 @@
     if(event.key==='Escape')infoDisclosures.forEach(item=>{item.open=false;});
   });
   window.addEventListener('resize', drawCharts);
-  document.addEventListener('visibilitychange', () => {if (!document.hidden) poll();});
+  document.addEventListener('visibilitychange', () => {
+    updateVehicleMotion();
+    if (!document.hidden) poll();
+  });
+  reducedMotion.addEventListener?.('change', updateVehicleMotion);
   updateAge();
-  drawCharts();
+  updateChartLegend('speed-chart-legend', motionChartKeys);
+  updateElectricChartLabels();
+  applyTheme(themeRoot.dataset.theme);
   poll();
   setInterval(poll, 500);
   setInterval(() => {updateAge();drawCharts();}, 1000);

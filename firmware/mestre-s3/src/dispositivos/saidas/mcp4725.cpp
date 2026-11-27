@@ -8,7 +8,8 @@
 namespace {
 constexpr char ETIQUETA[] = "mcp4725";
 bool presente = false;
-constexpr TickType_t PRAZO_I2C = pdMS_TO_TICKS(15);
+constexpr TickType_t PRAZO_I2C = pdMS_TO_TICKS(configuracao::PRAZO_I2C_MCP4725_MS);
+static_assert(PRAZO_I2C > 0);
 }
 
 esp_err_t mcp4725_definir_milivolts(uint16_t milivolts) {

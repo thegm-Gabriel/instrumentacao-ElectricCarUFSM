@@ -4,12 +4,13 @@
 #include <stdint.h>
 
 #define CONTROLE_REMOTO_FORMATO_LEGADO 6u
-#define CONTROLE_REMOTO_FORMATO 7u
+#define CONTROLE_REMOTO_FORMATO_REARME 7u
+#define CONTROLE_REMOTO_FORMATO 8u
 #define CONTROLE_REMOTO_VELOCIDADE_MAXIMA 3500u /* centésimos de km/h */
 #define CONTROLE_REMOTO_ACELERADOR_MAXIMO 1000u /* décimos de % */
 #define CONTROLE_REMOTO_EXPIRACAO_PEDAL_MS 300u
 #define CONTROLE_REMOTO_REARME_MINIMO_MS 5000u
-#define CONTROLE_REMOTO_REARME_AUTOMATICO_MS 30000u
+#define CONTROLE_REMOTO_ARMAR_DAC_ISOLADO 3u
 #define CONTROLE_REMOTO_PERIODO_MS 20u
 #define CONTROLE_REMOTO_ZONA_MORTA_MAXIMA 300u /* décimos de % */
 #define CONTROLE_REMOTO_TENSAO_MINIMA_MAXIMA_MV 2500u
@@ -27,6 +28,7 @@ typedef enum {
     CONTROLE_ESTADO_PRONTO = 2,
     CONTROLE_ESTADO_ACELERANDO = 3,
     CONTROLE_ESTADO_FALHA = 4,
+    CONTROLE_ESTADO_LIMITANDO_VELOCIDADE = 5,
 } estado_operacao_remota_t;
 
 #define CONTROLE_BLOQUEIO_SEM_FAIXA (1u << 0)
@@ -69,11 +71,13 @@ typedef struct __attribute__((packed)) {
     uint8_t dac_disponivel;
     uint8_t pedal_disponivel;
     uint8_t partida_concluida;
-    uint8_t armamento_inicial_pendente;
+    uint8_t armamento_inicial_pendente; /* Requer armar após partida, parada ou desarme de proteção. */
     uint8_t ota_em_andamento;
     uint8_t dac_zero_confirmado; /* Confirma escrita I2C, não mede VOUT. */
     uint8_t reversao_permitida;
     uint32_t rearme_restante_ms;
+    uint8_t dac_isolado_habilitado;
 } estado_controle_remoto_t;
 
 #define CONTROLE_REMOTO_TAMANHO_LEGADO offsetof(estado_controle_remoto_t, reversao_permitida)
+#define CONTROLE_REMOTO_TAMANHO_REARME offsetof(estado_controle_remoto_t, dac_isolado_habilitado)

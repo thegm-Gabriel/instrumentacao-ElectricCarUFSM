@@ -1,4 +1,4 @@
-"""Seleção de acesso e inicialização dos servidores de prévia dos painéis."""
+"""Carregamento dos painéis e servidores HTTP das prévias locais."""
 
 from __future__ import annotations
 
@@ -6,6 +6,21 @@ import argparse
 import socket
 import sys
 from http.server import ThreadingHTTPServer
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
+from types import ModuleType
+
+
+def carregar_gerador(alvo: str) -> ModuleType:
+    raiz = Path(__file__).resolve().parents[2]
+    caminho = raiz / "firmware" / alvo / "web" / "gerar_painel.py"
+    nome = "gerador_" + alvo.replace("-", "_")
+    spec = spec_from_file_location(nome, caminho)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Não foi possível carregar o gerador: {caminho}")
+    gerador = module_from_spec(spec)
+    spec.loader.exec_module(gerador)
+    return gerador
 
 
 def adicionar_opcoes_acesso(parser: argparse.ArgumentParser, porta_padrao: int) -> None:

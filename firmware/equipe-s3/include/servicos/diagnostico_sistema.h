@@ -11,7 +11,6 @@ typedef struct {
     bool cpu_valida;
     uint16_t cpu_total_decimos_percentual;
     uint16_t cpu_nucleo_0_decimos_percentual;
-    uint16_t cpu_nucleo_1_decimos_percentual;
     uint16_t cpu_tarefa_pico_decimos_percentual;
     char cpu_tarefa_pico[configMAX_TASK_NAME_LEN];
     uint32_t tarefas_ativas;

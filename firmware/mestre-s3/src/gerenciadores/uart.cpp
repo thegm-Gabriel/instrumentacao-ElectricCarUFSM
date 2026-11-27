@@ -399,7 +399,13 @@ int gerenciador_uart_receber(DestinoUart origem, void* buffer, size_t capacidade
         registrar_erro(*canal, ESP_ERR_TIMEOUT, false);
         return -1;
     }
-    int recebidos = uart_read_bytes(canal->porta, buffer, capacidade, tempo_limite);
+    int recebidos = uart_read_bytes(canal->porta, buffer, 1, tempo_limite);
+    if (recebidos == 1 && capacidade > 1) {
+        // Processe também o final de um quadro curto sem esperar completar o lote.
+        const int disponiveis = uart_read_bytes(
+            canal->porta, static_cast<uint8_t*>(buffer) + 1, capacidade - 1, 0);
+        if (disponiveis > 0) recebidos += disponiveis;
+    }
     xSemaphoreGive(canal->mutex_rx);
 
     portENTER_CRITICAL(&trava_estatisticas);

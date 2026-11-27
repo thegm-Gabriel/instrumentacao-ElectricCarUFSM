@@ -9,10 +9,10 @@
 namespace configuracao {
 
 // UART
-// A velocidade segue o protocolo compartilhado com os satélites.
+// O Mestre recebe confirmações curtas. Blocos OTA de até 4 KiB saem pelo TX.
 constexpr int VELOCIDADE_UART                                 = ENLACE_UART_BAUD_RATE;
-constexpr int TAMANHO_BUFFER_UART_RX                          = 8192;
-constexpr int TAMANHO_BUFFER_UART_TX                          = 8192;
+constexpr int TAMANHO_BUFFER_UART_RX                          = 2048;
+constexpr int TAMANHO_BUFFER_UART_TX                          = 6144;
 constexpr std::size_t TAMANHO_MAXIMO_MENSAGEM_UART            = 4224;
 constexpr std::size_t TAMANHO_MAXIMO_MENSAGEM_UART_ASSINCRONA = 256;
 constexpr std::size_t CAPACIDADE_FILA_UART_TX                 = 4;

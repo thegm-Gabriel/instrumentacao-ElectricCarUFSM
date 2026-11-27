@@ -1,4 +1,4 @@
-// Declara a interface compartilhada da atualização OTA dos satélites.
+// Declara o serviço de atualização OTA do satélite Visitantes.
 #pragma once
 
 #include <stdbool.h>
@@ -19,25 +19,13 @@ typedef struct {
     uint32_t tempo_limite_sem_dados_ms;
 } configuracao_servico_ota_satelite_t;
 
-typedef struct {
-    bool iniciado;
-    bool recebendo;
-    uint32_t sessao;
-    uint32_t tamanho_total;
-    uint32_t bytes_recebidos;
-    uint32_t quadros_recebidos;
-    uint32_t falhas;
-    esp_err_t ultimo_erro;
-    char versao_destino[24];
-} situacao_servico_ota_satelite_t;
-
 esp_err_t servico_ota_satelite_iniciar(
     const configuracao_servico_ota_satelite_t *configuracao);
 esp_err_t servico_ota_satelite_confirmar_firmware_em_execucao(void);
+bool servico_ota_satelite_firmware_em_observacao(void);
 esp_err_t servico_ota_satelite_processar_quadro(const uint8_t *quadro,
                                                 size_t tamanho);
 void servico_ota_satelite_verificar_timeout(void);
-situacao_servico_ota_satelite_t servico_ota_satelite_obter_situacao(void);
 
 #ifdef __cplusplus
 }

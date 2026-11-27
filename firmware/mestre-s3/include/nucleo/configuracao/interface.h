@@ -30,8 +30,10 @@ constexpr uint32_t DURACAO_LEMBRETE_FALHA_MS   = 10000;
 
 // LEDs e buzzer
 // Define quando reavaliar o estado e repetir avisos sonoros.
+constexpr uint32_t PASSO_SINALIZACAO_MS            = 20;
 constexpr uint32_t INTERVALO_AVALIACAO_SERVICOS_MS = 500;
 constexpr uint32_t DURACAO_AVISO_TEMPORARIO_MS     = 3000;
+constexpr uint32_t DURACAO_SINAL_OTA_CONCLUIDO_MS   = 3600;
 constexpr uint32_t INTERVALO_ALARME_FALHA_MS       = 45000;
 constexpr uint32_t INTERVALO_ALARME_OTA_FALHA_MS   = 120000;
 constexpr uint32_t INTERVALO_AVISOS_SONOROS_MS     = 30000;

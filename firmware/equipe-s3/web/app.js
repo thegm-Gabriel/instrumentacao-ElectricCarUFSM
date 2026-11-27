@@ -91,21 +91,28 @@
     visitantes: {group:'visitantes', name:'ESP32 de visitantes', id:'VISITANTES', role:'Satélite', function:'Painel e recepção de telemetria'}
   };
   const deviceChartOptions={
-    mestre:[{key:'cpu',label:'CPU total',unit:'%',color:'#59D9F7'},{key:'core0',label:'CPU núcleo 0',unit:'%',color:'#59D9F7'},{key:'core1',label:'CPU núcleo 1',unit:'%',color:'#59D9F7'},{key:'heap',label:'Memória interna livre',unit:'KiB',color:'#4CE0A2'},{key:'temp',label:'Temperatura interna',unit:'°C',color:'#FFCA64'},{key:'rtt',label:'Tempo de resposta',unit:'ms',color:'#FF8492'}],
-    equipe:[{key:'cpu',label:'CPU total',unit:'%',color:'#59D9F7'},{key:'core0',label:'CPU núcleo 0',unit:'%',color:'#59D9F7'},{key:'core1',label:'CPU núcleo 1',unit:'%',color:'#59D9F7'},{key:'heap',label:'Memória interna livre',unit:'KiB',color:'#4CE0A2'},{key:'temp',label:'Temperatura interna',unit:'°C',color:'#FFCA64'},{key:'rate',label:'Taxa de telemetria',unit:'Hz',color:'#FFCA64'}],
-    visitantes:[{key:'rtt',label:'Tempo de resposta',unit:'ms',color:'#59D9F7'},{key:'availability',label:'Disponibilidade',unit:'%',color:'#4CE0A2'},{key:'cpu',label:'CPU total',unit:'%',color:'#FFCA64'},{key:'core0',label:'CPU núcleo 0',unit:'%',color:'#59D9F7'},{key:'core1',label:'CPU núcleo 1',unit:'%',color:'#59D9F7'},{key:'heap',label:'Memória interna livre',unit:'KiB',color:'#4CE0A2'},{key:'temp',label:'Temperatura interna',unit:'°C',color:'#FF8492'}]
+    mestre:[{key:'cpu',label:'CPU total',unit:'%',tone:'primary'},{key:'core0',label:'CPU núcleo 0',unit:'%',tone:'primary'},{key:'core1',label:'CPU núcleo 1',unit:'%',tone:'primary'},{key:'heap',label:'Memória interna livre',unit:'KiB',tone:'memory'},{key:'temp',label:'Temperatura interna',unit:'°C',tone:'secondary'},{key:'rtt',label:'Tempo de resposta',unit:'ms',tone:'failure'}],
+    equipe:[{key:'cpu',label:'CPU total',unit:'%',tone:'primary'},{key:'core0',label:'CPU núcleo 0',unit:'%',tone:'primary'},{key:'heap',label:'Memória interna livre',unit:'KiB',tone:'memory'},{key:'temp',label:'Temperatura interna',unit:'°C',tone:'secondary'},{key:'rate',label:'Taxa de telemetria',unit:'Hz',tone:'secondary'}],
+    visitantes:[{key:'rtt',label:'Tempo de resposta',unit:'ms',tone:'primary'},{key:'availability',label:'Disponibilidade',unit:'%',tone:'memory'},{key:'cpu',label:'CPU total',unit:'%',tone:'secondary'},{key:'core0',label:'CPU núcleo 0',unit:'%',tone:'primary'},{key:'core1',label:'CPU núcleo 1',unit:'%',tone:'primary'},{key:'heap',label:'Memória interna livre',unit:'KiB',tone:'memory'},{key:'temp',label:'Temperatura interna',unit:'°C',tone:'failure'}]
   };
   function selectedDeviceCharts(id){
     const charts=[state.deviceSignal[id],state.deviceSignalSecondary[id]].map(key=>deviceChartOptions[id].find(option=>option.key===key));
-    if(charts[0].color===charts[1].color)charts[1]={...charts[1],color:'#FFCA64'};
+    if(charts[0].tone===charts[1].tone){
+      charts[1]={...charts[1],tone:charts[0].tone==='secondary'?'primary':'secondary'};
+    }
     return charts;
   }
   const CAP_SYNC = 1 << 11;
+  const CAP_HEALTH = 1 << 2;
   const CAP_SIMULATOR = 1 << 12;
+  const CAP_CONTROL = 1 << 13;
   const CAP_SENSORS = 1 << 14;
   const CAP_TERMINAL_LOGS = 1 << 16;
   const CAP_MASTER_TASKS = 1 << 17;
   const CAP_REVERSE_PERMISSION = 1 << 18;
+  const CAP_ISOLATED_DAC = 1 << 20;
+  const CAP_DEVELOPER_SETTINGS = 1 << 21;
+  const ARM_ISOLATED_DAC = 3;
   const refreshChoices = [1000,500,333,250];
   try {const saved=Number(localStorage.getItem('nexus-telemetry-refresh-ms'));if(refreshChoices.includes(saved))state.telemetryRefreshMs=saved;} catch (_) { /* O painel funciona sem armazenamento local. */ }
   $('command-refresh-rate').value=String(state.telemetryRefreshMs);
@@ -117,19 +124,50 @@
     pollTelemetry();
   });
   const marchas = ['Estacionado','Neutro','Frente','Ré'];
+  const navigation = $('tab-telemetria').closest('.tabs');
+  const pageTabs = [...navigation.querySelectorAll('.tab')];
+  const deviceTabList = $('device-tab-list');
+  const deviceTabs = [...deviceTabList.querySelectorAll('.tab')];
+  const mainTabs = pageTabs.filter(tab => !deviceTabList.contains(tab));
+  const deviceTabsToggle = $('device-tabs-toggle');
+  const compactTabLayout = matchMedia('(max-width: 760px)');
+
+  function setDeviceMenu(open, focus = false) {
+    const compact = compactTabLayout.matches;
+    const expanded = compact && open;
+    const active = pageTabs.find(tab => tab.dataset.tab === state.tab);
+    const deviceSelected = deviceTabList.contains(active);
+    const insideMenu = deviceTabList.contains(document.activeElement);
+    const deviceStop = deviceSelected ? active : deviceTabs[0];
+    const pageStop = compact && deviceSelected ? mainTabs[0] : active;
+    deviceTabList.classList.toggle('is-open', expanded);
+    deviceTabsToggle.setAttribute('aria-expanded', String(expanded));
+    deviceTabsToggle.classList.toggle('is-active', compact && deviceSelected);
+    pageTabs.forEach(tab => {
+      tab.tabIndex = (tab === pageStop || (expanded && tab === deviceStop)) ? 0 : -1;
+    });
+    if (expanded && focus) deviceStop.focus({preventScroll:true});
+    if (compact && !expanded && insideMenu) deviceTabsToggle.focus({preventScroll:true});
+  }
 
   function showTab(tab, historyMode = 'replace') {
     if (!['telemetria','comandos','controle','mestre','equipe','visitantes','sobre'].includes(tab)) tab = 'telemetria';
+    if (tab === 'visitantes' && state.tab !== tab) state.lastLinkPoll = 0;
     state.tab = tab;
     document.querySelectorAll('.page').forEach(el => el.classList.toggle('active', el.id === tab));
-    document.querySelectorAll('.tab').forEach(el => { const active = el.dataset.tab === tab; el.classList.toggle('active', active); el.setAttribute('aria-selected', String(active)); el.tabIndex = active ? 0 : -1; });
+    pageTabs.forEach(el => { const active = el.dataset.tab === tab; el.classList.toggle('active', active); el.setAttribute('aria-selected', String(active)); });
+    setDeviceMenu(false);
     if (location.hash !== '#' + tab) history[historyMode+'State'](null, '', '#' + tab);
     if (tab === 'telemetria') requestAnimationFrame(drawCharts);
     else if (tab === 'mestre') renderDevice('mestre','mestre');
     else if (tab === 'equipe' || tab === 'visitantes') renderGroup(tab);
-    else if (tab === 'comandos') {pollWifiClients('equipe',true);pollWifiClients('visitantes',true);}
   }
-  document.querySelectorAll('.tab').forEach(el => el.addEventListener('click', () => showTab(el.dataset.tab, 'push')));
+  pageTabs.forEach(el => el.addEventListener('click', () => showTab(el.dataset.tab, 'push')));
+  deviceTabsToggle.addEventListener('click', () => setDeviceMenu(!deviceTabList.classList.contains('is-open'), true));
+  compactTabLayout.addEventListener?.('change', () => setDeviceMenu(false));
+  document.addEventListener('pointerdown', event => {
+    if (deviceTabList.classList.contains('is-open') && !navigation.contains(event.target)) setDeviceMenu(false);
+  });
   // Os cartões de acompanhamento conservam seus IDs e lógica de atualização.
   function foldCard(id,label){
     const content=$(id),panel=document.createElement('details'),heading=document.createElement('summary');
@@ -155,11 +193,18 @@
     document.querySelectorAll('[data-scroll-to]').forEach(item=>item.classList.toggle('active',item===button));
   }));
   document.querySelectorAll('[data-open-clients]').forEach(button=>button.addEventListener('click',()=>{showTab('comandos','push');requestAnimationFrame(()=>revealSection($('wifi-clients-'+button.dataset.openClients)));}));
-  $('tab-telemetria').closest('.tabs').addEventListener('keydown', event => {
-    const tabs=[...document.querySelectorAll('.tab')],index=tabs.indexOf(document.activeElement);
+  navigation.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && deviceTabList.classList.contains('is-open')) {
+      event.preventDefault();
+      setDeviceMenu(false);
+      return;
+    }
+    const inMenu = compactTabLayout.matches && deviceTabList.contains(document.activeElement);
+    const tabs = compactTabLayout.matches ? (inMenu ? deviceTabs : mainTabs) : pageTabs;
+    const index = tabs.indexOf(document.activeElement);
     if(index<0)return;
     const next=event.key==='ArrowRight'?tabs[(index+1)%tabs.length]:event.key==='ArrowLeft'?tabs[(index+tabs.length-1)%tabs.length]:event.key==='Home'?tabs[0]:event.key==='End'?tabs[tabs.length-1]:null;
-    if(next){event.preventDefault();showTab(next.dataset.tab, 'push');next.focus();}
+    if(next){event.preventDefault();if(!inMenu)showTab(next.dataset.tab, 'push');next.focus();}
   });
   addEventListener('hashchange', () => showTab(location.hash.slice(1)));
   addEventListener('popstate', () => showTab(location.hash.slice(1)));
@@ -314,7 +359,6 @@
     if(visible)peak.style.left=Math.min(99,Math.max(1,Math.abs(powerPeak.value)/POWER_VISUAL_MAX_W*100))+'%';
     rail.setAttribute('aria-label','Potência elétrica: '+number(power,0)+' W; barra de 0 a '+POWER_VISUAL_MAX_W+' W'+(power<0?' em regeneração':''));
     $('power-card').classList.toggle('is-regen',power<0);
-    set('power-context',power<0?'Regeneração':power>0?'Consumo':'Sem fluxo elétrico');
   }
 
   function event(text, kind = 'info', command = false) {
@@ -343,8 +387,8 @@
     const electrical=!!d&&(sim||!!(d.estado_mpu&128));
     badge('critical-freshness',!state.telemetry?'Aguardando telemetria':stale?'Leitura desatualizada':sim?'Leitura simulada':'Leitura do mestre',stale?'warn':sim?'warn':'good');
     set('critical-speed',d?format(value(d,'velocidade_centesimos_kmh',100),'',1).trim():'—');
-    set('critical-soc',sim?format(value(d,'carga_decimos_percentual',10),'%',1):'Não disponível');
-    set('critical-throttle',sim?format(value(d,'acelerador_decimos_percentual',10),'%',1):'Não disponível');
+    set('critical-soc',format(batteryCharge(d),'%',1));
+    set('critical-throttle',format(value(d,'acelerador_decimos_percentual',10),'%',1));
     set('critical-brake',sim?format(value(d,'freio_decimos_percentual',10),'%',1):'Não disponível');
     set('critical-current',electrical?format(value(d,'corrente_centesimos_a',100),'A',2):'Não disponível');
     set('critical-voltage',electrical?format(value(d,'tensao_pacote_mv',1000),'V',3):'Não disponível');
@@ -352,10 +396,27 @@
   }
   // A ordem das causas segue os bits de CausaSaudeSistema no mestre.
   const healthCauses = [
-    'Memória crítica', 'Pilha de tarefa baixa', 'Sensor', 'I²C', 'UART', 'Supervisão de tarefas',
-    'Equipe sem resposta', 'Visitantes sem resposta', 'Wi-Fi fraco', 'Falha OTA recente',
-    'Persistência no SD', 'Memória baixa'
+    {label:'Memória crítica', tab:'mestre', target:'health-diagnostics-memory'},
+    {label:'Pilha de tarefa baixa', short:'Pilha baixa', tab:'comandos', target:'master-tasks'},
+    {label:'Sensor', tab:'comandos', target:'sensor-command'},
+    {label:'I²C', tab:'comandos', target:'sensor-bus'},
+    {label:'UART', tab:'comandos', target:'master-queries', query:'uart'},
+    {label:'Supervisão de tarefas', short:'Supervisão', tab:'comandos', target:'master-tasks'},
+    {label:'Equipe sem resposta', short:'Equipe', tab:'equipe', target:'title-equipe'},
+    {label:'Visitantes sem resposta', short:'Visitantes', tab:'visitantes', target:'title-visitantes'},
+    {label:'Wi-Fi fraco', tab:'comandos', target:'wifi-master'},
+    {label:'Falha OTA recente', short:'OTA', tab:'comandos', target:'ota-command'},
+    {label:'Falha ao salvar o odômetro na NVS', short:'NVS do odômetro', tab:'comandos', target:'sensor-command'},
+    {label:'Memória baixa', tab:'mestre', target:'health-diagnostics-memory'},
+    {label:'Divergência entre encoders', short:'Encoders divergentes', tab:'comandos', target:'sensor-command'},
+    {label:'Velocidade indisponível no odômetro', short:'Odômetro', tab:'comandos', target:'sensor-command'},
+    {label:'DAC do acelerador indisponível', short:'DAC indisponível', tab:'comandos', target:'sensor-command'},
+    {label:'Falha nas saídas de tração', short:'Tração', tab:'controle', target:'remote-state'},
+    {label:'Leitura do pedal indisponível', short:'Pedal indisponível', tab:'comandos', target:'sensor-command'},
+    {label:'MPU6050 ainda sem calibração', short:'MPU sem calibração', tab:'comandos', target:'sensor-command'},
   ];
+  const encoderDivergenceMask = 1 << 12;
+  const odometerUnavailableMask = 1 << 13;
   const healthFreshMs = 30000;
 
   function getSystemHealth() {
@@ -376,7 +437,7 @@
     const mask = value(health, 'causas_ativas');
     const causes = healthCauses.filter((_, index) => (mask & (1 << index)) !== 0);
     const unknown = (mask >>> healthCauses.length) << healthCauses.length;
-    if (unknown) causes.push('Outras causas (0x' + (unknown >>> 0).toString(16).toUpperCase() + ')');
+    if (unknown) causes.push({label:'Outras causas (0x' + (unknown >>> 0).toString(16).toUpperCase() + ')', short:'Outras causas'});
     return {health, level, fresh, offline, label, tone: fresh ? tones[level] : offline ? 'error' : 'info', causes, mask, receivedAt};
   }
 
@@ -388,9 +449,11 @@
     return 'há ' + Math.floor(seconds / 3600) + ' h';
   }
 
-  function healthCauseSummary(causes) {
+  function healthCauseSummary(causes, compact = false) {
     if (!causes.length) return '';
-    return causes[0] + (causes.length > 1 ? ' +' + (causes.length - 1) : '');
+    const first = causes[0];
+    const label = compact && first.short ? first.short : first.label;
+    return label + (causes.length > 1 ? ' +' + (causes.length - 1) : '');
   }
 
   let lastHealthAlert='', healthToast;
@@ -399,8 +462,19 @@
     const {level,fresh,offline,causes,mask,label,tone}=healthState;
     const shortcut=$('health-shortcut');
     if(shortcut.dataset.tone!==tone)shortcut.dataset.tone=tone;
-    set('health-status',label);
     const hasFault=fresh&&(level>=2||(level===1&&mask));
+    const encoderWarning = fresh && (mask & (encoderDivergenceMask | odometerUnavailableMask));
+    $('sensor-encoder-warning').hidden = !encoderWarning;
+    set('sensor-encoder-warning', encoderWarning
+      ? (mask & encoderDivergenceMask
+          ? 'Divergência recente entre os encoders esquerdo e direito. Confira as leituras e a calibração das rodas.'
+          : 'O Mestre está sem uma leitura válida de velocidade dos encoders.')
+      : '');
+    const causeLabel = hasFault ? healthCauseSummary(causes, true) : '';
+    set('health-status', label + (causeLabel ? ' · ' + causeLabel : ''));
+    shortcut.title = hasFault && causes.length
+      ? 'Diagnóstico do Mestre · ' + causes.map(cause => cause.label).join(', ')
+      : 'Abrir diagnóstico do Mestre';
     const alertKey=offline?'offline':hasFault?`${level}/${mask}`:'';
     if(alertKey!==lastHealthAlert){
       healthToast?.remove();
@@ -408,18 +482,108 @@
       lastHealthAlert=alertKey;
       if(alertKey){
         const text=offline?'Mestre sem resposta':['','Mestre em recuperação','Operação degradada','Falha no Mestre'][level];
-        const detail=offline?'':healthCauseSummary(causes);
+        const detail=offline?'':(mask&encoderDivergenceMask)
+          ? 'Divergência entre encoders'+(causes.length>1?' · mais '+(causes.length-1)+' aviso(s)':'')
+          : healthCauseSummary(causes);
         healthToast=message(text+(detail?' · '+detail:'')+'.',offline||level===3?'error':'warning',openHealthDiagnostics);
       }
     }
     renderDeviceSystemHealth(healthState);
   }
-  $('refresh-remote-control').addEventListener('click',async()=>{
-    if(!await masterQuery('controle_remoto')){
-      controlNotice('Mestre sem resposta. Estado não confirmado.','warning');
-      badge('vehicle-arm-badge','Estado do carro indisponível','muted');
+  function showUnconfirmedControl(text, detail) {
+    state.controlUnconfirmed = true;
+    renderControlSensors(null);
+    controlNotice(text, 'warning');
+    badge('actuation-status', 'Atuação não confirmada', 'muted');
+    badge('vehicle-arm-badge', 'Estado do carro não confirmado', 'muted');
+    const lastReading = state.master.controle_remoto ? 'A última leitura pode estar desatualizada.' : 'Nenhuma leitura confirmada.';
+    set('remote-checked', detail || lastReading);
+  }
+
+  async function refreshControlState() {
+    if (!await masterQuery('controle_remoto')) {
+      showUnconfirmedControl('Mestre sem resposta. Estado não confirmado.');
+      availability();
     }
-  });
+  }
+
+  function commandCardOpen(id) {
+    return state.tab === 'comandos' && $(id)?.closest('details')?.open === true;
+  }
+
+  function liveReadingsAvailable() {
+    return !document.hidden && !state.busy && !state.stopInFlight && remotePending === 0;
+  }
+
+  async function refreshDeveloperSettings() {
+    if (!await masterQuery('ajustes_desenvolvedor')) {
+      state.developerUnconfirmed = true;
+      set('developer-status', 'Sem resposta do Mestre.');
+      set('developer-limiter-state', 'Limites em uso sem confirmação.');
+      availability();
+    }
+  }
+
+  function developerQueryAvailable(capabilities) {
+    return !!state.master.ajustes_desenvolvedor || !Number.isFinite(capabilities) || (capabilities & CAP_DEVELOPER_SETTINGS) !== 0;
+  }
+
+  function visibleReadings(tab) {
+    const queries = [];
+    const capabilities = state.master.versao?.capacidades;
+    if (state.masterOnline) {
+      if ((tab === 'controle' || tab === 'telemetria' || commandCardOpen('sensor-command')) &&
+          (!Number.isFinite(capabilities) || (capabilities & CAP_CONTROL) !== 0 || state.master.controle_remoto)) {
+        queries.push(refreshControlState);
+      }
+      if (!Number.isFinite(capabilities) || (capabilities & CAP_HEALTH) !== 0) queries.push(() => masterQuery('saude'));
+      if (tab === 'mestre') queries.push(() => masterQuery('diagnostico_mestre'));
+      if (commandCardOpen('sensor-command') && (capabilities & CAP_SENSORS) !== 0) {
+        queries.push(async () => {
+          if (!await masterQuery('sensores')) set('sensor-status', 'Sem resposta · dados anteriores.');
+        });
+      }
+      if (commandCardOpen('developer-command')) {
+        if (developerDevice === 'mestre' && developerQueryAvailable(capabilities)) queries.push(refreshDeveloperSettings);
+        else if (developerDevice !== 'mestre') {
+          const target=developerDevice;
+          queries.push(() => refreshRadioSettings(target));
+        }
+      }
+      if (commandCardOpen('ota-command') || (tab === 'controle' && state.master.controle_remoto?.ota_em_andamento))
+        queries.push(async ()=>{
+          if(!await masterQuery('ota'))set('ota-state-checked','Sem resposta. O estado exibido é o último recebido.');
+        });
+      if (commandCardOpen('sync-card') && (capabilities & CAP_SYNC) !== 0) queries.push(() => masterQuery('sincronizacao'));
+      if (commandCardOpen('simulator-card') && (capabilities & CAP_SIMULATOR) !== 0) queries.push(() => masterQuery('simulador'));
+      if (commandCardOpen('wifi-master')) queries.push(() => masterQuery('wifi'));
+    }
+    if (tab === 'equipe') queries.push(pollLocal);
+    if (tab === 'visitantes' && state.visitorsOnline) queries.push(() => visitorsQuery('diagnostico'));
+    return queries;
+  }
+
+  async function pollVisibleReadings() {
+    if (state.polls.liveCycle || !liveReadingsAvailable()) return;
+    const tab = state.tab;
+    const queries = visibleReadings(tab);
+    if (!queries.length) return;
+    state.polls.liveCycle = true;
+    const started = performance.now(), first = (state.nextVisibleReading || 0) % queries.length;
+    try {
+      // Retoma da próxima leitura se a janela acabar antes de concluir o ciclo.
+      for (let count = 0; count < queries.length && state.tab === tab && liveReadingsAvailable(); count++) {
+        if (count > 0 && performance.now()-started >= state.telemetryRefreshMs) break;
+        const index = (first+count) % queries.length;
+        state.nextVisibleReading = index+1;
+        await queries[index]();
+      }
+    } finally {
+      state.polls.liveCycle = false;
+    }
+  }
+
+  $('refresh-remote-control').addEventListener('click', refreshControlState);
   function openHealthDiagnostics() {
     showTab('mestre', 'push');
     const diagnostics = $('health-diagnostics');
@@ -429,13 +593,29 @@
     diagnostics.scrollIntoView({block: 'nearest'});
   }
   $('health-shortcut').addEventListener('click',openHealthDiagnostics);
+  function openHealthCause(cause) {
+    if (state.tab !== cause.tab) showTab(cause.tab, 'push');
+    if (cause.query) $('master-query').value = cause.query;
+    requestAnimationFrame(() => {
+      const target = $(cause.target);
+      const destination = target && !target.closest('[hidden]') ? target : $('health-diagnostics');
+      if (destination) revealSection(destination);
+      if (cause.query) $('run-master-query').click();
+    });
+  }
   async function getJSON(url, timeout = 7000) {
     const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), timeout);
     try { const response = await fetch(url, {cache:'no-store', signal:controller.signal}); state.lastHttp = Date.now(); state.browserOnline = true; const body = await response.json(); if (!response.ok || body.ok === false) throw new Error(body.erro || 'Resposta ' + response.status); return body; }
     finally { clearTimeout(timer); }
   }
   let remoteQueue = Promise.resolve();
-  function remote(task) { const next = remoteQueue.then(task); remoteQueue = next.catch(() => {}); return next; }
+  let remotePending = 0;
+  function remote(task) {
+    remotePending++;
+    const next = remoteQueue.then(task).finally(() => { remotePending--; });
+    remoteQueue = next.catch(() => {});
+    return next;
+  }
   function appendSample(d) {
     const now = Date.now();
     if (state.lastSequence === d.sequencia) return;
@@ -445,7 +625,7 @@
     const electrical=d.simulado || !!(d.estado_mpu & 128);
     const ina=electrical&&!d.simulado&&!!(d.estado_ina&1);
     const sample = {time:now, simulated:d.simulado, speed:value(d,'velocidade_centesimos_kmh',100), accel:d.simulado || (d.estado_mpu & 1) ? value(d,'aceleracao_milesimos_ms2',1000) : null, power:electrical ? value(d,'potencia_w') : null, current:electrical ? value(d,'corrente_centesimos_a',100) : null, voltage:electrical ? value(d,'tensao_pacote_mv',1000) : null,
-      soc:d.simulado?value(d,'carga_decimos_percentual',10):null,autonomy:d.simulado?value(d,'autonomia_decimos_km',10):null,
+      soc:batteryCharge(d),autonomy:d.simulado?value(d,'autonomia_decimos_km',10):null,
       shunt:ina?value(d,'ina_shunt_microvolts',1000):null,inaTemp:ina?value(d,'ina_temperatura_centesimos_c',100):null,
       inaEnergy:ina&&(d.estado_ina&2)?value(d,'ina_energia_mwh',1000):null,inaCharge:ina&&(d.estado_ina&4)?value(d,'ina_carga_mah',1000):null};
     const previousMotion=state.samples.length?state.samples[state.samples.length-1]:null;
@@ -476,6 +656,10 @@
     { below: 30, level: 'low', label: 'Bateria baixa', icon: '🪫' },
     { below: 50, level: 'attention', label: 'Atenção', icon: '⚠️' }
   ];
+  function batteryCharge(data) {
+    return data && (data.simulado || (data.estado_ina & 8))
+      ? value(data,'carga_decimos_percentual',10) : null;
+  }
   function renderBatteryCharge(charge) {
     const warning = charge === null ? null : batteryWarnings.find(item => charge < item.below);
     $('soc-card').dataset.chargeLevel = charge === null ? 'unavailable' : warning?.level ?? 'normal';
@@ -483,7 +667,6 @@
     set('soc-notice-label', warning?.label ?? '');
     set('soc-notice-icon', warning?.icon ?? '');
     notice.hidden = !warning;
-    set('soc-context', charge === null ? 'Sem estimativa de carga' : 'Estimativa simulada');
     animateTelemetry('soc', charge, 2, reading => {
       $('soc-bar').style.width = Math.max(0, Math.min(100, reading ?? 0)) + '%';
     });
@@ -492,7 +675,7 @@
     const available = !!(d && d.valido);
     if (!available) return;
     const electrical=d.simulado || !!(d.estado_mpu & 128);
-    const speed = value(d,'velocidade_centesimos_kmh',100), accel = d.simulado || (d.estado_mpu & 1) ? value(d,'aceleracao_milesimos_ms2',1000) : null, soc = d.simulado ? value(d,'carga_decimos_percentual',10) : null, power = electrical ? value(d,'potencia_w') : null, current = electrical ? value(d,'corrente_centesimos_a',100) : null;
+    const speed = value(d,'velocidade_centesimos_kmh',100), accel = d.simulado || (d.estado_mpu & 1) ? value(d,'aceleracao_milesimos_ms2',1000) : null, soc = batteryCharge(d), power = electrical ? value(d,'potencia_w') : null, current = electrical ? value(d,'corrente_centesimos_a',100) : null;
     animateTelemetry('speed',speed,1,()=>updateArc(false));
     animateTelemetry('mpu-accel',accel,2,reading=>{$('mpu-accel-row').classList.toggle('is-negative',reading!==null&&reading<-.04);},' m/s²');
     renderBatteryCharge(soc);
@@ -501,7 +684,7 @@
     telemetryMotion.powerUnit=powerKw;
     set('power-unit',powerKw?'kW':'W');
     animateTelemetry('power',powerKw?power/1000:power,powerKw?2:0,current=>renderPowerRail(current===null?null:powerKw?current*1000:current));
-    if(power===null){$('power-card').classList.remove('is-regen');set('power-context','Medição indisponível');}
+    if(power===null)$('power-card').classList.remove('is-regen');
     animateTelemetry('current-primary',current,2,reading=>{
       const magnitude=Math.abs(reading||0),card=$('current-card');
       const intensity=Math.min(1,Math.max(0,(magnitude-CURRENT_HIGHLIGHT_A)/(CURRENT_VISUAL_MAX_A-CURRENT_HIGHLIGHT_A)));
@@ -513,7 +696,6 @@
       const peak=$('current-peak-marker'),visible=currentPeak.value!==null&&currentPeak.until>performance.now()&&reading!==null;
       peak.classList.toggle('is-visible',visible);
       if(visible)peak.style.left=Math.min(99,Math.max(1,Math.abs(currentPeak.value)/CURRENT_VISUAL_MAX_A*100))+'%';
-      set('current-context',reading===null?'Medição indisponível':reading<-.5?'Regeneração':d.simulado?'Dados simulados':'Leitura do INA228');
     },' A');
     set('gear', d.simulado ? marchas[d.marcha] || 'Não disponível' : 'Não disponível'); set('distance', format(value(d,'percurso_metros',1000),'km',2)); set('master-time', age(value(d,'tempo_mestre_ms'))); set('source', d.simulado ? 'Dados simulados' : 'Mestre');
     set('voltage', format(electrical ? value(d,'tensao_pacote_mv',1000) : null,'V',3)); set('current', format(current,'A',2)); set('power-detail',format(power,'W',2)); set('soc-detail', format(soc,'%',2));
@@ -527,7 +709,7 @@
     set('ina-temp',ina?format(value(d,'ina_temperatura_centesimos_c',100),'°C',2):'Não disponível');
     set('ina-energy',ina&&(d.estado_ina&2)?format(value(d,'ina_energia_mwh',1000),'Wh',2):'Não disponível');
     set('ina-charge',ina&&(d.estado_ina&4)?format(value(d,'ina_carga_mah',1000),'Ah',3):'Não disponível');
-    const throttle = d.simulado ? value(d,'acelerador_decimos_percentual',10) : null, brake = d.simulado ? value(d,'freio_decimos_percentual',10) : null;
+    const throttle = value(d,'acelerador_decimos_percentual',10), brake = d.simulado ? value(d,'freio_decimos_percentual',10) : null;
     animateTelemetry('throttle-arc-value',throttle,0,current=>{$('throttle-fill').style.setProperty('--fill-level',Math.max(0,Math.min(100,current||0))+'%');},'%');
     animateTelemetry('brake-arc-value',brake,0,current=>{$('brake-fill').style.setProperty('--fill-level',Math.max(0,Math.min(100,current||0))+'%');},'%');
     set('throttle', format(throttle,'%',1)); set('brake',format(brake,'%',1)); $('throttle-bar').style.width = Math.max(0,Math.min(100,throttle || 0))+'%'; $('brake-bar').style.width = Math.max(0,Math.min(100,brake || 0))+'%';
@@ -542,6 +724,9 @@
     const started = performance.now();
     let failed = false;
     try {
+      void pollRemote();
+      void pollCommandStates();
+      void pollVisibleReadings();
       const d = await getJSON('/api/telemetria'); state.browserOnline = true; state.telemetry = d;
       if (d.valido && d.idade_ms < 2000) { const first = state.lastSequence === null; appendSample(d); if (first) event(d.simulado ? 'Telemetria simulada recebida.' : 'Telemetria recebida do mestre.'); renderTelemetry(d); observeOdometerRun(d); }
       else if (state.lastSequence !== null && (!state.samples.length || !state.samples[state.samples.length-1].gap)) { state.samples.push({time:Date.now(),gap:true}); event('Telemetria desatualizada.','warn'); drawCharts(); }
@@ -554,16 +739,29 @@
   }
   async function pollLocal() {
     if (state.polls.local) return; state.polls.local = true;
-    try { state.local = await getJSON('/api/diagnostico'); state.localAt=Date.now(); state.browserOnline = true; deviceSample('equipe',{cpu:state.local.cpu_valida?value(state.local,'cpu_total_decimos_percentual',10):null,core0:state.local.cpu_valida?value(state.local,'cpu_nucleo_0_decimos_percentual',10):null,core1:state.local.cpu_valida?value(state.local,'cpu_nucleo_1_decimos_percentual',10):null,heap:value(state.local,'heap_interno_livre',1024),temp:state.local.temperatura_valida?value(state.local,'temperatura_centesimos_c',100):null,rate:value(state.local,'taxa_pacotes_centesimos_hz',100)}); }
-    catch (_) { state.browserOnline = Date.now() - state.lastHttp < 5000; deviceSample('equipe',{cpu:null,core0:null,core1:null,heap:null,temp:null,rate:null}); }
+    try { state.local = await getJSON('/api/diagnostico'); state.localAt=Date.now(); state.browserOnline = true; deviceSample('equipe',{cpu:state.local.cpu_valida?value(state.local,'cpu_total_decimos_percentual',10):null,core0:state.local.cpu_valida?value(state.local,'cpu_nucleo_0_decimos_percentual',10):null,heap:value(state.local,'heap_interno_livre',1024),temp:state.local.temperatura_valida?value(state.local,'temperatura_centesimos_c',100):null,rate:value(state.local,'taxa_pacotes_centesimos_hz',100)}); }
+    catch (_) { state.browserOnline = Date.now() - state.lastHttp < 5000; deviceSample('equipe',{cpu:null,core0:null,heap:null,temp:null,rate:null}); }
     finally {state.localChecked=true;state.polls.local = false; set('equipe-client-count',state.local&&Number.isFinite(state.local.clientes_wifi)?String(state.local.clientes_wifi):'—');updateStatus(); renderGroup('equipe');}
   }
   async function masterQuery(consult, quiet = true) {
     const key = 'master-' + consult; if (state.polls[key]) return state.polls[key];
     const pending=(async()=>{
       try { const d = await remote(() => getJSON('/api/mestre?consulta=' + encodeURIComponent(consult), 18000)); const restored=consult==='ping'&&!state.masterOnline;state.master[consult] = d; state.masterOnline = true; if(consult==='saude')state.lastHealthAt=Date.now(); if(consult==='diagnostico_mestre')state.masterDiagnosisAt=Date.now(); if(restored){state.lastCommandPoll=0;state.lastAuxPoll=0;}updateMasterUI(consult,d); if(consult==='ping')deviceSample('mestre',{rtt:value(d,'rtt_ms')});if(consult==='diagnostico_mestre')deviceSample('mestre',{cpu:d.cpu_valida?value(d,'cpu_total_decimos_percentual',10):null,core0:d.cpu_valida?value(d,'cpu_nucleo_0_decimos_percentual',10):null,core1:d.cpu_valida?value(d,'cpu_nucleo_1_decimos_percentual',10):null,heap:value(d,'heap_interno_livre',1024),temp:d.temperatura_valida?value(d,'temperatura_centesimos_c',100):null}); if (!quiet) commandEvent('MESTRE', consult, 'Executado', d); return d; }
-      catch (error) { if (consult === 'ping'){state.masterOnline = false;deviceSample('mestre',{rtt:null,cpu:null,core0:null,core1:null,heap:null,temp:null});} if (!quiet) commandEvent('MESTRE', consult, error.name === 'AbortError' ? 'Tempo esgotado' : 'Falhou', null, error.message); return null; }
-      finally {if(consult==='ping')state.masterChecked=true;updateStatus();availability();renderDevice('mestre','mestre');}
+      catch (error) {
+        if (consult === 'ping') {
+          state.masterOnline = false;
+          showUnconfirmedControl('Mestre sem resposta. Estado não confirmado.');
+          deviceSample('mestre',{rtt:null,cpu:null,core0:null,core1:null,heap:null,temp:null});
+        }
+        if (!quiet) commandEvent('MESTRE', consult, error.name === 'AbortError' ? 'Tempo esgotado' : 'Falhou', null, error.message);
+        return null;
+      }
+      finally {
+        if (consult === 'ping') state.masterChecked = true;
+        updateStatus();
+        availability();
+        if (state.tab === 'mestre' || (consult !== 'controle_remoto' && consult !== 'sensores')) renderDevice('mestre','mestre');
+      }
     })();
     state.polls[key]=pending;
     try{return await pending;}finally{state.polls[key]=null;}
@@ -734,12 +932,19 @@
       : fresh ? 'Nenhuma causa ativa.' : 'Nenhuma causa na última leitura.');
 
     const list = $('health-diagnostics-causes');
-    const causeSignature = causes.join('|');
+    const causeSignature = causes.map(cause => cause.label).join('|');
     if (list.dataset.causes !== causeSignature) {
       list.dataset.causes = causeSignature;
       list.replaceChildren(...causes.map(cause => {
         const item = document.createElement('li');
-        item.textContent = cause;
+        if (cause.target) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'health-cause-link';
+          button.textContent = cause.label;
+          button.addEventListener('click', () => openHealthCause(cause));
+          item.append(button);
+        } else item.textContent = cause.label;
         return item;
       }));
     }
@@ -885,7 +1090,7 @@
         const item = document.createElement('span');
         const mark = document.createElement('i');
         mark.className = 'device-legend-key';
-        mark.style.setProperty('--series-color', chart.color);
+        mark.style.setProperty('--series-color', 'var(--chart-' + chart.tone + ')');
         item.append(mark, document.createTextNode((index ? 'Dir.' : 'Esq.') + ' · ' + chart.label + ' (' + chart.unit + ')'));
         legend.append(item);
       });
@@ -893,10 +1098,221 @@
     $('device-chart-' + group).setAttribute('aria-label', 'Histórico de ' + charts.map(chart => chart.label + ' em ' + chart.unit).join(' e ') + ' de ' + devices[id].name);
     if (state.tab === group) requestAnimationFrame(() => drawDeviceChart(group, id));
   }
-  const actionNames={velocidade_maxima:'Definir velocidade máxima',parada_remota:'Parada de emergência',liberar_parada_remota:'Rearmar',verificar_ota:'Verificar atualizações',autorizar_mestre:'Autorizar OTA do mestre',autorizar_equipe:'Autorizar OTA da Equipe',autorizar_visitantes:'Autorizar OTA de Visitantes',autorizar_todos:'Autorizar OTA de todos',cancelar_ota:'Cancelar OTA',alternar_relatorios:'Pausar ou retomar relatórios',resumo_terminal:'Solicitar resumo no terminal',sincronizar_google:'Solicitar sincronização',zerar_percurso:'Zerar percurso',intervalo_relatorio:'Alterar intervalo do relatório',intervalo_ota:'Alterar intervalo de verificação OTA',intervalo_telemetria_ota:'Alterar telemetria durante OTA',simulador_telemetria:'Alterar simulador de telemetria',wifi_test:'Testar nova rede Wi-Fi',wifi_conectar_salva:'Conectar rede salva',wifi_excluir_salva:'Excluir rede salva',wifi_primary:'Definir rede principal',wifi_restaurar_principal:'Restaurar rede principal',wifi_automatico:'Alterar conexão automática',wifi_politica:'Salvar política Wi-Fi'};
+  const actionNames={velocidade_maxima:'Definir velocidade máxima',parada_remota:'Parada de emergência',verificar_ota:'Verificar atualizações',autorizar_mestre:'Autorizar OTA do mestre',autorizar_equipe:'Autorizar OTA da Equipe',autorizar_visitantes:'Autorizar OTA de Visitantes',autorizar_todos:'Autorizar OTA de todos',cancelar_ota:'Cancelar OTA',alternar_relatorios:'Pausar ou retomar relatórios',resumo_terminal:'Solicitar resumo no terminal',sincronizar_google:'Solicitar sincronização',zerar_percurso:'Zerar percurso',intervalo_relatorio:'Alterar intervalo do relatório',intervalo_ota:'Alterar intervalo de verificação OTA',intervalo_telemetria_ota:'Alterar telemetria durante OTA',simulador_telemetria:'Alterar simulador de telemetria',wifi_test:'Testar nova rede Wi-Fi',wifi_conectar_salva:'Conectar rede salva',wifi_excluir_salva:'Excluir rede salva',wifi_primary:'Definir rede principal',wifi_restaurar_principal:'Restaurar rede principal',wifi_automatico:'Alterar conexão automática',wifi_politica:'Salvar política Wi-Fi'};
   const timeOf = time => new Date(time).toLocaleTimeString('pt-BR');
-  Object.assign(actionNames,{limite_marcha:'Definir marcha máxima',velocidade_maxima:'Salvar velocidade máxima',limite_acelerador:'Salvar acelerador máximo',zona_morta_pedal:'Definir zona morta',parada_remota:'Parada de emergência',liberar_parada_remota:'Rearmar'});
-  Object.assign(actionNames,{wifi_restaurar_politica:'Restaurar política Wi-Fi',logs_terminal:'Configurar logs do terminal',sensor_estado:'Alterar aquisição de sensores'});
+  Object.assign(actionNames,{limite_marcha:'Definir marcha máxima',velocidade_maxima:'Salvar velocidade máxima',limite_acelerador:'Salvar acelerador máximo',liberar_parada_remota:'Armar',ajuste_desenvolvedor:'Salvar alterações'});
+  const controlFields = {
+    velocidade_maxima: ['remote-speed',100,35,'velocidade_maxima_centesimos_kmh'],
+    limite_acelerador: ['remote-throttle-max',10,100,'acelerador_maximo_decimos_percentual']
+  };
+  // IDs e limites de protocolo em ajustes_desenvolvedor.h. A escala converte o inteiro em unidade de tela.
+  const developerGroups = [
+    ['Pedal e DAC', [
+      [0,'Tensão no início do curso do pedal','mV',1,100,2500],
+      [1,'Tensão com o pedal no fim do curso','mV',1,200,3000],
+      [2,'Tensão para reconhecer o pedal solto','mV',1,101,2800],
+      [3,'Tolerância de tensão fora do curso do pedal','mV',1,0,400],
+      [4,'Zona morta do pedal','%',10,0,300],
+      [27,'Ganho do pedal','×',1000,500,2000],
+      [5,'Tensão do DAC em repouso','mV',1,0,2500],
+      [6,'Tensão do DAC a 100%','mV',1,100,5000],
+      [14,'Intervalo de reenvio da tensão ao DAC','ms',1,20,1000],
+      [15,'Intervalo para tentar reconectar o DAC','ms',1,100,30000]
+    ]],
+    ['Armamento', [
+      [30,'Marcha máxima','',1,1,3],
+      [7,'Tempo com pedal solto para armar','ms',1,250,3000],
+      [12,'Velocidade máxima para armar','km/h',100,0,100],
+      [13,'Espera antes de rearmar','ms',1,5000,30000]
+    ]],
+    ['Limitador de velocidade', [
+      [29,'Velocidade máxima','km/h',100,0,3500],
+      [28,'Acelerador máximo','%',10,0,1000],
+      [9,'Faixa de redução progressiva','km/h',100,1,1000],
+      [10,'Margem para retomar após o corte','km/h',100,1,500],
+      [11,'Leituras consecutivas para retomar','',1,1,20],
+      [8,'Rampa de subida do acelerador','p.p./s',10,10,1000]
+    ]],
+    ['Rodas e encoders', [
+      [16,'Diâmetro da roda esquerda','mm',1,50,2000],
+      [17,'Diâmetro da roda direita','mm',1,50,2000],
+      [18,'Voltas do encoder por volta da roda esquerda','×',1000,50,100000],
+      [19,'Voltas do encoder por volta da roda direita','×',1000,50,100000],
+      [20,'Fator de correção da roda esquerda','×',1000,500,2000],
+      [21,'Fator de correção da roda direita','×',1000,500,2000],
+      [22,'Encoder esquerdo','pulsos/giro',1,1,100000],
+      [23,'Encoder direito','pulsos/giro',1,1,100000]
+    ]],
+    ['Sensores elétricos e inerciais', [
+      [24,'Fator de tensão do INA228','×',1000,100,10000],
+      [25,'Fator de corrente do INA228','×',1000,100,10000],
+      [26,'Fator de aceleração do MPU','×',1000,500,2000]
+    ]],
+    ['Bateria', [
+      [31,'Baterias em série','',1,1,5],
+      [32,'Tensão por bateria a 0%','V',1000,9000,14000],
+      [33,'Tensão por bateria a 100%','V',1000,10000,15000],
+      [34,'Tempo parado para estimar a carga','s',1000,100,120000]
+    ]],
+    ['Sinalização', [
+      [35,'Intensidade máxima do buzzer','%',1,0,100],
+      [36,'LED integrado do Mestre','',1,0,1]
+    ]]
+  ];
+  const developerSettings = new Map(developerGroups.flatMap(([,rows])=>rows.map(row=>[row[0],row])));
+  const developerDefaults = [500,2500,650,200,50,1000,5000,500,250,300,30,2,50,5000,20,5000,
+    1200,1200,5000,5000,1000,1000,600,600,1000,1000,1000,1000,1000,3000,3,
+    4,11200,13000,1000,65,1];
+  const developerHelp = [
+    'Tensão de referência no início do curso do pedal.',
+    'Tensão de referência no fim do curso do pedal.',
+    'A tensão deve ficar abaixo deste valor para o Mestre considerar o pedal solto.',
+    'Tolerância fora da faixa calibrada. Se a leitura passar dessa margem, o Mestre rejeita a amostra.',
+    'Parte inicial do curso que continua pedindo zero de aceleração.',
+    'Tensão de repouso do DAC com o carro armado. Com a tração bloqueada, a referência vai a 0 V.',
+    'Tensão do DAC correspondente a 100% de aceleração permitida.',
+    'Por quanto tempo o pedal deve ficar solto antes de autorizar o armamento.',
+    'Maior: o acelerador sobe mais rápido. Menor: sobe mais suave. A redução continua imediata.',
+    'Maior: reduz o teto do acelerador mais cedo. Menor: reduz mais perto do limite. O Mestre limita a faixa a um terço da velocidade máxima.',
+    'Maior: o carro precisa perder mais velocidade para voltar a acelerar. Menor: libera mais perto do limite. A margem fica limitada à metade da faixa de redução.',
+    'Mais leituras: demora mais para liberar após o corte e tolera melhor oscilações. Menos: libera mais rápido. Conta só amostras novas do odômetro, a cada 20 ms.',
+    'Velocidade máxima medida em que o Mestre aceita armar.',
+    'Tempo mínimo entre a parada de emergência e um novo armamento.',
+    'Intervalo para reenviar a referência com a saída habilitada. O padrão de 20 ms corresponde a 50 Hz.',
+    'Intervalo entre tentativas de localizar o DAC quando ele fica indisponível.',
+    'Meça de uma borda à outra passando pelo centro. Se mediu a volta do pneu, divida por π.',
+    'Meça de uma borda à outra passando pelo centro. Se mediu a volta do pneu, divida por π.',
+    'Quantas voltas o encoder esquerdo dá a cada volta da roda esquerda.',
+    'Quantas voltas o encoder direito dá a cada volta da roda direita.',
+    'Multiplica a velocidade e a distância calculadas para a roda esquerda.',
+    'Multiplica a velocidade e a distância calculadas para a roda direita.',
+    'Quantidade de pulsos por volta do eixo do encoder esquerdo.',
+    'Quantidade de pulsos por volta do eixo do encoder direito.',
+    'Multiplica a tensão do INA228 usada na telemetria e no cálculo de potência e energia.',
+    'Multiplica a corrente do INA228 usada na telemetria e no cálculo de potência, energia e carga.',
+    'Multiplica a aceleração longitudinal filtrada do MPU6050.',
+    'Multiplica o pedido do pedal depois da zona morta. Os limites de aceleração continuam valendo.',
+    'Maior: permite mais acelerador. Menor: reduz o máximo permitido, inclusive longe do limite de velocidade. Zero bloqueia a tração.',
+    'Maior: corta o pedido de aceleração mais tarde. Menor: corta mais cedo. Zero bloqueia a tração. O Mestre usa a maior velocidade válida das rodas.',
+    'Marcha mais alta permitida pelo Mestre quando o controle de marcha está habilitado.',
+    'Multiplica as tensões por bateria para obter os limites do banco.',
+    'Abaixo deste limite por bateria, a estimativa de carga chega a 0%.',
+    'Acima deste limite por bateria, a estimativa de carga chega a 100%.',
+    'O odômetro deve indicar repouso contínuo por este tempo. Em movimento, o painel mantém a última estimativa.',
+    'Limita a intensidade dos avisos sonoros. Zero silencia o buzzer.',
+    'Liga ou desliga o RGB da placa do Mestre, no GPIO 48. Os LEDs externos e o buzzer continuam sinalizando.'
+  ];
+  const developerGears = ['', 'L', 'M', 'H'];
+  const developerLedOptions = ['Desligado', 'Ligado'];
+  function developerDisplay(id, value, scale, unit) {
+    if(id===30)return developerGears[value];
+    if(id===36)return developerLedOptions[value];
+    return format(value/scale,unit,Math.log10(scale)).trim();
+  }
+  $('developer-tabs').innerHTML=developerGroups.map(([group],index)=>`
+    <button type="button" role="tab" id="developer-tab-${index}" aria-controls="developer-group-${index}"
+      aria-selected="${index===0}" tabindex="${index===0?0:-1}">${group}</button>`).join('');
+  $('developer-settings').innerHTML=developerGroups.map(([group,rows],index)=>`
+    <div id="developer-group-${index}" class="developer-rows" role="tabpanel"
+      aria-labelledby="developer-tab-${index}" ${index===0?'':'hidden'}>
+      ${group==='Armamento'?'<p class="developer-startup">Parada de emergência na partida <strong>Inativa por padrão</strong>. O carro inicia desarmado.</p>':''}
+      ${group==='Limitador de velocidade'?'<p id="developer-limiter-state" class="developer-startup" role="status">Aguardando ajustes do Mestre.</p>':''}
+      ${rows.map(([id,label,unit,scale,min,max])=>`<div class="developer-row">
+        <div class="developer-name">
+          <label for="developer-value-${id}">${label}${unit?' ('+unit+')':''}
+            <small>Padrão ${developerDisplay(id, developerDefaults[id], scale, unit)}</small></label>
+          <details class="developer-help">
+            <summary aria-label="Ajuda sobre ${label}">?</summary>
+            <p>${developerHelp[id]} <small>Gravado na NVS do Mestre.</small></p>
+          </details>
+        </div>
+        ${id===30 ? '<select id="developer-value-30">'+developerGears.slice(1).map((gear,index)=>'<option value="'+(index+1)+'">'+gear+'</option>').join('')+'</select>' :
+          id===36 ? '<select id="developer-value-36" disabled><option value="" disabled selected>Indisponível</option>'+developerLedOptions.map((label,index)=>'<option value="'+index+'">'+label+'</option>').join('')+'</select>' :
+          `<input id="developer-value-${id}" type="number" min="${min/scale}" max="${max/scale}" step="${1/scale}">`}
+      </div>`).join('')}
+    </div>`).join('');
+  $('developer-save').dataset.cap=String(CAP_DEVELOPER_SETTINGS);
+  const developerInputs=[...$('developer-settings').querySelectorAll('input, select')];
+  function bindSettingsTabs(id, onSelect) {
+    const tabs=[...$(id).querySelectorAll('[role="tab"]')];
+    const show=index=>{
+      tabs.forEach((tab,i)=>{
+        tab.setAttribute('aria-selected',String(i===index));
+        tab.tabIndex=i===index?0:-1;
+        $(tab.getAttribute('aria-controls')).hidden=i!==index;
+      });
+      onSelect(tabs[index]);
+    };
+    tabs.forEach((tab,index)=>{
+      tab.addEventListener('click',()=>show(index));
+      tab.addEventListener('keydown',event=>{
+        const count=tabs.length;
+        const targets={ArrowLeft:(index+count-1)%count,ArrowRight:(index+1)%count,Home:0,End:count-1};
+        if (!Object.hasOwn(targets,event.key)) return;
+        event.preventDefault();
+        const next=targets[event.key];
+        show(next);
+        tabs[next].focus();
+      });
+    });
+    return show;
+  }
+  const showDeveloperGroup=bindSettingsTabs('developer-tabs',()=>{});
+  let developerDevice='mestre';
+  const radioSettings={};
+  for(const target of ['equipe','visitantes']){
+    const panel=$('developer-panel-'+target);
+    panel.innerHTML=`<p class="command-field-status" role="status">Aguardando o satélite.</p>
+      <fieldset class="developer-fields" aria-label="Wi-Fi do satélite" disabled>
+        <div class="command-fields developer-radio-fields">
+          <label>Canal Wi-Fi<input type="number" min="1" max="13" step="1" required></label>
+          <label>Largura do canal<select><option value="20">20 MHz</option><option value="40">40 MHz</option></select></label>
+          <label>Potência máxima (dBm)<input type="number" min="0" max="20" step="0.25" required></label>
+          <label>Máximo de conexões<input type="number" min="1" max="10" step="1" required></label>
+        </div>
+        <p class="command-field-status">0 dBm neste campo usa o padrão do rádio. Os ajustes entram em vigor ao reiniciar o satélite.</p>
+        <div class="wifi-step-actions">
+          <button type="button" class="button" data-master-action="salvar_radio_satelite" data-radio-target="${target}" disabled>Salvar Wi-Fi</button>
+        </div>
+      </fieldset>
+      <p><button type="button" class="button secondary developer-radio-clients">Gerenciar conexões</button></p>`;
+    panel.querySelector('.developer-radio-clients').addEventListener('click',()=>revealSection($('wifi-local')));
+    radioSettings[target]={
+      query:'satelite_'+target+'_radio',
+      status:panel.querySelector('[role="status"]'),
+      fieldset:panel.querySelector('fieldset'),
+      fields:[...panel.querySelectorAll('input, select')],
+      confirmed:false,
+    };
+  }
+  bindSettingsTabs('developer-devices',tab=>{
+    developerDevice=tab.id.slice('developer-device-'.length);
+    void pollVisibleReadings();
+  });
+  Object.assign(actionNames,{wifi_restaurar_politica:'Restaurar política Wi-Fi',logs_terminal:'Configurar logs do terminal',sensor_estado:'Alterar aquisição de sensores',salvar_radio_satelite:'Salvar Wi-Fi'});
+  async function refreshRadioSettings(target) {
+    const radio=radioSettings[target];
+    if(!await masterQuery(radio.query)){
+      radio.confirmed=false;
+      radio.status.textContent='Ajustes de Wi-Fi indisponíveis. Confira o enlace e o firmware do satélite e do Mestre.';
+      availability();
+    }
+  }
+  function renderRadioSettings(radio,data) {
+    radio.confirmed=Array.isArray(data.salvo)&&data.salvo.length===4&&Array.isArray(data.ativo)&&data.ativo.length===4;
+    if(!radio.confirmed){radio.status.textContent='O satélite não informou os parâmetros de Wi-Fi.';return;}
+    const [channel,band,power,clients]=data.ativo;
+    const [first,,,last]=radio.fields;
+    first.min=String(data.canal_minimo);
+    first.max=String(data.canal_maximo);
+    last.max=String(data.capacidade_clientes);
+    radio.fields.forEach((field,index)=>{
+      if(!field.dataset.edited&&document.activeElement!==field)
+        field.value=String(index===2?data.salvo[index]/4:data.salvo[index]);
+    });
+    const pending=data.reinicio_pendente?' · Perfil salvo. Reinicie o satélite para aplicar.':'';
+    radio.status.textContent='Em uso · Canal '+channel+' · '+band+' MHz · '+format(power/4,'dBm',2)+' · Até '+clients+' conexões'+pending;
+  }
   function runMeta(run) {
     const ids=run.requests.length ? 'Solicitação '+run.requests.map(id=>'#'+id).join(', ') : 'Número da solicitação ainda indisponível';
     const response=run.responses[run.responses.length-1];
@@ -924,9 +1340,55 @@
   const reversePermissionButtons=document.querySelectorAll('[data-master-action="permitir_re"]');
   const automaticRearmMs=30000;
   const minimumRearmMs=5000;
+  function isolatedDacAvailable(control=state.master.controle_remoto) {
+    return control?.dac_isolado_habilitado ?? ((state.master.versao?.capacidades & CAP_ISOLATED_DAC) !== 0);
+  }
+  function needsArming(control) {
+    return control?.parada_solicitada || control?.armamento_inicial_pendente;
+  }
+  function armingBlock(control) {
+    if (state.stopInFlight) return 'Confirmando a parada…';
+    if (!needsArming(control) || !state.masterOnline) return '';
+    if (state.controlUnconfirmed) return 'Aguardando confirmação do estado do controle.';
+    if (control.ota_em_andamento) {
+      const ota = state.master.ota?.mestre;
+      if (masterOtaValidationActive(ota?.estado))
+        return (ota.estado===10?'Validando firmware':'Firmware em observação')+
+          ' · '+number(ota.progresso_percentual,0)+'% desta etapa.';
+      return 'Aguarde a atualização e a validação do firmware.';
+    }
+    if (control.partida_concluida === false) return 'Aguarde a inicialização do Mestre.';
+    const waitMs = control.rearme_restante_ms ?? Math.max(0,(control.parada_restante_ms||0)-(automaticRearmMs-minimumRearmMs));
+    if (waitMs > 0) return 'Aguarde '+Math.ceil(waitMs/1000)+' s para armar.';
+    const isolated=isolatedDacAvailable(control);
+    if (control.atuacao_habilitada === false && !isolated) return 'Saída do acelerador desabilitada no Mestre.';
+    if (control.bloqueios & (1 << 7)) return 'Verifique as saídas de tração.';
+    if (control.bloqueios & (1 << 3)) return 'Selecione sensores reais para armar.';
+    if (control.bloqueios & (1 << 2)) {
+      const health = getSystemHealth();
+      if (health.fresh && (health.mask & encoderDivergenceMask)) return 'Verifique a divergência entre os encoders.';
+      if (health.fresh && (health.mask & odometerUnavailableMask)) return 'Aguardando uma leitura válida dos encoders.';
+      return 'Aguardando os sensores de movimento.';
+    }
+    if (control.faixa_marcha_fisica === 0 && !isolated) return 'Selecione uma marcha na chave do veículo.';
+    if (control.reversao_solicitada && control.reversao_permitida === false) return 'A ré está bloqueada. Selecione Frente na chave.';
+    if (control.velocidade_maxima_centesimos_kmh === 0 || control.acelerador_maximo_decimos_percentual === 0) {
+      return 'Defina limites de velocidade e acelerador acima de zero.';
+    }
+    if ((control.bloqueios & (1 << 4)) || control.velocidade_medida_centesimos_kmh >= control.velocidade_maxima_centesimos_kmh) {
+      return 'Aguarde o veículo parar.';
+    }
+    if (control.pedal_disponivel === false || control.amostra_pedal_restante_ms === 0) return 'Aguardando a leitura do pedal.';
+    if (control.acelerador_lido_decimos_percentual > 0 || (control.bloqueios & (1 << 6))) return 'Mantenha o pedal do acelerador solto.';
+    if (control.dac_disponivel === false) return 'DAC do acelerador indisponível.';
+    if (control.dac_zero_confirmado === false) return 'Aguardando a confirmação de 0 V no DAC.';
+    return '';
+  }
   function availability(){
     const capabilities=state.master.versao?.capacidades;
     const control=state.master.controle_remoto;
+    const developer=state.master.ajustes_desenvolvedor;
+    const developerEditable=state.masterOnline&&!state.developerUnconfirmed&&developer?.edicao_permitida===true;
     const reverseSupported=(capabilities&CAP_REVERSE_PERMISSION)!==0&&typeof control?.reversao_permitida==='boolean';
     for(const button of reversePermissionButtons){
       const selected=reverseSupported&&(button.dataset.controlValue==='1')===control.reversao_permitida;
@@ -935,22 +1397,28 @@
     set('reverse-permission-state',reverseSupported?control.reversao_permitida?'Ré permitida.':'Ré bloqueada.':Number.isFinite(capabilities)&&(capabilities&CAP_REVERSE_PERMISSION)===0?'Controle de ré indisponível neste firmware.':'Aguardando o Mestre.');
     document.querySelectorAll('[data-master-action]').forEach(button=>{
       const action=button.dataset.masterAction,mask=Number(button.dataset.cap);
-      button.disabled=action==='parada_remota'?(!state.browserOnline||!!state.stopInFlight):state.busy||!state.masterOnline||(capabilities&mask)!==mask;
+      const supported=(capabilities&mask)===mask||(mask===CAP_CONTROL&&!!control)||(mask===CAP_DEVELOPER_SETTINGS&&!!developer);
+      button.disabled=action==='parada_remota'?(!state.browserOnline||!!state.stopInFlight):state.busy||!state.masterOnline||!supported;
       if(action==='sensor_estado'&&(!state.master.sensores?.controle_permitido||!button.dataset.sensorValue))button.disabled=true;
       if(action==='logs_terminal'&&!state.master.logs_terminal)button.disabled=true;
       if(action==='permitir_re'&&!reverseSupported)button.disabled=true;
+      if(action==='ajuste_desenvolvedor'&&(!developerEditable||!developerInputs.some(field=>field.dataset.edited)))button.disabled=true;
+      if(action==='salvar_radio_satelite'&&!radioSettings[button.dataset.radioTarget].confirmed)button.disabled=true;
+      if(action.startsWith('autorizar_')&&masterOtaValidationActive(state.master.ota?.mestre?.estado))button.disabled=true;
     });
+    $('developer-fields').disabled=!developerEditable||state.busy;
+    for(const radio of Object.values(radioSettings))
+      radio.fieldset.disabled=state.busy||!state.masterOnline||!radio.confirmed;
     $('refresh-sensors').disabled=state.busy||!state.masterOnline||(capabilities&CAP_SENSORS)===0;
     $('refresh-terminal-logs').disabled=state.busy||!state.masterOnline||(capabilities&CAP_TERMINAL_LOGS)===0;
     const rearm=document.querySelector('[data-master-action="liberar_parada_remota"]');
-    const waitMs=control?.parada_solicitada?(control.rearme_restante_ms??Math.max(0,(control.parada_restante_ms||0)-(automaticRearmMs-minimumRearmMs))):0;
+    const waitText=armingBlock(control);
     const wait=$('remote-rearm-wait');
-    wait.hidden=!(state.stopInFlight||waitMs>0);
-    set('remote-rearm-wait',state.stopInFlight?'Confirmando a parada…':waitMs>0?'Aguarde '+Math.ceil(waitMs/1000)+' s para rearmar.':'');
+    wait.hidden=!waitText;
+    set('remote-rearm-wait',waitText);
     if(rearm){
-      const blocked=state.stopInFlight||waitMs>0||!control||control.partida_concluida===false||control.ota_em_andamento||!control.parada_solicitada;
-      rearm.disabled ||= blocked;
-      rearm.title=state.stopInFlight||waitMs>0?wait.textContent:control?.partida_concluida===false||control?.ota_em_andamento?'Aguarde a partida ou a atualização':control?.parada_solicitada===false?'A parada já está encerrada':'Solicitar rearme ao mestre';
+      rearm.disabled ||= !!waitText||!needsArming(control);
+      rearm.title=waitText||'Solicitar armamento ao Mestre';
     }
     const sync=state.master.sincronizacao,syncButton=document.querySelector('[data-master-action="sincronizar_google"]');
     if(syncButton){
@@ -967,26 +1435,26 @@
   }
   function setField(id,newValue){const field=$(id);if(field&&!field.dataset.edited&&document.activeElement!==field)field.value=String(newValue);}
   const sensors=[
-    ['ADC','Entrada analógica'],
+    ['ADC','Pedal · GPIO5'],
     ['MPU6050','Aceleração, rotação e temperatura'],
     ['Encoders','Pulsos e velocidade por roda'],
     ['INA228','Tensão, corrente e diagnóstico'],
     ['Temperatura do ESP','Sensor interno do Mestre']
   ];
   const sensorNames=sensors.map(([name])=>name);
-  $('sensor-list').innerHTML=sensors.map(([name,description],id)=>`
+  $('sensor-list').insertAdjacentHTML('beforeend',sensors.map(([name,description],id)=>`
     <li class="sensor-card">
       <details>
         <summary><span><strong>${name}</strong><small id="sensor-glance-${id}">${description}</small></span><span id="sensor-state-${id}" class="badge muted">Sem consulta</span></summary>
         <dl id="sensor-facts-${id}" class="sensor-facts" hidden></dl>
       </details>
       <button type="button" class="button secondary" data-master-action="sensor_estado" data-sensor-id="${id}" data-cap="16384" disabled>Pausar</button>
-    </li>`).join('');
+    </li>`).join(''));
   const terminalSources=['Wi-Fi','Rádio Wi-Fi','OTA','Transporte OTA','Google e SD','Telemetria','Sensores','Comunicação UART','Comandos','Supervisão','Sinalização','Relatórios','Cartão SD','Odômetro','Aceleração','I²C','Simulador','Terminal'];
   const terminalLevels=['Silenciado','Erros','Avisos','Informações'];
   function renderSensors(data){
     const ina=data.ina228,i2c=data.i2c;
-    const encoder=reading=>number(reading?.contagem,0)+' pulsos · '+format(value(reading,'velocidade_kmh'),'km/h',2);
+    const encoder=reading=>number(reading?.contagem,0)+' contagens · '+format(value(reading,'velocidade_kmh'),'km/h',2);
     const axes=reading=>Array.isArray(reading)?reading.map((item,index)=>'XYZ'[index]+' '+number(item,0)).join(' · '):'Não disponível';
     const hex=reading=>Number.isInteger(reading)?'0x'+(reading>>>0).toString(16).toUpperCase():'Não disponível';
     const readings=[
@@ -1015,6 +1483,62 @@
     const busFacts=$('sensor-i2c-facts');
     busFacts.hidden=!i2c;
     if(i2c)renderDeviceFacts(busFacts,[['Operações bem-sucedidas',number(i2c.operacoes_ok,0)],['Erros',number(i2c.erros,0)],['Sondagens bem-sucedidas',number(i2c.sondagens_ok,0)],['Endereços ausentes',number(i2c.enderecos_ausentes,0)],['Último erro',i2c.ultimo_erro===0?'Nenhum':hex(i2c.ultimo_erro)]]);
+  }
+  const controlGears = ['Nenhuma', 'L', 'M', 'H'];
+  function renderControlSensors(control) {
+    const selectorsAvailable = control?.partida_concluida === true && control.atuacao_habilitada === true;
+    const gear = selectorsAvailable ? controlGears[control.faixa_marcha_fisica] : null;
+    const selectedReverse = selectorsAvailable ? control.reversao_solicitada : null;
+    const reverseCommand = selectorsAvailable ? control.reversao_acionar_solicitado : null;
+    set('sensor-gear-selected', gear ?? 'Não disponível');
+    set('sensor-direction-selected', typeof selectedReverse === 'boolean' ? (selectedReverse ? 'Ré' : 'Frente') : 'Não disponível');
+    set('sensor-reverse-command', typeof reverseCommand === 'boolean' ? (reverseCommand ? 'Acionado' : 'Inativo') : 'Não disponível');
+
+    const pedal = control?.pedal_disponivel === true ? value(control, 'tensao_pedal_mv', 1000) : null;
+    const dacAvailable = control?.dac_disponivel === true;
+    const reference = dacAvailable ? value(control, 'tensao_dac_mv', 1000) : null;
+    const readings = [];
+    if (pedal !== null) readings.push('Pedal ' + format(pedal, 'V', 3));
+    if (reference !== null) readings.push('DAC ref. ' + format(reference, 'V', 3));
+    set('sensor-throttle-glance', readings.join(' · ') || 'ADC do pedal · MCP4725');
+    badge('sensor-throttle-state', ['Sem leitura', 'Leitura parcial', 'Lendo'][readings.length],
+          ['muted', 'warn', 'good'][readings.length]);
+    set('sensor-pedal-voltage', format(pedal, 'V', 3));
+    set('sensor-pedal-position', format(pedal === null ? null : value(control, 'acelerador_lido_decimos_percentual', 10), '%'));
+    set('sensor-pedal-allowed', format(value(control, 'acelerador_permitido_decimos_percentual', 10), '%'));
+    set('sensor-dac-state', dacAvailable ? 'Disponível' : control?.dac_disponivel === false ? 'Indisponível' : 'Sem leitura');
+    set('sensor-dac-reference', format(reference, 'V', 3));
+    const zero = dacAvailable ? control.dac_zero_confirmado : null;
+    set('sensor-dac-zero', typeof zero === 'boolean' ? zero ? 'Sim' : 'Não' : 'Não disponível');
+  }
+
+  function limiterSettingsSummary(values) {
+    const limit=values?.[29], throttle=values?.[28], range=values?.[9], margin=values?.[10], samples=values?.[11];
+    if(![limit,throttle,range,margin,samples].every(Number.isInteger))return 'Aguardando ajustes do Mestre.';
+    if(limit===0||throttle===0)return 'Tração bloqueada por limite em zero.';
+    // Reproduz os limites efetivos de LimitadorVelocidade::calcular_teto, em centésimos de km/h.
+    const effectiveRange=Math.min(range,Math.max(1,Math.floor(limit/3)));
+    const effectiveMargin=Math.min(margin,Math.max(1,Math.floor(effectiveRange/2)));
+    const speed=value=>format(Math.max(0,value)/100,'km/h',2);
+    return 'Em uso · Redução a partir de '+speed(limit-effectiveRange)+
+      ' · Corte em '+speed(limit)+' · Retomada após '+samples+
+      (samples===1?' leitura':' leituras')+' a '+speed(limit-effectiveMargin)+' ou menos.';
+  }
+  function renderDeveloperSettings(data) {
+    state.developerUnconfirmed = !Array.isArray(data.valores);
+    for (const [id,,,scale] of developerSettings.values()) {
+      const disponivel=Number.isInteger(data.valores?.[id]);
+      const field=$('developer-value-'+id);
+      field.disabled=!disponivel;
+      if (disponivel) setField(field.id, data.valores[id]/scale);
+      else if(id===36){
+        field.value='';
+        delete field.dataset.edited;
+      }
+    }
+    set('developer-status', state.developerUnconfirmed ? 'Valores indisponíveis.' :
+      data.edicao_permitida ? 'Edição disponível' : 'Desarme o veículo e aguarde o fim da OTA para editar.');
+    set('developer-limiter-state',limiterSettingsSummary(data.valores));
   }
   function showTerminalLogOptions(){
     const type=Number($('terminal-log-type').value),source=Number($('terminal-log-source').value);
@@ -1053,6 +1577,7 @@
         set(status,'Sem resposta · dados anteriores.');
         availability();
       }
+      if(query==='sensores'&&commandCardOpen('sensor-command')&&!state.stopInFlight&&(capabilities&CAP_CONTROL)!==0)await refreshControlState();
     };
     $(button).addEventListener('click',refresh);
     $(panel).addEventListener('toggle',()=>{if($(panel).open)refresh();});
@@ -1118,13 +1643,14 @@
   $('master-task-previous').addEventListener('click',()=>loadMasterTasks(Math.max(0,taskPage.inicio-taskPageSize)));
   $('master-task-next').addEventListener('click',()=>loadMasterTasks(taskPage.inicio+taskPageSize));
   $('master-tasks').addEventListener('toggle',()=>{if($('master-tasks').open&&!taskPage)loadMasterTasks();});
-  const otaMasterStates=['Desabilitado','Inicializando','Aguardando rede','Verificando','Atualizado','Aguardando autorização','Baixando','Aplicado','Cancelado','Falha'];
-  const otaSatelliteStates=['Desconhecido','Indisponível','Não suportado','Atualizado','Aguardando autorização','Transferindo','Reiniciando','Concluído','Cancelado','Falha'];
+  const otaMasterStates=['Desabilitado','Inicializando','Aguardando rede','Verificando','Atualizado','Aguardando autorização','Baixando','Aplicado','Cancelado','Falha','Validando firmware','Em observação','Firmware validado','Falha na validação','Voltou à versão anterior'];
+  const otaSatelliteStates=['Desconhecido','Indisponível','Não suportado','Atualizado','Aguardando autorização','Transferindo','Reiniciando','Concluído','Cancelado','Falha','Em observação','Versão em execução','Voltou à versão anterior'];
   const otaTargets=['Nenhum','Todos','Mestre','Equipe','Visitantes'];
+  function masterOtaValidationActive(code){return code===10||code===11;}
   function otaTone(code,satellite){
-    if(code===9)return 'bad';
-    if(satellite ? code===3||code===7 : code===4||code===7)return 'good';
-    if(satellite ? code===4||code===5||code===6 : code===2||code===3||code===5||code===6)return 'warn';
+    if(code===9||(satellite?code===12:code===13||code===14))return 'bad';
+    if(satellite ? code===3||code===7 : code===4||code===7||code===12)return 'good';
+    if(satellite ? code===4||code===5||code===6||code===10 : code===2||code===3||code===5||code===6||masterOtaValidationActive(code))return 'warn';
     return 'muted';
   }
   function renderOtaState(data){
@@ -1132,6 +1658,17 @@
     const general=otaMasterStates[data.estado]||'Estado desconhecido';
     const target=otaTargets[data.alvo]||'Não informado';
     set('ota-command-state','Estado geral: '+general+' · alvo ativo: '+target+'.'+(Number.isFinite(data.falhas)?' Falhas registradas: '+data.falhas+'.':''));
+    const validation=$('ota-master-validation'), masterCode=data.mestre?.estado;
+    const notices={
+      10:['warning','Mestre validando o novo firmware. O armamento fica bloqueado até o fim da observação.'],
+      11:['warning','Firmware confirmado. O Mestre ainda está em observação e mantém a tração desarmada.'],
+      12:['success','Validação pós-OTA concluída. O armamento manual já pode ser solicitado quando as condições de segurança forem atendidas.'],
+      13:['error','O Mestre falhou ao validar o firmware. A tração continua desarmada.'],
+      14:['error','O Mestre voltou à versão anterior após a atualização. Confira a versão em uso.'],
+    };
+    const notice=notices[masterCode];
+    validation.hidden=!notice;
+    if(notice){validation.dataset.tone=notice[0];set('ota-master-validation',notice[1]);}
     const items=detailed?[
       {name:'Mestre',value:data.mestre,satellite:false},
       {name:'Equipe',value:data.equipe,satellite:true},
@@ -1145,7 +1682,10 @@
       row.className='ota-target';head.className='ota-target-head';name.textContent=item.name;status.className='badge '+otaTone(code,item.satellite);status.textContent=states[code]||'Estado '+code;
       versions.className='ota-versions';versions.textContent='Atual: '+(item.value.versao_atual||'não informada')+' · Disponível: '+(item.value.versao_disponivel||'não informada');
       progress.className='ota-progress';progress.setAttribute('role','progressbar');progress.setAttribute('aria-label','Progresso OTA de '+item.name);progress.setAttribute('aria-valuemin','0');progress.setAttribute('aria-valuemax','100');progress.setAttribute('aria-valuenow',String(validPercent));fill.style.width=validPercent+'%';progress.append(fill);
-      const measure=document.createElement('small');measure.textContent=Number.isFinite(percent)&&(validPercent>0||code===(item.satellite?5:6)||code===7)?number(validPercent,1)+'%':'Sem transferência ativa';
+      const measure=document.createElement('small');
+      measure.textContent=!item.satellite&&masterOtaValidationActive(code)
+        ? number(validPercent,0)+'% desta etapa'
+        : Number.isFinite(percent)&&(validPercent>0||code===(item.satellite?5:6)||code===7)?number(validPercent,1)+'%':'Sem transferência ativa';
       head.append(name,status);row.append(head,versions,progress,measure);root.append(row);
     });
     const checked=Date.now();
@@ -1153,8 +1693,8 @@
     const run=state.commandRuns.find(item=>item.followOta&&item.status!=='Falhou'&&item.status!=='Sem resposta');
     if(run&&run.responses.length){
       const progressText=items.map(item=>{const current=(item.satellite?otaSatelliteStates:otaMasterStates)[item.value.estado]||'desconhecido';return item.name+': '+current+(Number(item.value.progresso_percentual)>0?' '+number(item.value.progresso_percentual,1)+'%':'');}).join(' · ');
-      const active=[2,3,6].includes(Number(data.estado))||items.some(item=>item.satellite&&[5,6].includes(Number(item.value.estado)));
-      const failed=Number(data.estado)===9||items.some(item=>Number(item.value.estado)===9);
+      const active=masterOtaValidationActive(masterCode)||[2,3,6].includes(Number(data.estado))||items.some(item=>item.satellite&&[5,6,10].includes(Number(item.value.estado)));
+      const failed=masterCode===13||masterCode===14||Number(data.estado)===9||items.some(item=>Number(item.value.estado)===9||(item.satellite&&Number(item.value.estado)===12));
       run.checkedAt=checked;run.status=failed?'Falha observada':active?'OTA em andamento':'Estado OTA';run.tone=failed?'bad':active?'warn':'good';
       run.text='Estado atual do mestre: '+general+'. '+progressText+'. Esta leitura mostra o estado observado após a solicitação.';
       renderMasterCommandHistory();
@@ -1200,8 +1740,11 @@
   function updateMasterUI(consult,data){
     if(consult==='sensores')renderSensors(data);
     if(consult==='logs_terminal')renderTerminalLogs(data);
+    if(consult==='ajustes_desenvolvedor')renderDeveloperSettings(data);
+    for(const radio of Object.values(radioSettings))if(consult===radio.query)renderRadioSettings(radio,data);
     if(consult==='versao'){
       availability();
+      if(!developerQueryAvailable(data.capacidades))set('developer-status','Recurso indisponível neste firmware.');
       if(Number.isFinite(data.capacidades)&&(data.capacidades&CAP_SYNC)===0){badge('sync-badge','Não suportado','muted');set('sync-summary','O firmware atual do mestre não informa o andamento da sincronização. Atualize o mestre para habilitar esse acompanhamento.');set('sync-checked','Consulta detalhada indisponível neste mestre.');}
     }
     if(consult==='configuracao'){
@@ -1221,20 +1764,26 @@
     if(consult==='ota')renderOtaState(data);
     if(consult==='sincronizacao')renderSyncState(data);
     if(consult==='controle_remoto'){
-      const gear=['Nenhuma','L','M','H'];
-      const controlStatus=data.ota_em_andamento?'Atualização em andamento · carro desarmado':data.partida_concluida===false?'Inicializando mestre · carro desarmado':data.armamento_inicial_pendente?'Aguardando condições para armar':data.parada_solicitada?'Parada ativa':data.corte_por_rele_solicitado?'Controle bloqueado':'Controle armado';
-      controlNotice(controlStatus, data.parada_solicitada?'emergency':data.bloqueios?'warning':'info');
-      badge('actuation-status',data.atuacao_habilitada?'Atuação física habilitada':'Atuação física desabilitada',data.atuacao_habilitada?'good':'muted');
-      const armLabel=data.atuacao_habilitada&&controlStatus==='Controle armado'?'Carro armado':controlStatus==='Controle armado'?'Controle armado · saídas desligadas':controlStatus;
-      badge('vehicle-arm-badge',armLabel,controlStatus==='Controle armado'?'good':data.parada_solicitada||data.ota_em_andamento?'bad':'warn');
-      set('remote-gear-physical',gear[data.faixa_marcha_fisica]||'Desconhecida');
-      set('remote-gear-current',data.corte_por_rele_solicitado?'Bloqueada':gear[data.faixa_marcha_solicitada]||'Desconhecida');
-      set('remote-gear-limit-current',gear[data.faixa_marcha_maxima]||'Desconhecida');
+      state.controlUnconfirmed=false;
+      renderControlSensors(data);
+      const isolated=isolatedDacAvailable(data);
+      const armed=(data.atuacao_habilitada===true||isolated)&&!needsArming(data)&&!data.corte_por_rele_solicitado&&!data.ota_em_andamento&&data.partida_concluida!==false;
+      const controlStatus=data.ota_em_andamento?'Atualização ou validação de firmware':data.partida_concluida===false?'Inicializando Mestre':data.parada_solicitada?'Parada ativa':data.armamento_inicial_pendente?'Carro desarmado':armed?(isolated?'DAC armado':'Carro armado'):'Controle bloqueado';
+      controlNotice(controlStatus, data.parada_solicitada?'emergency':armed?'info':'warning');
+      const actuationLabel=(data.dac_disponivel?'DAC disponível':'DAC indisponível')+' · '+(data.atuacao_habilitada?'Tração disponível':'Tração desabilitada');
+      badge('actuation-status',actuationLabel,data.atuacao_habilitada?'good':'muted');
+      const armLabel=armed&&data.estado_operacao===5?'Limitando velocidade':controlStatus;
+      badge('vehicle-arm-badge',armLabel,armed?'good':data.parada_solicitada||data.ota_em_andamento?'bad':'warn');
+      set('remote-gear-physical',controlGears[data.faixa_marcha_fisica]||'Desconhecida');
+      set('remote-gear-current',data.corte_por_rele_solicitado?'Bloqueada':controlGears[data.faixa_marcha_solicitada]||'Desconhecida');
+      set('remote-gear-limit-current',controlGears[data.faixa_marcha_maxima]||'Desconhecida');
       set('remote-reverse-current',data.reversao_solicitada?'Ré':'Frente');
       set('remote-speed-current',format(value(data,'velocidade_maxima_centesimos_kmh',100),'km/h',2));
-      set('remote-throttle-max-current',format(value(data,'acelerador_maximo_decimos_percentual',10),'%',0));
-      set('remote-pedal-status',data.pedal_disponivel?'Pedal: '+format(value(data,'tensao_pedal_mv',1000),'V',2)+' · DAC: '+(data.dac_disponivel?'presente':'indisponível')+(data.atuacao_habilitada?' · Saída '+format(value(data,'tensao_dac_mv',1000),'V',2):''):'Pedal indisponível');
-      if(document.activeElement!==$('remote-deadzone'))$('remote-deadzone').value=String(data.zona_morta_decimos_percentual/10);
+      set('remote-throttle-max-current',format(value(data,'acelerador_maximo_decimos_percentual',10),'%',1));
+      for (const [id,scale,,key] of Object.values(controlFields)) {
+        const reading=value(data,key,scale);
+        if(reading!==null)setField(id,reading);
+      }
       set('remote-stop-current',data.parada_solicitada?'Ativa'+(data.parada_restante_ms?' · '+Math.ceil(data.parada_restante_ms/1000)+' s':''):'Inativa'+(data.corte_por_rele_solicitado?' · corte mantido':''));
       document.querySelector('.remote-stop-reading')?.classList.toggle('is-stopped',!!data.parada_solicitada);
       document.querySelectorAll('[data-master-action="limite_marcha"]').forEach(button=>
@@ -1270,7 +1819,11 @@
     state.polls.savedNetworks={count,promise:work};
     try{return await work;}finally{if(state.polls.savedNetworks?.promise===work)state.polls.savedNetworks=null;}
   }
-  document.querySelectorAll('#command-center input,#command-center select').forEach(field=>field.addEventListener('input',()=>{field.dataset.edited='1';}));
+  document.querySelectorAll('#command-center input,#command-center select,#remote-control input').forEach(field=>field.addEventListener('input',()=>{
+    if(field.id==='developer-permission')return;
+    field.dataset.edited='1';
+    if(field.closest('#developer-settings'))availability();
+  }));
   $('wifi-primary-source').addEventListener('change',event=>set('wifi-primary-help',event.target.value==='saved'?'Escolha uma opção em Redes salvas.':'Preencha os dados em Nova rede.'));
   $('report-group').addEventListener('change',()=>{const config=state.master.configuracao;if(config?.intervalos_relatorios_ms){$('report-interval').dataset.edited='';setField('report-interval',config.intervalos_relatorios_ms[Number($('report-group').value)]);}});
   function bytesLength(text){return new TextEncoder().encode(text).length;}
@@ -1287,6 +1840,50 @@
   function permission(id='wifi-permission'){const field=$(id),secret=field.value;if(!secret||/[\r\n]/.test(secret)||bytesLength(secret)>=108){field.closest('details').open=true;field.focus();throw new Error('Informe a senha de permissão.');}return secret;}
   function preparedNetwork(){const ssid=$('wifi-ssid').value,password=$('wifi-password').value,length=bytesLength(password);if(!ssid||bytesLength(ssid)>32||(length!==0&&length<8)||length>63||/[\r\n]/.test(ssid)||/[\r\n]/.test(password))throw new Error('Informe SSID de até 32 bytes; deixe a senha vazia para rede aberta ou use 8 a 63 bytes.');return ssid+'\n'+password;}
   function savedIndex(){const index=$('wifi-saved').value;if(!/^[1-5]$/.test(index))throw new Error('Selecione uma rede salva informada pelo mestre.');return index;}
+  function developerDrafts() {
+    const current=state.master.ajustes_desenvolvedor?.valores;
+    if(!Array.isArray(current))throw Error('Aguarde a leitura dos ajustes do Mestre.');
+    const drafts=[];
+    for(const [id,label,,scale,min,max] of developerSettings.values()){
+      const field=$('developer-value-'+id);
+      if(!field.dataset.edited)continue;
+      const raw=field.value.trim(),scaled=Number(raw)*scale,value=Math.round(scaled);
+      if(!raw||!Number.isFinite(scaled)||value<min||value>max||Math.abs(scaled-value)>1e-6){
+        const group=developerGroups.findIndex(([,rows])=>rows.some(([setting])=>setting===id));
+        showDeveloperGroup(group);
+        field.focus();
+        throw Error('Confira o valor de “'+label+'”.');
+      }
+      if(value!==current[id])drafts.push({index:id,id:field.id,raw,value});
+      else delete field.dataset.edited;
+    }
+    if(!drafts.length){availability();throw Error('Nenhum valor foi alterado.');}
+
+    // O Mestre valida cada gravação. Aplique os limites em uma ordem que mantenha
+    // a calibração consistente enquanto o lote é enviado.
+    const valid=values=>{
+      const [start,end,released,margin,,dacMin,dacMax]=values;
+      const batteries=values[31],empty=values[32],full=values[33];
+      const packValid=batteries===undefined||(empty<full&&batteries*full<=65535);
+      return margin<=start&&start<end&&released<=end&&released>start-margin&&dacMin<dacMax&&packValid;
+    };
+    const final=current.slice();
+    for(const draft of drafts)final[draft.index]=draft.value;
+    if(!valid(final))throw Error('Confira os limites do pedal, do DAC e da bateria.');
+    const ordered=[],next=current.slice();
+    while(drafts.length){
+      const candidate=drafts.findIndex(draft=>{
+        const trial=next.slice();
+        trial[draft.index]=draft.value;
+        return valid(trial);
+      });
+      if(candidate<0)throw Error('Esses limites precisam de um valor intermediário válido. Ajuste os valores em etapas.');
+      const [draft]=drafts.splice(candidate,1);
+      next[draft.index]=draft.value;
+      ordered.push(draft);
+    }
+    return ordered;
+  }
   function buildPlan(action,button){
     const name=action==='permitir_re'?(button.dataset.controlValue==='1'?'Permitir ré':'Bloquear ré'):actionNames[action];
     if(!name)throw new Error('Comando desconhecido.');
@@ -1306,20 +1903,56 @@
       plan.steps[0].body=[type,level,source,permission('terminal-log-permission')].join('\n');
       plan.refresh=['logs_terminal'];plan.expectedLog={type,source,level};
     }
+    if(action==='ajuste_desenvolvedor'){
+      plan.developerDrafts=developerDrafts();
+      const password=permission('developer-permission');
+      plan.steps=plan.developerDrafts.map(({index,value})=>({code:action,body:[index,value,password].join('\n')}));
+      plan.prompt=plan.steps.length===1?'Gravar 1 alteração no Mestre?':'Gravar '+plan.steps.length+' alterações no Mestre?';
+      plan.refresh=['ajustes_desenvolvedor'];
+      plan.secret=true;
+    }
+    if(action==='salvar_radio_satelite'){
+      const target=button.dataset.radioTarget,radio=radioSettings[target];
+      const invalid=radio.fields.find(field=>!field.checkValidity());
+      if(invalid){invalid.reportValidity();throw Error('Confira os valores do Wi-Fi.');}
+      const [channel,band,power,clients]=radio.fields.map(field=>Number(field.value));
+      if(power!==0&&power<2)throw Error('Use 0 para o padrão ou uma potência a partir de 2 dBm.');
+      const profile=[channel,band,power*4,clients];
+      plan.name=target==='equipe'?'Salvar Wi-Fi da Equipe':'Salvar Wi-Fi de Visitantes';
+      plan.prompt='O perfil será aplicado na próxima vez que esse satélite iniciar.';
+      plan.radio={target,profile};
+      plan.steps=[{code:radio.query,body:[...profile,permission('developer-permission')].join('\n')}];
+      plan.secret=true;
+    }
     if(action==='sincronizar_google')plan.refresh=['sincronizacao'];
     if(action==='permitir_re'){
       const enabled=button.dataset.controlValue==='1';
       plan.steps[0].body=String(Number(enabled));
       plan.refresh=['controle_remoto'];
       plan.expected={field:'reversao_permitida',value:enabled};
-      plan.prompt=enabled?'A ré ficará disponível para seleção.':'Se houver uma ré solicitada, o Mestre vai iniciar a parada.';
+      plan.prompt=enabled?'A ré ficará disponível para seleção.':'Se houver uma ré solicitada, o Mestre vai desarmar a tração.';
     }
-    if(['limite_marcha','velocidade_maxima','limite_acelerador','zona_morta_pedal','parada_remota','liberar_parada_remota'].includes(action)){
-      const fields={limite_marcha:[null,1,3,'faixa_marcha_maxima'],velocidade_maxima:['remote-speed',100,35,'velocidade_maxima_centesimos_kmh'],limite_acelerador:['remote-throttle-max',10,100,'acelerador_maximo_decimos_percentual'],zona_morta_pedal:['remote-deadzone',10,30,'zona_morta_decimos_percentual']};
+    if(['limite_marcha','velocidade_maxima','limite_acelerador','parada_remota','liberar_parada_remota'].includes(action)){
       let value,field;
-      if(fields[action]){const [id,scale,max,key]=fields[action],raw=button.dataset.controlValue??$(id)?.value.trim(),n=Number(raw);if(!raw||!Number.isFinite(n)||n<0||n>max||Math.abs(n*scale-Math.round(n*scale))>1e-6)throw Error('Confira a faixa e a precisão do valor informado.');value=Math.round(n*scale);field=key;}
-      else{value=action==='parada_remota'?1:0;field='parada_solicitada';plan.steps[0].code='parada_remota';}
-      plan.steps[0].body=String(value);plan.refresh=['controle_remoto'];plan.expected={field,value:field==='parada_solicitada'?!!value:value};
+      if(controlFields[action]){
+        const [id,scale,max,key]=controlFields[action],raw=$(id).value.trim(),n=Number(raw);
+        if(!raw||!Number.isFinite(n)||n<0||n>max||Math.abs(n*scale-Math.round(n*scale))>1e-6)throw Error('Confira a faixa e a precisão do valor informado.');
+        value=Math.round(n*scale);
+        field=key;
+        plan.input={id,raw};
+      }else if(action==='limite_marcha'){
+        value=Number(button.dataset.controlValue);
+        if(!Number.isInteger(value)||value<1||value>3)throw Error('Selecione uma marcha válida.');
+        field='faixa_marcha_maxima';
+      }else{
+        value=action==='parada_remota'?1:isolatedDacAvailable()?ARM_ISOLATED_DAC:0;
+        field=action==='liberar_parada_remota'&&state.master.controle_remoto?.armamento_inicial_pendente
+          ? 'armamento_inicial_pendente' : 'parada_solicitada';
+        plan.steps[0].code='parada_remota';
+        if(action==='liberar_parada_remota')plan.prompt='Confirme que o veículo está parado e o pedal do acelerador está solto.';
+      }
+      plan.steps[0].body=String(value);plan.refresh=['controle_remoto'];
+      plan.expected={field,value:action==='liberar_parada_remota'?false:action==='parada_remota'?true:value};
       plan.note='O painel consulta o estado após enviar.';
     }
     if(action==='simulador_telemetria'){
@@ -1397,7 +2030,7 @@
     message('Enviando parada…');
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),20000);
     try{
-      const response=await fetch('/api/mestre?consulta=parada_remota',{method:'POST',headers:{'Content-Type':'text/plain; charset=utf-8'},body:'1',cache:'no-store',signal:controller.signal});
+      const response=await fetch('/api/mestre?consulta=parada_emergencia',{method:'POST',headers:{'Content-Type':'text/plain; charset=utf-8'},body:'1',cache:'no-store',signal:controller.signal});
       const result=await response.json();
       if(!response.ok||!result.ok)throw Error(result.erro||'Pedido recusado');
       if(Number.isFinite(result.solicitacao))run.requests.push(result.solicitacao);
@@ -1407,8 +2040,9 @@
       try{
         const current=await getJSON('/api/mestre?consulta=controle_remoto',7000);
         state.master.controle_remoto=current;updateMasterUI('controle_remoto',current);run.checkedAt=Date.now();
-        updateRun(run,current.parada_solicitada?'Parada ativa':'Estado divergente',current.parada_solicitada?'Acelerador lógico em zero. Confira a parada física.':'Parada sem confirmação.',current.parada_solicitada?'good':'warn');
-        message(current.parada_solicitada?'Acelerador lógico em zero. Confira a parada física.':'O estado consultado difere do comando.',current.parada_solicitada?'emergency':'error');
+        const stopped=current.parada_solicitada;
+        updateRun(run,stopped?'Parada ativa':'Estado divergente',stopped?'Acelerador lógico em zero. Confira a parada física.':'Parada sem confirmação.',stopped?'good':'warn');
+        message(stopped?'Acelerador lógico em zero. Confira a parada física.':'O estado consultado difere do comando.',stopped?'emergency':'error');
       }catch(_){updateRun(run,'Estado não confirmado','O mestre respondeu, mas a consulta posterior não confirmou o estado.','warn');message('Parada recebida. Estado sem confirmação.','warning');}
     }catch(error){updateRun(run,error.name==='AbortError'?'Sem resposta':'Falhou',error.name==='AbortError'?'Prazo de resposta esgotado. Estado da parada desconhecido.':error.message,'bad');message('Parada sem confirmação: '+(error.name==='AbortError'?'tempo esgotado':error.message),'error');}
     finally{clearTimeout(timer);state.stopInFlight=false;availability();}
@@ -1419,17 +2053,40 @@
     try{const result=await remote(async()=>{const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeout);try{const response=await fetch('/api/mestre?consulta='+encodeURIComponent(code),{method:'POST',headers:{'Content-Type':'text/plain; charset=utf-8'},body,cache:'no-store',signal:controller.signal});const data=await response.json();if(!response.ok||!data.ok){const error=new Error(data.erro||'Comando recusado');error.requestId=data.solicitacao;throw error;}return data;}finally{clearTimeout(timer);}});if(Number.isFinite(result.solicitacao))run.requests.push(result.solicitacao);if(run.followSync&&Number.isFinite(result.sincronizacao_id))run.syncGeneration=result.sincronizacao_id;run.responses.push({duracao_ms:result.duracao_ms,tentativas:result.tentativas});run.responseAt=Date.now();commandEvent('MESTRE',code,'Recebido',result);return result;}
     catch(error){if(Number.isFinite(error.requestId))run.requests.push(error.requestId);commandEvent('MESTRE',code,error.name==='AbortError'?'Tempo esgotado':'Falhou',null,error.message);throw error;}
   }
+  function clearConfirmedDraft(input) {
+    if(!input)return;
+    const field=$(input.id);
+    if(field.value.trim()===input.raw)delete field.dataset.edited;
+  }
+  function confirmDeveloperDrafts(drafts,data) {
+    const confirmed=drafts.filter(draft=>data?.valores?.[draft.index]===draft.value);
+    for(const draft of confirmed)clearConfirmedDraft(draft);
+    return confirmed.length;
+  }
   async function executePlan(plan){
     const run={name:plan.name,action:plan.action,time:Date.now(),requests:[],responses:[],step:0,status:'Preparando',text:'Preparando o envio ao mestre.',tone:'muted',checkedAt:0,hasRefresh:plan.refresh.length>0||plan.action==='zerar_percurso',refreshQueries:plan.refresh,expected:plan.expected,expectedSsid:plan.expectedSsid,followUntil:Date.now()+300000,followOta:plan.refresh.includes('ota'),followSync:plan.refresh.includes('sincronizacao'),syncGeneration:null};
     state.commandRuns.unshift(run);state.commandRuns.length=Math.min(state.commandRuns.length,12);renderMasterCommandHistory();
     state.busy=true;availability();
     message(plan.name+'…');
     try{
+      let response;
       for(let index=0;index<plan.steps.length;index++){
         run.step=index+1;
         updateRun(run,'Enviando','Enviando etapa '+(index+1)+' de '+plan.steps.length+' ao mestre.','warn');
-        await postMaster(plan.steps[index].code,plan.steps[index].body,run);
+        response=await postMaster(plan.steps[index].code,plan.steps[index].body,run);
         updateRun(run,'Resposta recebida','O mestre respondeu à etapa '+(index+1)+' de '+plan.steps.length+'. A execução posterior ainda pode estar em andamento.','warn');
+      }
+      if(plan.radio){
+        const {target,profile}=plan.radio,radio=radioSettings[target];
+        if(!profile.every((value,index)=>response.salvo?.[index]===value))
+          throw Error('O satélite informou um perfil diferente do solicitado');
+        for(const field of radio.fields)delete field.dataset.edited;
+        state.master[radio.query]=response;
+        renderRadioSettings(radio,response);
+        const detail=response.reinicio_pendente?'Wi-Fi salvo. Reinicie o satélite para aplicar.':'Perfil Wi-Fi confirmado.';
+        updateRun(run,'Wi-Fi salvo',detail,'good');
+        message(detail,'success');
+        return;
       }
       run.followUntil=Date.now()+120000;
       if(plan.action==='wifi_restaurar_politica')for(const id of ['wifi-attempts','wifi-attempt-time','wifi-retry-interval','wifi-session-limit'])delete $(id).dataset.edited;
@@ -1469,9 +2126,16 @@
           message(plan.name+': '+(configObserved.matches?'configuração confirmada no mestre.':'comando recebido, mas o valor consultado difere.'),configObserved.matches?'success':'error');
         }else if(observed.controle_remoto){
           const matches=observed.controle_remoto[plan.expected.field]===plan.expected.value;
+          if(matches)clearConfirmedDraft(plan.input);
           updateRun(run,matches?'Comando confirmado':'Estado divergente',matches?'Valor confirmado no mestre.':'O mestre informou outro estado.',matches?'good':'warn');
           if(matches&&plan.action==='liberar_parada_remota')document.querySelectorAll('.global-toast.emergency').forEach(toast=>toast.remove());
           message(plan.name+': '+(matches?'estado confirmado no mestre.':'o mestre informou outro estado.'),matches?'success':'error');
+        }else if(observed.ajustes_desenvolvedor){
+          const saved=confirmDeveloperDrafts(plan.developerDrafts,observed.ajustes_desenvolvedor);
+          const matches=saved===plan.developerDrafts.length;
+          const detail=matches?'Alterações salvas no Mestre.':saved+' de '+plan.developerDrafts.length+' alterações confirmadas. As demais continuam no formulário.';
+          updateRun(run,matches?'Ajustes salvos':'Confirmação parcial',detail,matches?'good':'warn');
+          message(detail,matches?'success':'warning');
         }else if(observed.simulador){
           const matches=observed.simulador.ativo===plan.expected?.value;
           updateRun(run,matches?'Estado confirmado':'Estado divergente','O mestre informa telemetria '+(observed.simulador.ativo?'simulada':'real')+'. O padrão após reiniciar é '+(observed.simulador.padrao_firmware?'simulado':'real')+'.',matches?'good':'warn');
@@ -1502,31 +2166,68 @@
         if(['wifi_test','wifi_primary'].includes(plan.action))$('wifi-password').value='';
         if(['wifi_primary','wifi_restaurar_principal','wifi_automatico','wifi_politica','wifi_restaurar_politica'].includes(plan.action))$('wifi-permission').value='';
       }
-    }catch(error){const timeout=error.name==='AbortError',reason=timeout?'O tempo de resposta esgotou':error.message;updateRun(run,timeout?'Sem resposta':'Falhou','Etapa '+run.step+' de '+plan.steps.length+': '+reason+'. A etapa não teve confirmação de sucesso. Confira o estado antes de repetir a ação.',timeout?'warn':'bad');message(reason+'. Confira o estado antes de repetir.',timeout?'warning':'error');}
+    }catch(error){
+      const timeout=error.name==='AbortError',reason=timeout?'O tempo de resposta esgotou':error.message;
+      if(plan.developerDrafts){
+        const observed=await masterQuery('ajustes_desenvolvedor');
+        const saved=confirmDeveloperDrafts(plan.developerDrafts,observed);
+        const detail=reason+'. '+(observed?saved+' de '+plan.developerDrafts.length+' alterações confirmadas.':'A consulta dos valores salvos ficou pendente.');
+        updateRun(run,saved?'Confirmação parcial':'Falhou',detail,saved||timeout?'warn':'bad');
+        message(detail,saved||timeout?'warning':'error');
+      }else{
+        updateRun(run,timeout?'Sem resposta':'Falhou','Etapa '+run.step+' de '+plan.steps.length+': '+reason+'. A etapa não teve confirmação de sucesso. Confira o estado antes de repetir a ação.',timeout?'warn':'bad');
+        message(reason+'. Confira o estado antes de repetir.',timeout?'warning':'error');
+      }
+    }
     finally{state.busy=false;availability();}
   }
   const criticalConfirmationActions=new Set([
-    'permitir_re','liberar_parada_remota','zerar_percurso',
+    'permitir_re','liberar_parada_remota','zerar_percurso','ajuste_desenvolvedor','salvar_radio_satelite',
     'autorizar_mestre','autorizar_equipe','autorizar_visitantes','autorizar_todos'
   ]);
-  const confirmationDelayMs=3000;
+  const armingConfirmationMinMs=3000;
+  const confirmationStorageKey='nexus-command-confirmation-seconds';
+  const confirmationSeconds=$('command-confirmation-seconds');
+  let confirmationDelayMs=3000;
+  try {
+    const stored=localStorage.getItem(confirmationStorageKey);
+    const seconds=Number(stored);
+    if(stored!==null&&Number.isInteger(seconds)&&seconds>=0&&seconds<=Number(confirmationSeconds.max))
+      confirmationDelayMs=seconds*1000;
+  } catch (_) { /* Use o padrão se o armazenamento estiver indisponível. */ }
+  confirmationSeconds.value=String(confirmationDelayMs/1000);
+  $('confirmation-preferences').addEventListener('submit',event=>{
+    event.preventDefault();
+    if(!confirmationSeconds.reportValidity())return;
+    const seconds=confirmationSeconds.valueAsNumber;
+    confirmationDelayMs=seconds*1000;
+    let status=seconds===0?'Contagem desligada.':'Espera definida em '+seconds+' s.';
+    try { localStorage.setItem(confirmationStorageKey,String(seconds)); }
+    catch (_) { status+=' Vale enquanto esta página estiver aberta.'; }
+    set('command-confirmation-status',status);
+    $('command-confirmation-status').hidden=false;
+  });
   const confirmDialog=$('confirm-dialog');
   const confirmButton=$('confirm-action');
   const confirmWait=$('confirm-wait');
   let confirmAfter=0,confirmTimer;
+  function commandConfirmationDelayMs(action) {
+    if(action==='liberar_parada_remota')return Math.max(armingConfirmationMinMs,confirmationDelayMs);
+    return criticalConfirmationActions.has(action)?confirmationDelayMs:0;
+  }
   function showCommandConfirmation(plan,destructive){
     clearTimeout(confirmTimer);
-    const delayed=criticalConfirmationActions.has(plan.action);
+    const delay=commandConfirmationDelayMs(plan.action);
     set('confirm-title',plan.name);
     set('confirm-text',plan.prompt||'Enviar ao mestre?');
     confirmButton.className='button'+(destructive?' danger':'');
-    confirmButton.textContent=delayed||destructive?'Confirmar':'Enviar comando';
+    confirmButton.textContent=criticalConfirmationActions.has(plan.action)||destructive?'Confirmar':'Enviar comando';
     confirmDialog.returnValue='';
-    confirmAfter=performance.now()+(delayed?confirmationDelayMs:0);
+    confirmAfter=performance.now()+delay;
     const update=()=>{
       const remaining=Math.max(0,confirmAfter-performance.now());
       confirmButton.disabled=remaining>0;
-      confirmWait.hidden=!delayed;
+      confirmWait.hidden=delay===0;
       set('confirm-wait',remaining>0?'Confirmação disponível em '+Math.ceil(remaining/1000)+' s.':'Você já pode confirmar.');
       if(remaining>0)confirmTimer=setTimeout(update,Math.min(1000,remaining));
     };
@@ -1560,14 +2261,96 @@
     clearTimeout(confirmTimer);
     if(confirmDialog.returnValue==='confirm'&&plan&&performance.now()>=confirmAfter)executePlan(plan);
   });
-  $('run-master-query').addEventListener('click',async()=>{
-    if(state.busy)return;state.busy=true;availability();
-    const query=$('master-query').value;commandEvent('MESTRE',query,'Enviando');
-    try{const result=await masterQuery(query,false);if(!result)throw new Error('Sem resposta do mestre');
-      const payload=Object.fromEntries(Object.entries(result).filter(([key])=>!['ok','consulta','comando','solicitacao','resultado','tentativas','duracao_ms','capacidades'].includes(key)));
-      const view=$('master-query-result');view.textContent=query+' · solicitação #'+result.solicitacao+' · '+result.duracao_ms+' ms\n'+JSON.stringify(payload,null,2);view.className='command-result success';
-    }catch(error){const view=$('master-query-result');view.textContent=query+' · '+error.message;view.className='command-result error';}
-    finally{state.busy=false;availability();}
+  const queryMetadata = new Set(['ok', 'consulta', 'comando', 'solicitacao', 'resultado', 'tentativas', 'duracao_ms', 'capacidades']);
+  const queryPriority = {
+    saude: ['estado', 'causas_ativas', 'heap_livre', 'tempo_ativo_ms', 'erros_historicos'],
+    telemetria: ['velocidade_centesimos_kmh', 'tensao_pacote_mv', 'corrente_centesimos_a', 'potencia_w',
+      'carga_decimos_percentual', 'autonomia_decimos_km', 'percurso_metros', 'simulado'],
+    diagnostico_mestre: ['firmware', 'tempo_ativo_ms', 'cpu_total_decimos_percentual', 'temperatura_centesimos_c',
+      'heap_interno_livre', 'menor_pilha_livre_bytes', 'tarefa_menor_pilha', 'tarefas_ativas'],
+  };
+  const queryFieldLabels = {
+    tempo_ativo_ms:'Tempo ativo', rtt_ms:'Latência do enlace', versao_firmware:'Firmware',
+    tensao_pacote_mv:'Tensão da bateria', carga_decimos_percentual:'Carga da bateria', percurso_metros:'Odômetro',
+    autonomia_decimos_km:'Autonomia restante', rssi_dbm:'Sinal Wi-Fi', falhas_crc:'Falhas de CRC',
+    recepcoes_ok:'Pacotes recebidos', uart_recepcoes_ok:'Pacotes UART recebidos', rejeicoes_crc:'Rejeições por CRC',
+    erros_historicos:'Ocorrências acumuladas', cpu_total_decimos_percentual:'CPU total',
+    heap_livre:'Memória livre', heap_interno_livre:'Memória interna livre', menor_pilha_livre_bytes:'Menor folga de pilha',
+    tarefa_menor_pilha:'Tarefa com menor folga', simulado:'Dados simulados', equipe_online:'Equipe conectada',
+    visitantes_online:'Visitantes conectados', rede:'Rede Wi-Fi',
+  };
+  const queryUnits = [
+    [/_centesimos_kmh$/, 100, 'km/h', 1], [/_milesimos_ms2$/, 1000, 'm/s²', 2],
+    [/_decimos_percentual$/, 10, '%', 1], [/_decimos_km$/, 10, 'km', 1],
+    [/_centesimos_a$/, 100, 'A', 2], [/_centesimos_c$/, 100, '°C', 1],
+    [/_mv$/, 1000, 'V', 3], [/_w$/, 1, 'W', 0], [/_dbm$/, 1, 'dBm', 0],
+    [/_ms$/, 1, 'ms', 0], [/_minutos$/, 1, 'min', 0],
+  ];
+
+  function queryReading(query, key, reading) {
+    if (query === 'saude' && key === 'estado') {
+      return ['Saúde do sistema', ['Normal', 'Recuperando', 'Degradada', 'Falha'][reading] ?? String(reading)];
+    }
+    if (query === 'saude' && key === 'causas_ativas') {
+      return ['Causas ativas', getSystemHealth().causes.map(cause => cause.label).join(', ') || 'Nenhuma'];
+    }
+
+    const unit = queryUnits.find(([suffix]) => suffix.test(key));
+    const words = (unit ? key.replace(unit[0], '') : key).replaceAll('_', ' ');
+    const label = queryFieldLabels[key] || words.charAt(0).toUpperCase() + words.slice(1);
+    if (typeof reading === 'boolean') return [label, reading ? 'Sim' : 'Não'];
+    if (!Number.isFinite(reading)) return [label, reading || 'Não disponível'];
+    if (key === 'tempo_ativo_ms') return [label, age(reading)];
+    if (key === 'percurso_metros') return [label, format(reading / 1000, 'km', 2)];
+    if (key.startsWith('heap_') || key.startsWith('psram_') || key.endsWith('_bytes')) return [label, bytes(reading)];
+    if (unit) return [label, format(reading / unit[1], unit[2], unit[3])];
+    return [label, number(reading, Number.isInteger(reading) ? 0 : 2)];
+  }
+
+  function showMasterQueryResult(query, label, result, error) {
+    const view = $('master-query-result');
+    const fields = $('master-query-fields');
+    const raw = $('master-query-raw');
+    view.className = 'command-result' + (result ? ' success' : error ? ' error' : '');
+    fields.replaceChildren();
+    fields.hidden = true;
+    raw.hidden = !result;
+    raw.open = false;
+    set('master-query-json', result ? JSON.stringify(result, null, 2) : '');
+    if (!result) {
+      set('master-query-status', error ? label + ' · ' + error : 'Consultando ' + label.toLowerCase() + '…');
+      return;
+    }
+
+    const title = [label];
+    if (Number.isFinite(result.solicitacao)) title.push('solicitação #' + result.solicitacao);
+    if (Number.isFinite(result.duracao_ms)) title.push(format(result.duracao_ms, 'ms', 0));
+    set('master-query-status', title.join(' · '));
+    const candidates = queryPriority[query] || Object.keys(result).filter(key => !queryMetadata.has(key));
+    const rows = candidates.filter(key => ['number', 'string', 'boolean'].includes(typeof result[key]))
+      .slice(0, 8).map(key => queryReading(query, key, result[key]));
+    renderDeviceFacts(fields, rows);
+    fields.hidden = !rows.length;
+  }
+
+  $('run-master-query').addEventListener('click', async () => {
+    if (state.busy) return;
+    state.busy = true;
+    availability();
+    const select = $('master-query');
+    const query = select.value, label = select.selectedOptions[0].textContent;
+    showMasterQueryResult(query, label);
+    commandEvent('MESTRE', query, 'Enviando');
+    try {
+      const result = await masterQuery(query, false);
+      if (!result) throw new Error('Sem resposta do mestre');
+      showMasterQueryResult(query, label, result);
+    } catch (error) {
+      showMasterQueryResult(query, label, null, error.message);
+    } finally {
+      state.busy = false;
+      availability();
+    }
   });
   $('refresh-ota-state').addEventListener('click',async()=>{
     if(state.busy)return;state.busy=true;availability();
@@ -1592,14 +2375,74 @@
       if(config)await loadSavedNetworks(config.quantidade_redes_wifi);
     }finally{state.busy=false;availability();}
   });
-  $('export-csv').addEventListener('click',()=>{const rows=['horario_local;origem;velocidade_kmh;aceleracao_ms2;potencia_w;corrente_a;tensao_v'];state.samples.filter(s=>!s.gap).forEach(s=>rows.push([new Date(s.time).toISOString(),s.simulated?'simulado':'mestre',s.speed,s.accel,s.power,s.current,s.voltage].map(v=>v===null?'':String(v)).join(';')));const url=URL.createObjectURL(new Blob([rows.join('\n')],{type:'text/csv;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='nexus-telemetria-'+new Date().toISOString().slice(0,19).replace(/:/g,'-')+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});
+  function formatCsvTimestamp(time) {
+    const offset = -new Date(time).getTimezoneOffset();
+    const local = new Date(time + offset * 60000).toISOString().slice(0, -1);
+    const absolute = Math.abs(offset);
+    const hours = String(Math.floor(absolute / 60)).padStart(2, '0');
+    const minutes = String(absolute % 60).padStart(2, '0');
+    return local + (offset < 0 ? '-' : '+') + hours + ':' + minutes;
+  }
+
+  $('export-csv').addEventListener('click', () => {
+    const rows = ['horario_local;origem;velocidade_kmh;aceleracao_ms2;potencia_w;corrente_a;tensao_v'];
+    for (const sample of state.samples.filter(point => !point.gap)) {
+      rows.push([formatCsvTimestamp(sample.time), sample.simulated ? 'simulado' : 'mestre',
+        sample.speed, sample.accel, sample.power, sample.current, sample.voltage].join(';'));
+    }
+    const url = URL.createObjectURL(new Blob([rows.join('\n')], {type:'text/csv;charset=utf-8'}));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'nexus-telemetria-' + new Date().toISOString().slice(0, 19).replace(/:/g, '-') + '.csv';
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
 
   function setupCanvas(canvas) {
     const rect=canvas.getBoundingClientRect(),ratio=Math.min(devicePixelRatio||1,2),width=Math.max(1,Math.round(rect.width*ratio)),height=Math.max(1,Math.round(rect.height*ratio));
     if(canvas.width!==width||canvas.height!==height){canvas.width=width;canvas.height=height;}
     const ctx=canvas.getContext('2d');ctx.setTransform(ratio,0,0,ratio,0,0);ctx.clearRect(0,0,rect.width,rect.height);return {ctx,w:rect.width,h:rect.height};
   }
-  const chartInfo={speed:{label:'Velocidade',unit:'km/h',color:'#59D9F7',digits:1},accel:{label:'Aceleração',unit:'m/s²',color:'#FFCA64',digits:2},power:{label:'Potência',unit:'W',color:'#59D9F7',digits:2},current:{label:'Corrente',unit:'A',color:'#FFCA64',digits:2},voltage:{label:'Tensão',unit:'V',color:'#4CE0A2',digits:3},soc:{label:'SoC · simulado',unit:'%',color:'#C8A8FF',digits:2},autonomy:{label:'Autonomia · simulada',unit:'km',color:'#A8DA88',digits:2},shunt:{label:'Tensão no shunt · INA228',unit:'mV',color:'#FF9297',digits:3},inaTemp:{label:'Temperatura · INA228',unit:'°C',color:'#D4A9F7',digits:2},inaEnergy:{label:'Energia acumulada · INA228',unit:'Wh',color:'#69D6CC',digits:2},inaCharge:{label:'Carga acumulada · INA228',unit:'Ah',color:'#E7B4DE',digits:3}};
+  const themeRoot = document.documentElement;
+  const themeToggle = $('theme-toggle');
+  const chartTones = ['primary', 'secondary', 'tertiary'];
+  let chartTheme;
+
+  function syncTheme() {
+    const light = themeRoot.dataset.theme === 'light';
+    themeToggle.setAttribute('aria-pressed', String(light));
+    themeToggle.title = light ? 'Ativar tema escuro' : 'Ativar tema claro';
+    const style = getComputedStyle(themeRoot);
+    document.querySelector('meta[name="theme-color"]').content = style.getPropertyValue('--nav').trim();
+    const names = [...chartTones, 'memory', 'failure', 'fill', 'grid', 'axis', 'label', 'event', 'cursor', 'marker-edge'];
+    chartTheme = Object.fromEntries(names.map(name => [name, style.getPropertyValue('--chart-' + name).trim()]));
+  }
+  syncTheme();
+  themeToggle.addEventListener('click', () => {
+    const theme = themeRoot.dataset.theme === 'dark' ? 'light' : 'dark';
+    themeRoot.dataset.theme = theme;
+    try {
+      localStorage.setItem(themeRoot.dataset.themeStorage, theme);
+    } catch (_) {
+      // A troca de tema continua válida na página aberta.
+    }
+    syncTheme();
+    drawCharts();
+    if (state.tab in state.selected) drawDeviceChart(state.tab, state.selected[state.tab]);
+  });
+  const chartInfo = {
+    speed:{label:'Velocidade',unit:'km/h',digits:1},
+    accel:{label:'Aceleração',unit:'m/s²',digits:2},
+    power:{label:'Potência',unit:'W',digits:2},
+    current:{label:'Corrente',unit:'A',digits:2},
+    voltage:{label:'Tensão',unit:'V',digits:3},
+    soc:{label:'SoC',unit:'%',digits:2},
+    autonomy:{label:'Autonomia · simulada',unit:'km',digits:2},
+    shunt:{label:'Tensão no shunt · INA228',unit:'mV',digits:3},
+    inaTemp:{label:'Temperatura · INA228',unit:'°C',digits:2},
+    inaEnergy:{label:'Energia acumulada · INA228',unit:'Wh',digits:2},
+    inaCharge:{label:'Carga acumulada · INA228',unit:'Ah',digits:3},
+  };
   function chartRange(key,values){
     if(key==='speed')return [0,Math.max(30,Math.ceil(Math.max(0,...values)*1.08/5)*5)];
     if(key==='accel'){const limit=Math.max(2,Math.ceil(Math.max(0,...values.map(Math.abs))*1.15*2)/2);return [-limit,limit];}
@@ -1615,21 +2458,37 @@
     const side=expanded?46:58,top=expanded?20:26,bottomMargin=expanded?24:29;
     return {left:side,right:Math.max(side+1,w-side),top,bottom:Math.max(top+1,h-bottomMargin)};
   };
+  function drawChartGrid(ctx, {left, right, top, bottom}, start, end, height) {
+    ctx.font = '10px Segoe UI, sans-serif';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 3; i++) {
+      const y = top + (bottom - top) * i / 3;
+      ctx.strokeStyle = i === 3 ? chartTheme.axis : chartTheme.grid;
+      ctx.beginPath();
+      ctx.moveTo(left, y);
+      ctx.lineTo(right, y);
+      ctx.stroke();
+    }
+    for (let i = 0; i <= 2; i++) {
+      const x = left + (right - left) * i / 2;
+      ctx.strokeStyle = chartTheme.grid;
+      ctx.beginPath();
+      ctx.moveTo(x, top);
+      ctx.lineTo(x, bottom);
+      ctx.stroke();
+      ctx.fillStyle = chartTheme.label;
+      ctx.textAlign = ['left', 'center', 'right'][i];
+      const time = new Date(start + (end - start) * i / 2);
+      ctx.fillText(time.toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit', second:'2-digit'}), x, height - 7);
+    }
+  }
   function plot(canvasId,keys){
     const canvas=$(canvasId);if(!canvas||!canvas.getBoundingClientRect().width)return;
     const {ctx,w,h}=setupCanvas(canvas),frame=chartFrame(w,h,true),{left,right,top,bottom}=frame;
     const end=Date.now(),start=end-state.range*1000,samples=state.samples.filter(s=>s.time>=start&&s.time<=end);
     const x=time=>left+(time-start)/(end-start)*(right-left);
-    const series=keys.map(key=>{const info=chartInfo[key],values=samples.filter(s=>!s.gap&&Number.isFinite(s[key])).map(s=>s[key]);return {...info,key,available:values.length>0,range:chartRange(key,values)};});
-    ctx.font='10px Segoe UI, sans-serif';ctx.lineWidth=1;
-    for(let i=0;i<=3;i++){
-      const gy=top+(bottom-top)*i/3;ctx.strokeStyle=i===3?'#557083':'#344B5C';ctx.beginPath();ctx.moveTo(left,gy);ctx.lineTo(right,gy);ctx.stroke();
-    }
-    for(let i=0;i<=2;i++){
-      const gx=left+(right-left)*i/2;ctx.strokeStyle='#344B5C';ctx.beginPath();ctx.moveTo(gx,top);ctx.lineTo(gx,bottom);ctx.stroke();
-      ctx.fillStyle='#BACBD5';ctx.textAlign=i===0?'left':i===2?'right':'center';
-      ctx.fillText(new Date(start+(end-start)*i/2).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit'}),gx,h-7);
-    }
+    const series=keys.map((key,index)=>{const info=chartInfo[key],values=samples.filter(s=>!s.gap&&Number.isFinite(s[key])).map(s=>s[key]);return {...info,key,color:chartTheme[chartTones[index]],available:values.length>0,range:chartRange(key,values)};});
+    drawChartGrid(ctx, frame, start, end, h);
     series.slice(0,2).forEach((axis,index)=>{
       const [min,max]=axis.range;
       ctx.fillStyle=axis.color;ctx.font='600 10px Segoe UI, sans-serif';ctx.textAlign=index?'right':'left';ctx.fillText(axis.unit,index?right:left,15);
@@ -1637,21 +2496,59 @@
       for(let i=0;i<=3;i++){const gy=top+(bottom-top)*i/3,reading=max-(max-min)*i/3;ctx.fillText(axis.available?number(reading,Math.abs(max-min)<10?1:0):'—',index?right+7:left-7,gy+3);}
     });
     ctx.save();ctx.beginPath();ctx.rect(left,top,right-left,bottom-top);ctx.clip();
-    ctx.setLineDash([3,5]);ctx.strokeStyle='#8F725C';ctx.lineWidth=1;
+    ctx.setLineDash([3,5]);ctx.strokeStyle=chartTheme.event;ctx.lineWidth=1;
     state.events.filter(e=>e.time>=start&&e.time<=end).forEach(e=>{const px=x(e.time);ctx.beginPath();ctx.moveTo(px,top);ctx.lineTo(px,bottom);ctx.stroke();});ctx.setLineDash([]);
-    series.forEach((axis,index)=>{
-      const [min,max]=axis.range,y=v=>bottom-(v-min)/(max-min)*(bottom-top);
-      ctx.strokeStyle=axis.color;ctx.lineWidth=index===2?1.9:2.2;ctx.lineJoin='round';ctx.lineCap='round';ctx.setLineDash(index===2?[6,4]:[]);ctx.beginPath();let open=false,last=null;
-      samples.forEach(s=>{const reading=s[axis.key];if(s.gap||!Number.isFinite(reading)){open=false;return;}const px=x(s.time),py=y(reading);if(open)ctx.lineTo(px,py);else ctx.moveTo(px,py);open=true;last={x:px,y:py};});ctx.stroke();
+    series.forEach((axis, index) => {
+      const [min, max] = axis.range;
+      const y = v => bottom - (v - min) / (max - min) * (bottom - top);
+      ctx.strokeStyle = axis.color;
+      ctx.lineWidth = index === 2 ? 1.9 : 2.2;
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.setLineDash(index === 2 ? [6, 4] : []);
+      let first = null, last = null, latest = null;
+      const finishSegment = () => {
+        if (!last) return;
+        ctx.stroke();
+        if (index === 0 && first.x !== last.x) {
+          ctx.lineTo(last.x, bottom);
+          ctx.lineTo(first.x, bottom);
+          ctx.closePath();
+          ctx.fillStyle = chartTheme.fill;
+          ctx.fill();
+        }
+        first = last = null;
+      };
+      for (const sample of samples) {
+        const reading = sample[axis.key];
+        if (sample.gap || !Number.isFinite(reading)) {
+          finishSegment();
+          continue;
+        }
+        const point = {x:x(sample.time), y:y(reading)};
+        if (first) ctx.lineTo(point.x, point.y);
+        else {
+          ctx.beginPath();
+          ctx.moveTo(point.x, point.y);
+          first = point;
+        }
+        last = latest = point;
+      }
+      finishSegment();
       ctx.setLineDash([]);
-      if(last){ctx.fillStyle=axis.color;ctx.beginPath();ctx.arc(last.x,last.y,3.3,0,Math.PI*2);ctx.fill();}
+      if (latest) {
+        ctx.fillStyle = axis.color;
+        ctx.beginPath();
+        ctx.arc(latest.x, latest.y, 3.3, 0, Math.PI * 2);
+        ctx.fill();
+      }
     });
     const hover=state.hover?.[canvasId];if(hover&&hover.time>=start&&hover.time<=end){
-      const px=x(hover.time);ctx.strokeStyle='#CEDDE6';ctx.lineWidth=1;ctx.setLineDash([3,3]);ctx.beginPath();ctx.moveTo(px,top);ctx.lineTo(px,bottom);ctx.stroke();ctx.setLineDash([]);
-      series.forEach(axis=>{if(!Number.isFinite(hover[axis.key]))return;const [min,max]=axis.range,py=bottom-(hover[axis.key]-min)/(max-min)*(bottom-top);ctx.fillStyle=axis.color;ctx.strokeStyle='#172735';ctx.lineWidth=2;ctx.beginPath();ctx.arc(px,py,5,0,Math.PI*2);ctx.fill();ctx.stroke();});
+      const px=x(hover.time);ctx.strokeStyle=chartTheme.cursor;ctx.lineWidth=1;ctx.setLineDash([3,3]);ctx.beginPath();ctx.moveTo(px,top);ctx.lineTo(px,bottom);ctx.stroke();ctx.setLineDash([]);
+      series.forEach(axis=>{if(!Number.isFinite(hover[axis.key]))return;const [min,max]=axis.range,py=bottom-(hover[axis.key]-min)/(max-min)*(bottom-top);ctx.fillStyle=axis.color;ctx.strokeStyle=chartTheme['marker-edge'];ctx.lineWidth=2;ctx.beginPath();ctx.arc(px,py,5,0,Math.PI*2);ctx.fill();ctx.stroke();});
     }
     ctx.restore();
-    if(!samples.some(s=>keys.some(key=>Number.isFinite(s[key])))){ctx.fillStyle='#BACBD5';ctx.textAlign='center';ctx.font='12px Segoe UI, sans-serif';ctx.fillText(canvasId==='electric-chart'?'Aguardando medição elétrica':'Aguardando amostras disponíveis',w/2,h/2);}
+    if(!samples.some(s=>keys.some(key=>Number.isFinite(s[key])))){ctx.fillStyle=chartTheme.label;ctx.textAlign='center';ctx.font='12px Segoe UI, sans-serif';ctx.fillText(canvasId==='electric-chart'?'Aguardando medição elétrica':'Aguardando amostras disponíveis',w/2,h/2);}
   }
   function drawCharts(){
     plot('motion-chart',['speed','accel']);plot('electric-chart',selectedElectricKeys());
@@ -1659,29 +2556,26 @@
     const extra=state.signalTertiary==='none'?null:chartInfo[state.signalTertiary];
     set('electric-caption','À esquerda, '+primary.label.toLowerCase()+' ('+primary.unit+'); à direita, '+secondary.label.toLowerCase()+' ('+secondary.unit+').'+(extra?' Curva tracejada com escala própria; toque ou passe o cursor para ler o valor.':''));
     [["electric-legend-primary",primary],["electric-legend-secondary",secondary]].forEach(([id,info])=>{
-      const legend=$(id),mark=legend.querySelector('.legend-key');mark.style.backgroundColor=info.color;
+      const legend=$(id),mark=legend.querySelector('.legend-key');
       if(legend.lastChild?.textContent!==info.label)legend.replaceChildren(mark,document.createTextNode(info.label));
     });
     const third=$('electric-legend-tertiary');third.hidden=!extra;
     if(extra){
-      third.querySelector('.legend-key').style.backgroundColor=extra.color;
       set('electric-tertiary-label',extra.label);
     }
   }
   function drawDeviceChart(group,id){
     const canvas=$('device-chart-'+group);if(!canvas||state.tab!==group||state.selected[group]!==id||!canvas.getBoundingClientRect().width)return;
     const keys=[state.deviceSignal[id],state.deviceSignalSecondary[id]],history=state.deviceSamples[id].filter(sample=>keys.some(key=>Object.prototype.hasOwnProperty.call(sample,key)));
-    const {ctx,w,h}=setupCanvas(canvas),{left,right,top,bottom}=chartFrame(w,h),end=Date.now(),start=history.length>1?Math.min(history[0].time,end-1000):end-60000;
+    const {ctx,w,h}=setupCanvas(canvas),frame=chartFrame(w,h),{left,right,top,bottom}=frame,end=Date.now(),start=history.length>1?Math.min(history[0].time,end-1000):end-60000;
     const x=t=>left+(t-start)/(end-start)*(right-left);
-    const series=selectedDeviceCharts(id).map(option=>{const key=option.key,values=history.filter(sample=>Object.prototype.hasOwnProperty.call(sample,key)).map(sample=>sample[key]).filter(Number.isFinite);return {...option,values,range:['cpu','core0','core1','availability'].includes(key)?[0,100]:chartRange(key,values)};});
-    ctx.font='10px Segoe UI, sans-serif';ctx.lineWidth=1;
-    for(let i=0;i<=3;i++){const gy=top+(bottom-top)*i/3;ctx.strokeStyle=i===3?'#557083':'#344B5C';ctx.beginPath();ctx.moveTo(left,gy);ctx.lineTo(right,gy);ctx.stroke();}
-    for(let i=0;i<=2;i++){const gx=left+(right-left)*i/2;ctx.strokeStyle='#344B5C';ctx.beginPath();ctx.moveTo(gx,top);ctx.lineTo(gx,bottom);ctx.stroke();ctx.fillStyle='#BACBD5';ctx.textAlign=i===0?'left':i===2?'right':'center';ctx.fillText(new Date(start+(end-start)*i/2).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit'}),gx,h-7);}
+    const series=selectedDeviceCharts(id).map(option=>{const key=option.key,values=history.filter(sample=>Object.prototype.hasOwnProperty.call(sample,key)).map(sample=>sample[key]).filter(Number.isFinite);return {...option,color:chartTheme[option.tone],values,range:['cpu','core0','core1','availability'].includes(key)?[0,100]:chartRange(key,values)};});
+    drawChartGrid(ctx, frame, start, end, h);
     series.forEach((axis,index)=>{const [min,max]=axis.range;ctx.fillStyle=axis.color;ctx.font='600 10px Segoe UI, sans-serif';ctx.textAlign=index?'right':'left';ctx.fillText(axis.unit,index?right:left,15);ctx.font='10px Segoe UI, sans-serif';ctx.textAlign=index?'left':'right';for(let i=0;i<=3;i++){const gy=top+(bottom-top)*i/3;ctx.fillText(axis.values.length?number(max-(max-min)*i/3,Math.abs(max-min)<10?1:0):'—',index?right+7:left-7,gy+3);}});
     ctx.save();ctx.beginPath();ctx.rect(left,top,right-left,bottom-top);ctx.clip();
     series.forEach(axis=>{const [min,max]=axis.range,y=v=>bottom-(v-min)/(max-min)*(bottom-top);ctx.strokeStyle=axis.color;ctx.lineWidth=2.2;ctx.lineJoin='round';ctx.lineCap='round';ctx.beginPath();let open=false,last=null;history.filter(sample=>Object.prototype.hasOwnProperty.call(sample,axis.key)).forEach(sample=>{const reading=sample[axis.key];if(!Number.isFinite(reading)){open=false;return;}const px=x(sample.time),py=y(reading);if(open)ctx.lineTo(px,py);else ctx.moveTo(px,py);open=true;last={x:px,y:py};});ctx.stroke();if(last){ctx.fillStyle=axis.color;ctx.beginPath();ctx.arc(last.x,last.y,3.3,0,Math.PI*2);ctx.fill();}});
     ctx.restore();
-    if(!series.some(axis=>axis.values.length)){ctx.fillStyle='#BACBD5';ctx.textAlign='center';ctx.font='12px Segoe UI, sans-serif';ctx.fillText('Aguardando leituras do dispositivo',w/2,h/2);}
+    if(!series.some(axis=>axis.values.length)){ctx.fillStyle=chartTheme.label;ctx.textAlign='center';ctx.font='12px Segoe UI, sans-serif';ctx.fillText('Aguardando leituras do dispositivo',w/2,h/2);}
   }
   function chartTooltip(canvasId,tipId,keys){
     const canvas=$(canvasId),tip=$(tipId);
@@ -1691,7 +2585,7 @@
       if(!list.length){tip.hidden=true;state.hover={};drawCharts();return;}
       const sample=list.reduce((a,b)=>Math.abs(a.time-ts)<Math.abs(b.time-ts)?a:b),chosen=canvasId==='electric-chart'?selectedElectricKeys():keys;
       const heading=document.createElement('strong');heading.className='chart-tip-time';heading.textContent=new Date(sample.time).toLocaleTimeString('pt-BR');
-      const rows=chosen.map(key=>{const info=chartInfo[key],row=document.createElement('span'),mark=document.createElement('i'),label=document.createElement('span'),reading=document.createElement('b');row.className='chart-tip-reading';mark.className='chart-tip-key';mark.style.backgroundColor=info.color;label.textContent=info.label;reading.textContent=Number.isFinite(sample[key])?number(sample[key],info.digits)+' '+info.unit:'Não disponível';row.append(mark,label,reading);return row;});
+      const rows=chosen.map((key,index)=>{const info=chartInfo[key],row=document.createElement('span'),mark=document.createElement('i'),label=document.createElement('span'),reading=document.createElement('b');row.className='chart-tip-reading';mark.className='chart-tip-key';mark.style.backgroundColor='var(--chart-'+chartTones[index]+')';label.textContent=info.label;reading.textContent=Number.isFinite(sample[key])?number(sample[key],info.digits)+' '+info.unit:'Não disponível';row.append(mark,label,reading);return row;});
       tip.replaceChildren(heading,...rows);
       tip.hidden=false;tip.style.left=Math.min(Math.max(8,px+12),Math.max(8,rect.width-tip.offsetWidth-8))+'px';tip.style.top='18px';
       state.hover={[canvasId]:sample};drawCharts();
@@ -1704,49 +2598,40 @@
   }
   chartTooltip('motion-chart','motion-tip',['speed','accel']);chartTooltip('electric-chart','electric-tip',['power','current','voltage']);
   addEventListener('resize',()=>{drawCharts();if(state.tab==='mestre'||state.tab==='equipe'||state.tab==='visitantes')drawDeviceChart(state.tab,state.selected[state.tab]);});
-  async function pollCommandStates(force=false){
-    if(document.hidden||state.busy||state.polls.commandCycle||state.masterChecked&&!state.masterOnline)return;
+  const liveCommandCards = {ota:'ota-command',sincronizacao:'sync-card',wifi:'wifi-master'};
+  async function pollCommandStates(){
+    if(!liveReadingsAvailable()||!state.masterOnline||state.polls.commandCycle)return;
+    const now=Date.now(),run=state.commandRuns[0];
+    const followup=run?.responseAt&&now<run.followUntil&&now-(state.lastCommandPoll||0)>=state.commandRefreshMs;
+    const queries=followup ? run.refreshQueries.filter(query=>query==='configuracao'||
+      (liveCommandCards[query]&&!commandCardOpen(liveCommandCards[query]))) : [];
+    const wifiOpen=commandCardOpen('wifi-master');
+    const settingsVisible=wifiOpen||commandCardOpen('operation-command');
+    if(settingsVisible&&now-(state.lastAuxPoll||0)>=30000&&!queries.includes('configuracao'))queries.push('configuracao');
+    const readNetworks=wifiOpen&&now-(state.lastNetworksPoll||0)>=60000;
+    if(!queries.length&&!readNetworks)return;
     state.polls.commandCycle=true;
     try{
-      const now=Date.now();
-      if(force||!state.lastCommandPoll||now-state.lastCommandPoll>=state.commandRefreshMs){
-        if(!await masterQuery('ota'))set('ota-state-checked','Consulta automática sem resposta. O estado acima pode estar desatualizado.');
-        if(state.busy)return;
-        const capabilities=state.master.versao?.capacidades;
-        if(Number.isFinite(capabilities)&&(capabilities&CAP_SYNC)!==0){
-          if(!await masterQuery('sincronizacao'))set('sync-checked','Consulta automática sem resposta. O estado acima pode estar desatualizado.');
-        }else if(Number.isFinite(capabilities)){
-          badge('sync-badge','Não suportado','muted');
-          set('sync-summary','O firmware atual do mestre não informa o andamento da sincronização. Atualize o mestre para habilitar esse acompanhamento.');
-        }
-        if(Number.isFinite(capabilities)&&(capabilities&CAP_SIMULATOR)!==0){
-          if(!await masterQuery('simulador'))set('simulator-checked','Consulta automática sem resposta. O estado acima pode estar desatualizado.');
-        }else if(Number.isFinite(capabilities)){
-          badge('simulator-badge','Não suportado','muted');
-          set('simulator-state','O firmware atual do mestre não informa o estado do simulador.');
-        }
-        if(Number.isFinite(capabilities)&&(capabilities&8192)!==0){
-          if(!await masterQuery('controle_remoto')){controlNotice('Mestre sem resposta. Estado não confirmado.','warning');set('remote-checked','A última leitura pode estar desatualizada.');badge('vehicle-arm-badge','Estado do carro indisponível','muted');}
-        }else{controlNotice('Controle indisponível neste firmware.','warning');}
-        state.lastCommandPoll=Date.now();
+      for(const query of queries){
+        if(!liveReadingsAvailable())break;
+        await masterQuery(query);
+        if(query==='configuracao')state.lastAuxPoll=Date.now();
       }
-      if(state.busy)return;
-      const run=state.commandRuns[0],activeAux=run&&Date.now()<run.followUntil&&run.refreshQueries?.some(query=>query==='wifi'||query==='configuracao');
-      const auxInterval=activeAux?state.commandRefreshMs:30000;
-      if(force||!state.lastAuxPoll||Date.now()-state.lastAuxPoll>=auxInterval){
-        await masterQuery('wifi');
-        if(state.busy)return;
-        const config=await masterQuery('configuracao');
-        if(config&&(!state.lastNetworksPoll||Date.now()-state.lastNetworksPoll>=60000)){
+      if(followup)state.lastCommandPoll=Date.now();
+      if(readNetworks&&liveReadingsAvailable()){
+        const config=state.master.configuracao;
+        if(config){
           await loadSavedNetworks(config.quantidade_redes_wifi);
           state.lastNetworksPoll=Date.now();
         }
-        state.lastAuxPoll=Date.now();
       }
     }finally{state.polls.commandCycle=false;}
   }
   async function pollRemote(){
-    if(state.polls.remoteCycle || state.busy)return;
+    if(!liveReadingsAvailable()||state.polls.remoteCycle)return;
+    const now=Date.now();
+    if(now-(state.lastLinkPoll||0)<10000)return;
+    state.lastLinkPoll=now;
     state.polls.remoteCycle=true;
     try{
       if(!await masterQuery('ping')){
@@ -1754,19 +2639,14 @@
         set('sync-checked','Mestre sem resposta. O estado acima é a última leitura recebida.');
         return;
       }
-      if(state.busy)return;
-      await masterQuery('diagnostico_mestre');
-      if(state.busy)return;
-      await masterQuery('saude');
-      if(state.busy)return;
-      await visitorsQuery('ping');
-      if(state.visitorsOnline)await visitorsQuery('diagnostico');
-      const now=Date.now();
-      if(!state.lastVersionPoll || now-state.lastVersionPoll>(state.master.versao?60000:15000)){
+      if(!liveReadingsAvailable())return;
+      const atualizarVersao=!state.lastVersionPoll || now-state.lastVersionPoll>(state.master.versao?60000:15000);
+      if(atualizarVersao){
         await masterQuery('versao');
-        await visitorsQuery('versao');
         state.lastVersionPoll=Date.now();
       }
+      if(!liveReadingsAvailable()||(state.tab!=='visitantes'&&!commandCardOpen('wifi-local')))return;
+      if(await visitorsQuery('ping')&&liveReadingsAvailable()&&(!state.visitors.versao||atualizarVersao))await visitorsQuery('versao');
     }finally{state.polls.remoteCycle=false;}
   }
   const wifiPanels={equipe:{},visitantes:{}};
@@ -1818,12 +2698,15 @@
     finally{view.busy=false;}
   }
   setupWifiPanel('equipe');setupWifiPanel('visitantes');
-  setInterval(()=>{pollWifiClients('equipe');if(state.tab==='comandos')pollWifiClients('visitantes');},10000);
+  function pollVisibleWifiClients(){
+    if(!commandCardOpen('wifi-local')||!liveReadingsAvailable())return;
+    void pollWifiClients('equipe');
+    if(state.masterOnline)void pollWifiClients('visitantes');
+  }
+  $('wifi-local').closest('details').addEventListener('toggle',pollVisibleWifiClients);
+  setInterval(pollVisibleWifiClients,10000);
   setInterval(()=>{document.querySelectorAll('.wifi-client-row span[data-connected-ms]').forEach(el=>{el.textContent='Conectado há '+age(Number(el.dataset.connectedMs)+Date.now()-Number(el.dataset.checkedAt));});},1000);
   showTab(location.hash.slice(1));renderEvents();renderMasterCommandHistory();availability();updateStatus();
-  pollTelemetry();pollLocal();pollRemote();pollCommandStates();pollWifiClients('equipe');
-  setInterval(pollLocal,3000);setInterval(pollRemote,10000);
-  setInterval(pollCommandStates,1000);
-  setInterval(()=>{updateStatus();if(state.tab==='telemetria')drawCharts();},1000);
-  document.addEventListener('visibilitychange',()=>{if(!document.hidden){state.lastCommandPoll=0;state.lastAuxPoll=0;pollTelemetry();pollLocal();pollRemote();pollCommandStates();}});
+  pollTelemetry();pollVisibleWifiClients();
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden){state.lastLinkPoll=0;state.lastCommandPoll=0;state.lastAuxPoll=0;pollTelemetry();pollVisibleWifiClients();}});
 })();

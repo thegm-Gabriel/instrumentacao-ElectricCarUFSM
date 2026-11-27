@@ -5,6 +5,7 @@
 
 #include "esp_log.h"
 #include "esp_random.h"
+#include "esp_timer.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -36,6 +37,7 @@ struct RespostaRepetivel {
 struct SolicitacaoOperacionalPendente {
     DestinoUart origem;
     cabecalho_quadro_comando_t cabecalho;
+    int64_t recebido_em_us;
     uint8_t carga[COMANDO_TAMANHO_MAXIMO_CARGA];
 };
 
@@ -43,6 +45,11 @@ struct SolicitacaoEmAndamento {
     uint32_t solicitacao = 0;
     uint16_t comando = 0;
     bool ativa = false;
+};
+
+struct RecepcaoRearme {
+    uint32_t solicitacao = 0;
+    int64_t recebido_em_us = 0;
 };
 
 QueueHandle_t fila_respostas = nullptr;
@@ -54,6 +61,8 @@ portMUX_TYPE trava_repeticoes = portMUX_INITIALIZER_UNLOCKED;
 EstatisticasServicoComandos estatisticas{};
 RespostaRepetivel respostas_repetiveis[2]{};
 SolicitacaoEmAndamento solicitacoes_em_andamento[2]{};
+RecepcaoRearme rearmes_recentes[4]{};
+size_t proximo_rearme_recente = 0;
 DespachoComando despachar_comando = nullptr;
 
 uint8_t no_para_destino(DestinoUart destino) {
@@ -73,7 +82,7 @@ void registrar_erro(esp_err_t erro) {
 
 void processar_solicitacao_agora(DestinoUart origem,
                                  const cabecalho_quadro_comando_t& cabecalho,
-                                 const uint8_t* carga) {
+                                 const uint8_t* carga, int64_t recebido_em_us) {
     ESP_LOGI(ETIQUETA, "Comando recebido de %s: código=%u solicitação=%lu",
              origem == DestinoUart::Equipe ? "equipe" : "visitantes",
              static_cast<unsigned>(cabecalho.comando),
@@ -111,7 +120,7 @@ void processar_solicitacao_agora(DestinoUart origem,
     if (despachar_comando != nullptr) {
         resultado = despachar_comando(
             cabecalho.comando, origem, carga, cabecalho.tamanho_carga,
-            carga_resposta, &tamanho_resposta);
+            carga_resposta, &tamanho_resposta, recebido_em_us);
     }
     uint8_t quadro[COMANDO_TAMANHO_MAXIMO_QUADRO];
     const size_t tamanho = protocolo_comandos_montar_quadro(
@@ -153,7 +162,7 @@ void tarefa_operacoes_mestre(void*) {
             pdTRUE) continue;
         processar_solicitacao_agora(solicitacao.origem,
                                     solicitacao.cabecalho,
-                                    solicitacao.carga);
+                                    solicitacao.carga, solicitacao.recebido_em_us);
         const size_t indice = indice_destino(solicitacao.origem);
         portENTER_CRITICAL(&trava_repeticoes);
         if (solicitacoes_em_andamento[indice].solicitacao ==
@@ -166,9 +175,26 @@ void tarefa_operacoes_mestre(void*) {
     }
 }
 
+int64_t instante_primeiro_rearme(uint32_t solicitacao, int64_t recebido_em_us) {
+    portENTER_CRITICAL(&trava_repeticoes);
+    for (const auto& anterior : rearmes_recentes) {
+        if (anterior.recebido_em_us != 0 && anterior.solicitacao == solicitacao) {
+            const int64_t primeiro = anterior.recebido_em_us;
+            portEXIT_CRITICAL(&trava_repeticoes);
+            return primeiro;
+        }
+    }
+    rearmes_recentes[proximo_rearme_recente] = {solicitacao, recebido_em_us};
+    proximo_rearme_recente = (proximo_rearme_recente + 1) %
+        (sizeof(rearmes_recentes) / sizeof(rearmes_recentes[0]));
+    portEXIT_CRITICAL(&trava_repeticoes);
+    return recebido_em_us;
+}
+
 void processar_solicitacao(DestinoUart origem,
                            const cabecalho_quadro_comando_t& cabecalho,
                            const uint8_t* carga) {
+    int64_t recebido_em_us = esp_timer_get_time();
     if (cabecalho.comando == COMANDO_EXECUTAR_ACAO_MESTRE &&
         cabecalho.tamanho_carga == sizeof(solicitacao_acao_mestre_t)) {
         solicitacao_acao_mestre_t acao_urgente{};
@@ -176,19 +202,26 @@ void processar_solicitacao(DestinoUart origem,
         if (acao_urgente.acao == ACAO_MESTRE_DEFINIR_PARADA_REMOTA &&
             acao_urgente.valor == 1) {
             // A parada não espera ações de Wi-Fi, OTA ou Google na fila.
-            processar_solicitacao_agora(origem, cabecalho, carga);
+            processar_solicitacao_agora(origem, cabecalho, carga, recebido_em_us);
             return;
+        }
+        if (origem == DestinoUart::Equipe &&
+            acao_urgente.acao == ACAO_MESTRE_DEFINIR_PARADA_REMOTA &&
+            (acao_urgente.valor == 0 || acao_urgente.valor == CONTROLE_REMOTO_ARMAR_DAC_ISOLADO)) {
+            recebido_em_us = instante_primeiro_rearme(cabecalho.solicitacao, recebido_em_us);
         }
     }
     if (cabecalho.comando != COMANDO_EXECUTAR_ACAO_MESTRE &&
         cabecalho.comando != COMANDO_CONSULTAR_SATELITE &&
-        cabecalho.comando != COMANDO_GERIR_WIFI_SATELITE) {
-        processar_solicitacao_agora(origem, cabecalho, carga);
+        cabecalho.comando != COMANDO_GERIR_WIFI_SATELITE &&
+        cabecalho.comando != COMANDO_AJUSTAR_RADIO_SATELITE) {
+        processar_solicitacao_agora(origem, cabecalho, carga, recebido_em_us);
         return;
     }
     SolicitacaoOperacionalPendente pendente{};
     pendente.origem = origem;
     pendente.cabecalho = cabecalho;
+    pendente.recebido_em_us = recebido_em_us;
     if (cabecalho.tamanho_carga != 0) {
         std::memcpy(pendente.carga, carga, cabecalho.tamanho_carga);
     }

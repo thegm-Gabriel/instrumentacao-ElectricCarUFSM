@@ -22,7 +22,7 @@ namespace configuracao {
 // Amostragem e gravação no cartão
 // A ausência do cartão permite que a telemetria ao vivo continue.
 constexpr bool HABILITAR_REGISTRO_TELEMETRIA = true;
-constexpr uint32_t INTERVALO_REGISTRO_TELEMETRIA_MS = 1000;
+constexpr uint32_t INTERVALO_REGISTRO_TELEMETRIA_MS = 100;  // CSV no SD a 10 Hz
 constexpr uint32_t INTERVALO_SINCRONIZACAO_SD_MS    = 10000;
 constexpr uint32_t INTERVALO_NOVA_TENTATIVA_SD_MS   = 30000;
 constexpr uint8_t FALHAS_SEGUIDAS_PARA_REMONTAR_SD = 3;
@@ -31,14 +31,16 @@ constexpr uint8_t FALHAS_SEGUIDAS_PARA_REMONTAR_SD = 3;
 // Uma hora reduz a fragmentação sem criar um CSV ilimitado e difícil de recuperar.
 constexpr uint32_t DURACAO_ARQUIVO_TELEMETRIA_MS = 60U * 60U * 1000U;
 constexpr std::size_t CAPACIDADE_FILA_REGISTRO = 24;
-// Uma hora de linhas com todos os sensores pode ultrapassar 2 MiB.
+// A 10 Hz, o limite de tamanho pode ser atingido antes de uma hora.
 constexpr std::size_t TAMANHO_MAXIMO_CSV_BYTES = 8U * 1024U * 1024U;
+constexpr std::size_t TAMANHO_LINHA_CSV_BYTES = 1024;
 
 // Capacidade do histórico em PSRAM e da alternativa em RAM interna.
 constexpr std::size_t AMOSTRAS_HISTORICO_PSRAM   = 120;
 constexpr std::size_t AMOSTRAS_HISTORICO_INTERNO = 30;
 
-// Caminhos no cartão.
+// Ponto de montagem, limite de arquivos simultâneos e caminhos no cartão.
+constexpr uint8_t MAXIMO_ARQUIVOS_ABERTOS_SD = 4;
 constexpr char PONTO_MONTAGEM_SD[]            = "/sdcard";
 constexpr char DIRETORIO_TELEMETRIA[]         = "/sdcard/telemetria";
 constexpr char DIRETORIO_TELEMETRIA_ENVIADA[] = "/sdcard/telemetria/enviados";
@@ -60,6 +62,8 @@ constexpr uint32_t INTERVALO_BACKUP_CONFIGURACAO_MS = 60000;
 constexpr char ARQUIVO_BACKUP_CONFIGURACAO[] = "/sdcard/configuracao_atual.txt";
 
 // Envio de arquivos ao Google.
+constexpr uint32_t INTERVALO_EXPORTACAO_GOOGLE_MS = 1000;
+constexpr char ARQUIVO_EXPORTACAO_GOOGLE[] = "/sdcard/telemetria/.google.part";
 constexpr char ENDERECO_GOOGLE_TELEMETRIA[] = TELEMETRIA_GOOGLE_URL;
 constexpr char TOKEN_GOOGLE_TELEMETRIA[]    = TELEMETRIA_GOOGLE_TOKEN;
 constexpr uint32_t TEMPO_LIMITE_UPLOAD_MS = 60000;
@@ -70,8 +74,9 @@ constexpr uint32_t INTERVALO_RELATORIO_UPLOAD_MS = 2000;
 constexpr uint8_t MAXIMO_TENTATIVAS_UPLOAD = 4;
 constexpr uint32_t ESPERA_INICIAL_NOVA_TENTATIVA_MS = 1000;
 
-static_assert(INTERVALO_REGISTRO_TELEMETRIA_MS >= 1000,
-              "O histórico no Google foi definido para no máximo 1 Hz");
+static_assert(INTERVALO_REGISTRO_TELEMETRIA_MS > 0);
+static_assert(INTERVALO_EXPORTACAO_GOOGLE_MS >= 1000,
+              "A exportação ao Google tem resolução de até 1 Hz");
 static_assert(DURACAO_ARQUIVO_TELEMETRIA_MS >=
                   INTERVALO_REGISTRO_TELEMETRIA_MS,
               "A duração do CSV deve comportar pelo menos uma amostra");

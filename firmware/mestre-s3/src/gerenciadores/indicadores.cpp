@@ -3,6 +3,7 @@
 
 #include "driver/gpio.h"
 #include "driver/ledc.h"
+#include "driver/rmt_tx.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -28,6 +29,72 @@ struct EstatisticasIndicadores {
 
 SemaphoreHandle_t mutex_indicadores = nullptr;
 EstatisticasIndicadores estatisticas{};
+rmt_channel_handle_t canal_led_integrado = nullptr;
+rmt_encoder_handle_t codificador_led_integrado = nullptr;
+// Um pixel GRB e o pulso de reset cabem em um bloco do ESP32-S3.
+// O buffer deve permanecer válido até o RMT concluir a transmissão.
+rmt_symbol_word_t quadro_led_integrado[25]{};
+CorLed ultima_cor_led_integrado{};
+bool cor_led_integrado_enviada = false;
+
+esp_err_t iniciar_led_integrado() {
+    rmt_tx_channel_config_t canal{};
+    canal.gpio_num = configuracao::PINO_LED_INTEGRADO;
+    canal.clk_src = RMT_CLK_SRC_DEFAULT;
+    canal.resolution_hz = 10000000;
+    canal.mem_block_symbols = 48;
+    canal.trans_queue_depth = 1;
+    esp_err_t erro = rmt_new_tx_channel(&canal, &canal_led_integrado);
+    if (erro != ESP_OK) return erro;
+
+    const rmt_copy_encoder_config_t copia{};
+    erro = rmt_new_copy_encoder(&copia, &codificador_led_integrado);
+    if (erro == ESP_OK) erro = rmt_enable(canal_led_integrado);
+    if (erro != ESP_OK) {
+        if (codificador_led_integrado != nullptr) rmt_del_encoder(codificador_led_integrado);
+        rmt_del_channel(canal_led_integrado);
+        codificador_led_integrado = nullptr;
+        canal_led_integrado = nullptr;
+    }
+    return erro;
+}
+
+esp_err_t escrever_led_integrado(CorLed cor) {
+    if (canal_led_integrado == nullptr || (cor_led_integrado_enviada && cor == ultima_cor_led_integrado))
+        return ESP_OK;
+
+    // Uma transferência pendente conserva o buffer. A tarefa tentará de novo.
+    const esp_err_t disponivel = rmt_tx_wait_all_done(canal_led_integrado, 0);
+    if (disponivel != ESP_OK) return disponivel;
+
+    const uint8_t bytes[] = {cor.verde, cor.vermelho, cor.azul};
+    size_t indice = 0;
+    for (const uint8_t byte : bytes) {
+        for (uint8_t mascara = 0x80; mascara != 0; mascara >>= 1) {
+            const bool bit = (byte & mascara) != 0;
+            auto& simbolo = quadro_led_integrado[indice++];
+            simbolo.level0 = 1;
+            simbolo.duration0 = bit ? 8 : 4;
+            simbolo.level1 = 0;
+            simbolo.duration1 = bit ? 5 : 9;
+        }
+    }
+    // 300 µs em nível baixo fixa a cor no LED.
+    auto& reset = quadro_led_integrado[indice];
+    reset.level0 = 0;
+    reset.duration0 = 1500;
+    reset.level1 = 0;
+    reset.duration1 = 1500;
+    rmt_transmit_config_t transmissao{};
+    transmissao.flags.queue_nonblocking = 1;
+    const esp_err_t erro = rmt_transmit(canal_led_integrado, codificador_led_integrado,
+        quadro_led_integrado, sizeof(quadro_led_integrado), &transmissao);
+    if (erro == ESP_OK) {
+        ultima_cor_led_integrado = cor;
+        cor_led_integrado_enviada = true;
+    }
+    return erro;
+}
 
 int nivel_led(bool aceso) {
     const bool nivel_alto = configuracao::LEDS_ATIVOS_EM_NIVEL_ALTO ? aceso : !aceso;
@@ -64,9 +131,8 @@ esp_err_t gerenciador_indicadores_iniciar() {
 
     const uint64_t mascara_leds =
         (1ULL << configuracao::PINO_LED_VERDE) |
-        (1ULL << configuracao::PINO_LED_AMARELO) |
         (1ULL << configuracao::PINO_LED_VERMELHO) |
-        (1ULL << configuracao::PINO_LED_AZUL);
+        (1ULL << configuracao::PINO_LED_AMARELO);
     gpio_config_t gpio_leds{};
     gpio_leds.pin_bit_mask = mascara_leds;
     gpio_leds.mode = GPIO_MODE_OUTPUT;
@@ -81,9 +147,8 @@ esp_err_t gerenciador_indicadores_iniciar() {
         return erro;
     }
     erro = escrever_led(configuracao::PINO_LED_VERDE, false);
-    if (erro == ESP_OK) erro = escrever_led(configuracao::PINO_LED_AMARELO, false);
     if (erro == ESP_OK) erro = escrever_led(configuracao::PINO_LED_VERMELHO, false);
-    if (erro == ESP_OK) erro = escrever_led(configuracao::PINO_LED_AZUL, false);
+    if (erro == ESP_OK) erro = escrever_led(configuracao::PINO_LED_AMARELO, false);
     if (erro != ESP_OK) {
         registrar_erro(erro);
         ESP_LOGE(ETIQUETA, "Falha ao apagar os LEDs na inicialização: %s",
@@ -117,10 +182,13 @@ esp_err_t gerenciador_indicadores_iniciar() {
 
     estatisticas.iniciado = true;
     estatisticas.ultimo_erro = ESP_OK;
+    const esp_err_t erro_integrado = iniciar_led_integrado();
+    if (erro_integrado != ESP_OK)
+        ESP_LOGW(ETIQUETA, "LED integrado no GPIO%d indisponível: %s",
+                 configuracao::PINO_LED_INTEGRADO, esp_err_to_name(erro_integrado));
     ESP_LOGI(ETIQUETA,
-             "Indicadores prontos: LEDs V/A/Vm/Az=%d/%d/%d/%d | buzzer passivo GPIO %d",
-             configuracao::PINO_LED_VERDE, configuracao::PINO_LED_AMARELO,
-             configuracao::PINO_LED_VERMELHO, configuracao::PINO_LED_AZUL,
+             "Indicadores prontos: LEDs vermelho/verde/amarelo=%d/%d/%d | buzzer passivo GPIO %d",
+             configuracao::PINO_LED_VERMELHO, configuracao::PINO_LED_VERDE, configuracao::PINO_LED_AMARELO,
              configuracao::PINO_BUZZER_PASSIVO);
     return ESP_OK;
 }
@@ -131,9 +199,10 @@ esp_err_t gerenciador_indicadores_definir_leds(const EstadoLeds& estado) {
     }
     xSemaphoreTake(mutex_indicadores, portMAX_DELAY);
     esp_err_t erro = escrever_led(configuracao::PINO_LED_VERDE, estado.verde);
-    if (erro == ESP_OK) erro = escrever_led(configuracao::PINO_LED_AMARELO, estado.amarelo);
     if (erro == ESP_OK) erro = escrever_led(configuracao::PINO_LED_VERMELHO, estado.vermelho);
-    if (erro == ESP_OK) erro = escrever_led(configuracao::PINO_LED_AZUL, estado.azul);
+    if (erro == ESP_OK) erro = escrever_led(configuracao::PINO_LED_AMARELO, estado.amarelo);
+    const esp_err_t erro_integrado = escrever_led_integrado(estado.integrado);
+    if (erro == ESP_OK) erro = erro_integrado;
     if (erro == ESP_OK) {
         estatisticas.leds = estado;
         estatisticas.alteracoes_leds++;

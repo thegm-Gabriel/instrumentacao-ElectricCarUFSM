@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #define TELEMETRIA_INICIO_1 0xAAu
 #define TELEMETRIA_INICIO_2 0x55u
@@ -20,6 +21,10 @@
 #define CAPACIDADE_SATELITE_COMANDOS (1u << 3)
 #define CAPACIDADE_SATELITE_OTA_UART (1u << 4)
 #define CAPACIDADE_SATELITE_OTA_BLOCO_4096 (1u << 5)
+#define CAPACIDADE_SATELITE_OTA_ESTADO_BOOT (1u << 6)
+// Estado dinâmico dentro do campo de capacidades, válido se o bit acima estiver presente.
+#define ESTADO_SATELITE_OTA_EM_OBSERVACAO (1u << 7)
+#define CAPACIDADE_SATELITE_TELEMETRIA_SOC (1u << 8)
 
 #define TELEMETRIA_MPU_ATIVO (1u << 0)
 #define TELEMETRIA_MPU_CALIBRADO (1u << 1)
@@ -36,6 +41,7 @@
 #define TELEMETRIA_INA_PRESENTE (1u << 0)
 #define TELEMETRIA_INA_ENERGIA_VALIDA (1u << 1)
 #define TELEMETRIA_INA_CARGA_VALIDA (1u << 2)
+#define TELEMETRIA_SOC_ESTIMADO (1u << 3)
 
 typedef enum {
     SATELITE_TELEMETRIA_DESCONHECIDO = 0,
@@ -168,6 +174,35 @@ static inline uint16_t protocolo_telemetria_calcular_crc_confirmacao(
     return crc;
 }
 
+static inline confirmacao_telemetria_t protocolo_telemetria_montar_confirmacao(
+    const pacote_telemetria_t *pacote, uint8_t tipo_satelite,
+    uint32_t capacidades, const char *versao_firmware)
+{
+    confirmacao_telemetria_t confirmacao;
+    confirmacao.inicio_1 = TELEMETRIA_INICIO_1;
+    confirmacao.inicio_2 = TELEMETRIA_INICIO_CONFIRMACAO_2;
+    confirmacao.versao = TELEMETRIA_VERSAO_PROTOCOLO;
+    confirmacao.tipo = TELEMETRIA_TIPO_CONFIRMACAO;
+    confirmacao.sequencia = pacote->sequencia;
+    confirmacao.tempo_mestre_ms = pacote->tempo_mestre_ms;
+    confirmacao.tipo_satelite = tipo_satelite;
+    confirmacao.versao_maior = 0;
+    confirmacao.versao_menor = 0;
+    confirmacao.versao_correcao = 0;
+    confirmacao.capacidades = capacidades;
+
+    unsigned maior = 0, menor = 0, correcao = 0;
+    if (versao_firmware != NULL &&
+        sscanf(versao_firmware, "%u.%u.%u", &maior, &menor, &correcao) == 3 &&
+        maior <= UINT8_MAX && menor <= UINT8_MAX && correcao <= UINT8_MAX) {
+        confirmacao.versao_maior = (uint8_t)maior;
+        confirmacao.versao_menor = (uint8_t)menor;
+        confirmacao.versao_correcao = (uint8_t)correcao;
+    }
+    confirmacao.crc16 = protocolo_telemetria_calcular_crc_confirmacao(&confirmacao);
+    return confirmacao;
+}
+
 static inline int protocolo_telemetria_confirmacao_valida(
     const confirmacao_telemetria_t *confirmacao)
 {
@@ -233,11 +268,11 @@ static inline int protocolo_telemetria_conteudo_valido(
            pacote->latitude_micrograus <= 90000000 &&
            pacote->longitude_micrograus >= -180000000 &&
            pacote->longitude_micrograus <= 180000000 &&
-           (pacote->estado_ina & (uint8_t)~0x07u) == 0u &&
+           (pacote->estado_ina & (uint8_t)~0x0Fu) == 0u &&
            ((pacote->estado_ina & TELEMETRIA_INA_PRESENTE) == 0u ||
             (pacote->estado_mpu & TELEMETRIA_ELETRICA_VALIDA) != 0u) &&
            ((pacote->estado_ina & TELEMETRIA_INA_PRESENTE) != 0u ||
-            pacote->estado_ina == 0u) &&
+            (pacote->estado_ina & (TELEMETRIA_INA_ENERGIA_VALIDA | TELEMETRIA_INA_CARGA_VALIDA)) == 0u) &&
            ((pacote->estado_ina & TELEMETRIA_INA_PRESENTE) == 0u ||
             (pacote->ina_shunt_microvolts >= -163840 &&
              pacote->ina_shunt_microvolts <= 163840 &&

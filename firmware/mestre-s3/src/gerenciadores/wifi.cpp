@@ -223,6 +223,26 @@ void cancelar_associacao(TickType_t tempo_limite) {
         definir_desconexao_planejada(false);
     }
 }
+esp_err_t conectar_perfil_atual(TickType_t inicio, TickType_t limite) {
+    if (tempo_restante(inicio, limite) == 0) return ESP_ERR_TIMEOUT;
+    portENTER_CRITICAL(&trava_estado);
+    estado.tentativas_conexao++;
+    estado.conectado = false;
+    portEXIT_CRITICAL(&trava_estado);
+    xEventGroupClearBits(eventos_wifi, BIT_CONECTADO | BIT_FALHA | BIT_DESCONECTADO);
+    const esp_err_t erro = esp_wifi_connect();
+    if (erro != ESP_OK) return erro;
+
+    const TickType_t restante = tempo_restante(inicio, limite);
+    if (restante == 0) return ESP_ERR_TIMEOUT;
+    const EventBits_t bits = xEventGroupWaitBits(
+        eventos_wifi, BIT_CONECTADO | BIT_FALHA, pdFALSE, pdFALSE, restante);
+    if ((bits & BIT_CONECTADO) != 0) return ESP_OK;
+    if ((bits & BIT_FALHA) == 0) return ESP_ERR_TIMEOUT;
+    const esp_err_t motivo = gerenciador_wifi_obter_estado().ultimo_erro;
+    return motivo == ESP_OK ? ESP_ERR_WIFI_NOT_CONNECT : motivo;
+}
+
 }  // namespace
 
 bool gerenciador_wifi_credenciais_validas(const char* ssid, const char* senha) {
@@ -314,6 +334,11 @@ esp_err_t gerenciador_wifi_iniciar(const char* ssid, const char* senha) {
     }
 
     wifi_init_config_t configuracao_wifi = WIFI_INIT_CONFIG_DEFAULT();
+    // A fila fixa deve comportar a janela de recepção agregada configurada no SDK.
+    configuracao_wifi.static_rx_buf_num = std::max(
+        configuracao::QUANTIDADE_BUFFERS_RX_WIFI_ESTATICOS, configuracao_wifi.rx_ba_win);
+    configuracao_wifi.dynamic_rx_buf_num = std::max(
+        configuracao::QUANTIDADE_BUFFERS_RX_WIFI_DINAMICOS, configuracao_wifi.static_rx_buf_num);
     erro = esp_wifi_init(&configuracao_wifi);
     if (erro != ESP_OK) {
         liberar_inicializacao_parcial();
@@ -381,36 +406,35 @@ esp_err_t gerenciador_wifi_conectar(const char* ssid, const char* senha,
 
     if (erro == ESP_OK) {
         portENTER_CRITICAL(&trava_estado);
-        estado.tentativas_conexao++;
-        estado.conectado = false;
         std::memset(estado.ssid_atual, 0, sizeof(estado.ssid_atual));
         std::strncpy(estado.ssid_atual, ssid, sizeof(estado.ssid_atual) - 1);
         portEXIT_CRITICAL(&trava_estado);
-        xEventGroupClearBits(eventos_wifi, BIT_CONECTADO | BIT_FALHA | BIT_DESCONECTADO);
-        erro = esp_wifi_connect();
-    }
-
-    if (erro == ESP_OK) {
-        restante = tempo_restante(inicio, tempo_limite);
-        if (restante == 0) erro = ESP_ERR_TIMEOUT;
-    }
-
-    if (erro == ESP_OK) {
-        const EventBits_t bits = xEventGroupWaitBits(
-            eventos_wifi, BIT_CONECTADO | BIT_FALHA, pdFALSE, pdFALSE, restante);
-        if ((bits & BIT_CONECTADO) != 0) {
-            erro = ESP_OK;
-        } else if ((bits & BIT_FALHA) != 0) {
-            const EstadoWifi falha = gerenciador_wifi_obter_estado();
-            erro = falha.ultimo_erro == ESP_OK ? ESP_ERR_WIFI_NOT_CONNECT
-                                               : falha.ultimo_erro;
-        } else {
-            erro = ESP_ERR_TIMEOUT;
-        }
+        erro = conectar_perfil_atual(inicio, tempo_limite);
     }
     if (erro != ESP_OK) {
         definir_erro(erro);
         cancelar_associacao(tempo_restante(inicio, tempo_limite));
+    }
+    xSemaphoreGive(mutex_operacao);
+    return erro;
+}
+
+esp_err_t gerenciador_wifi_reconectar(TickType_t tempo_limite) {
+    if (tempo_limite == 0) return ESP_ERR_INVALID_ARG;
+    if (eventos_wifi == nullptr || mutex_operacao == nullptr) return ESP_ERR_INVALID_STATE;
+
+    const TickType_t inicio = xTaskGetTickCount();
+    if (xSemaphoreTake(mutex_operacao, tempo_limite) != pdTRUE) return ESP_ERR_TIMEOUT;
+    const EstadoWifi atual = gerenciador_wifi_obter_estado();
+    esp_err_t erro = ESP_OK;
+    if (!atual.inicializado || !atual.ativo) {
+        erro = ESP_ERR_INVALID_STATE;
+    } else if (!atual.conectado) {
+        erro = conectar_perfil_atual(inicio, tempo_limite);
+        if (erro != ESP_OK) {
+            definir_erro(erro);
+            cancelar_associacao(tempo_restante(inicio, tempo_limite));
+        }
     }
     xSemaphoreGive(mutex_operacao);
     return erro;

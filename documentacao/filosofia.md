@@ -47,19 +47,17 @@ outro. Veja o significado dos termos no [glossário](conceitos.md).
    módulos enviam pedidos ou conjuntos de leituras por filas e interfaces
    públicas. Isso evita duas tarefas gravando no mesmo arquivo, disputando a
    porta serial ou tentando iniciar duas atualizações ao mesmo tempo.
-2. **Aquisição não espera rede ou disco.** O retrato do veículo é publicado a
-   cada 250 ms em operação normal. A cópia histórica é reduzida a 1 Hz e
-   enfileirada. HTTPS, FAT, navegadores e apresentação têm seu próprio tempo de
-   execução. Durante OTA a taxa UART pode ser reduzida conforme configuração.
-   Assim, um cartão lento ou uma conexão instável não prende a leitura dos
-   sensores; a fila absorve atrasos breves e seus limites tornam visível a
-   perda de dados quando o destino não acompanha a produção.
-3. **Falha é informação, não zero.** O protocolo contém campos que ainda não
-   possuem sensor real. A interface usa validade, idade e origem simulada para
-   não transformar ausência em uma medição aparente. O painel distingue comando
-   aceito, execução em andamento e resultado observado depois. Isso impede que
-   uma leitura ausente pareça zero ou que uma resposta de recebimento pareça
-   conclusão de OTA ou sincronização.
+2. **Cada tarefa tem sua cadência.** Controle, odômetro e sensores publicam ou
+   consomem leituras localmente. A telemetria reúne as últimas amostras a cada
+   250 ms para a UART em operação normal e a cada 100 ms para o registro local.
+   A gravação, a recuperação do SD e as sessões HTTPS têm tarefas próprias.
+   Filas limitadas absorvem atrasos breves. Quando a fila do registro enche,
+   o contador de perdas indica a diferença entre o fluxo ao vivo e o CSV.
+3. **Preserve validade, origem e idade.** Os painéis separam amostras reais,
+   simuladas e antigas quando o protocolo fornece essa informação. A versão
+   atual pode publicar zero para velocidade inválida. Ao depurar, consulte
+   junto o estado do odômetro e as causas de saúde. Para operações longas,
+   acompanhe o estado e o resultado depois da confirmação do comando.
 4. **Estados explícitos e erros preservados.** Gerenciadores retornam o
    `esp_err_t` original. Serviços classificam recuperação ou degradação;
    apresentação lê o diagnóstico já agregado. Inicializações com várias etapas
@@ -80,8 +78,9 @@ outro. Veja o significado dos termos no [glossário](conceitos.md).
    quando ela não está disponível. Não se aloca um novo bloco a cada amostra.
    Isso reduz fragmentação e mantém RAM interna disponível para tarefas e DMA,
    inclusive durante HTTPS e gravação no SD.
-7. **Configuração e segredo têm destinos distintos.** Limites físicos ficam em
-   cabeçalhos `configuracao_*.h`; preferências persistentes ficam na NVS.
+7. **Configuração e segredo têm destinos distintos.** Limites físicos e
+   padrões do Mestre ficam nos cabeçalhos de `include/nucleo/configuracao/`.
+   Preferências persistentes ficam na NVS.
    `segredos_ota.h` é local e ignorado pelo Git. O retrato de configuração no SD
    exclui senhas. Na partida, ele recupera o odômetro, a política Wi-Fi, a
    preferência de conexão automática e o intervalo OTA se os respectivos dados
@@ -92,9 +91,10 @@ outro. Veja o significado dos termos no [glossário](conceitos.md).
 
 ## Sequência: leitura até as duas páginas
 
-1. Encoders, ADC e MPU6050 produzem leituras no mestre. O odômetro calcula
-   velocidade e percurso; a origem simulada, quando ativada, preenche o mesmo
-   conjunto de leituras com as unidades usadas pelo painel.
+1. Os encoders alimentam o PCNT e o odômetro consulta suas contagens em tarefa
+   própria. O MPU6050 e a aquisição elétrica também mantêm cadências próprias.
+   A tarefa de telemetria reúne o retrato real ou seleciona o simulador, que usa
+   o mesmo modelo de dados.
 2. `telemetria_uart` compacta o modelo no quadro v5, identifica sequência e
    instante do mestre, aplica CRC-16 e entrega cópias às duas filas UART. O
    produtor não espera o TX físico ou a página web.
@@ -107,7 +107,7 @@ outro. Veja o significado dos termos no [glossário](conceitos.md).
    `/api/telemetria` a 1, 2, 3 ou 4 Hz, escolhido na página; Visitantes consulta
    a 2 Hz. Essa é a frequência de consulta, que pode cair se a rede ou o
    navegador atrasar. Amostras antigas permanecem identificadas pela idade.
-5. O registro histórico recebe a cópia a 1 Hz. O CSV ativo é sincronizado a
+5. O registro histórico recebe a cópia a 10 Hz. O CSV ativo é sincronizado a
    cada 10 s e fechado por duração ou tamanho. Os gráficos e o CSV exportado
    pelo navegador pertencem apenas à sessão da página, não são o arquivo do SD.
 
@@ -116,8 +116,9 @@ outro. Veja o significado dos termos no [glossário](conceitos.md).
 1. O operador envia uma ação na página **Comandos**. O JavaScript faz a
    confirmação visual quando necessário e chama `/api/mestre?consulta=...`.
    O servidor valida método, consulta e corpo antes de encaminhar pela UART.
-2. A solicitação usa um identificador. O mestre valida o quadro CRC-32 e sua
-   carga, executa a operação permitida ou devolve um resultado explícito.
+2. A solicitação usa um identificador. O Mestre confere CRC-32, origem, carga
+   e condições de execução. Para rearme, verifica também o horário da primeira
+   recepção e recusa pedidos vencidos ou anteriores à liberação da parada atual.
 3. A resposta confirma a aceitação ou recusa da solicitação. Para OTA,
    sincronização Google e outras operações demoradas, isso **não** significa
    conclusão: o painel consulta o estado posterior e mostra etapas, progresso

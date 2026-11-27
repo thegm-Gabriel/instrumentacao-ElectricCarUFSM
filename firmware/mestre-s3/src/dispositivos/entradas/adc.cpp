@@ -1,5 +1,7 @@
-// Implementa a aquisição do ADC usado para medir tensão.
+// Mede o pedal e disponibiliza a última amostra bruta ao diagnóstico.
 #include "dispositivos/entradas/adc.h"
+
+#include <atomic>
 
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
@@ -8,23 +10,23 @@
 #include "nucleo/configuracao/placa.h"
 
 namespace {
-constexpr char ETIQUETA[] = "leitor_tensao";
+constexpr char ETIQUETA[] = "adc_pedal";
 adc_oneshot_unit_handle_t unidade_adc = nullptr;
-adc_channel_t canal_adc{};
 adc_channel_t canal_pedal{};
 adc_cali_handle_t calibracao_pedal = nullptr;
 bool inicializado = false;
+std::atomic<int> ultimo_bruto{-1};
 }
 
-esp_err_t leitor_tensao_iniciar() {
+esp_err_t leitor_pedal_iniciar() {
     if (inicializado) return ESP_OK;
 
     adc_unit_t unidade{};
-    esp_err_t erro = adc_oneshot_io_to_channel(configuracao::PINO_LEITURA_TENSAO,
-                                               &unidade, &canal_adc);
+    esp_err_t erro = adc_oneshot_io_to_channel(configuracao::PINO_ACELERADOR_ADC,
+                                               &unidade, &canal_pedal);
     if (erro != ESP_OK) {
         ESP_LOGE(ETIQUETA, "GPIO %d nao pode ser usado pelo ADC: %s",
-                 configuracao::PINO_LEITURA_TENSAO, esp_err_to_name(erro));
+                 configuracao::PINO_ACELERADOR_ADC, esp_err_to_name(erro));
         return erro;
     }
 
@@ -40,7 +42,7 @@ esp_err_t leitor_tensao_iniciar() {
     adc_oneshot_chan_cfg_t configuracao_canal{};
     configuracao_canal.atten = ADC_ATTEN_DB_12;
     configuracao_canal.bitwidth = ADC_BITWIDTH_DEFAULT;
-    erro = adc_oneshot_config_channel(unidade_adc, canal_adc, &configuracao_canal);
+    erro = adc_oneshot_config_channel(unidade_adc, canal_pedal, &configuracao_canal);
     if (erro != ESP_OK) {
         ESP_LOGE(ETIQUETA, "Falha ao configurar canal ADC: %s", esp_err_to_name(erro));
         adc_oneshot_del_unit(unidade_adc);
@@ -48,31 +50,21 @@ esp_err_t leitor_tensao_iniciar() {
         return erro;
     }
 
-    adc_unit_t unidade_pedal{};
-    erro = adc_oneshot_io_to_channel(configuracao::PINO_ACELERADOR_ADC,
-                                    &unidade_pedal, &canal_pedal);
-    if (erro == ESP_OK && unidade_pedal != unidade)
-        erro = ESP_ERR_INVALID_ARG;
-    if (erro == ESP_OK)
-        erro = adc_oneshot_config_channel(unidade_adc, canal_pedal,
-                                         &configuracao_canal);
-    if (erro == ESP_OK) {
-        adc_cali_curve_fitting_config_t configuracao_calibracao{};
-        configuracao_calibracao.unit_id = unidade;
-        configuracao_calibracao.chan = canal_pedal;
-        configuracao_calibracao.atten = ADC_ATTEN_DB_12;
-        configuracao_calibracao.bitwidth = ADC_BITWIDTH_DEFAULT;
-        erro = adc_cali_create_scheme_curve_fitting(&configuracao_calibracao,
-                                                     &calibracao_pedal);
-    }
+    adc_cali_curve_fitting_config_t calibracao{};
+    calibracao.unit_id = unidade;
+    calibracao.chan = canal_pedal;
+    calibracao.atten = ADC_ATTEN_DB_12;
+    calibracao.bitwidth = ADC_BITWIDTH_DEFAULT;
+    erro = adc_cali_create_scheme_curve_fitting(&calibracao, &calibracao_pedal);
     if (erro != ESP_OK) {
-        ESP_LOGE(ETIQUETA, "Pedal ADC indisponível: %s", esp_err_to_name(erro));
-        calibracao_pedal = nullptr;
-        // O canal bruto já foi configurado e continua disponível à telemetria.
+        ESP_LOGE(ETIQUETA, "Falha ao calibrar o ADC do pedal: %s", esp_err_to_name(erro));
+        adc_oneshot_del_unit(unidade_adc);
+        unidade_adc = nullptr;
+        return erro;
     }
 
     inicializado = true;
-    ESP_LOGI(ETIQUETA, "ADC pronto no GPIO %d", configuracao::PINO_LEITURA_TENSAO);
+    ESP_LOGI(ETIQUETA, "ADC pronto no GPIO %d", configuracao::PINO_ACELERADOR_ADC);
     return ESP_OK;
 }
 
@@ -82,6 +74,8 @@ esp_err_t leitor_pedal_ler_mv(uint16_t* milivolts) {
         return ESP_ERR_INVALID_STATE;
     int bruto = 0;
     esp_err_t erro = adc_oneshot_read(unidade_adc, canal_pedal, &bruto);
+    ultimo_bruto.store(erro == ESP_OK && bruto >= 0 && bruto <= 4095 ? bruto : -1,
+                       std::memory_order_relaxed);
     int convertido_mv = 0;
     if (erro == ESP_OK)
         erro = adc_cali_raw_to_voltage(calibracao_pedal, bruto,
@@ -92,20 +86,10 @@ esp_err_t leitor_pedal_ler_mv(uint16_t* milivolts) {
     return ESP_OK;
 }
 
-esp_err_t leitor_tensao_ler(uint16_t* valor_bruto) {
+esp_err_t leitor_pedal_obter_bruto(uint16_t* valor_bruto) {
     if (valor_bruto == nullptr) return ESP_ERR_INVALID_ARG;
-    if (!inicializado || unidade_adc == nullptr) return ESP_ERR_INVALID_STATE;
-
-    int valor = 0;
-    esp_err_t erro = adc_oneshot_read(unidade_adc, canal_adc, &valor);
-    if (erro != ESP_OK) {
-        ESP_LOGE(ETIQUETA, "Falha na leitura ADC: %s", esp_err_to_name(erro));
-        return erro;
-    }
-    if (valor < 0 || valor > 4095) {
-        ESP_LOGE(ETIQUETA, "ADC retornou valor fora da faixa: %d", valor);
-        return ESP_FAIL;
-    }
+    const int valor = ultimo_bruto.load(std::memory_order_relaxed);
+    if (valor < 0) return ESP_ERR_INVALID_STATE;
     *valor_bruto = static_cast<uint16_t>(valor);
     return ESP_OK;
 }

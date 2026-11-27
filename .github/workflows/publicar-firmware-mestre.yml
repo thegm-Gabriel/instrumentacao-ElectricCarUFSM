@@ -45,7 +45,7 @@ jobs:
               "VERSAO_EQUIPE": estado["firmwares"]["equipe-s3"]["versao"],
               "VERSAO_VISITANTES": estado["firmwares"]["visitantes-s3"]["versao"],
           }
-          if (os.environ.get("GITHUB_REF_TYPE") == "tag":
+          if os.environ.get("GITHUB_REF_TYPE") == "tag":
               esperada = f"v{valores['VERSAO_RELEASE']}"
               recebida = os.environ.get("GITHUB_REF_NAME")
               if recebida != esperada:
@@ -73,12 +73,12 @@ jobs:
         run: |
           mkdir -p versoes/saida
           cp firmware/mestre-s3/.pio/build/mestre-s3-n16r8/firmware.bin versoes/saida/mestre-s3.bin
-          cp firmware/equipe-s3/.pio/build/esp32-s3-devkitm-1/firmware.bin versoes/saida/equipe-s3.bin
-          cp firmware/visitantes-s3/.pio/build/esp32-s3-devkitm-1/firmware.bin versoes/saida/visitantes-s3.bin
+          cp firmware/equipe-s3/.pio/build/esp32-c3-supermini-plus/firmware.bin versoes/saida/equipe-c3.bin
+          cp firmware/visitantes-s3/.pio/build/esp32-c3-supermini-plus/firmware.bin versoes/saida/visitantes-c3.bin
           python ferramentas/criar_manifesto_ota.py \
             --firmware-mestre versoes/saida/mestre-s3.bin \
-            --firmware-equipe versoes/saida/equipe-s3.bin \
-            --firmware-visitantes versoes/saida/visitantes-s3.bin \
+            --firmware-equipe versoes/saida/equipe-c3.bin \
+            --firmware-visitantes versoes/saida/visitantes-c3.bin \
             --versao-mestre "${VERSAO_MESTRE}" \
             --versao-equipe "${VERSAO_EQUIPE}" \
             --versao-visitantes "${VERSAO_VISITANTES}" \
@@ -94,15 +94,15 @@ jobs:
           if gh release view "${ETIQUETA_RELEASE}" >/dev/null 2>&1; then
             gh release upload "${ETIQUETA_RELEASE}" \
               versoes/saida/mestre-s3.bin \
-              versoes/saida/equipe-s3.bin \
-              versoes/saida/visitantes-s3.bin \
+              versoes/saida/equipe-c3.bin \
+              versoes/saida/visitantes-c3.bin \
               versoes/saida/manifesto-firmwares.json \
               --clobber
           else
             gh release create "${ETIQUETA_RELEASE}" \
               versoes/saida/mestre-s3.bin \
-              versoes/saida/equipe-s3.bin \
-              versoes/saida/visitantes-s3.bin \
+              versoes/saida/equipe-c3.bin \
+              versoes/saida/visitantes-c3.bin \
               versoes/saida/manifesto-firmwares.json \
               --title "Firmwares OTA ${ETIQUETA_RELEASE}" \
               --generate-notes

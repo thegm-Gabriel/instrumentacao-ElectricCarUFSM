@@ -2,14 +2,13 @@
 #include "nucleo/configuracao/tarefas.h"
 #include "servicos/historico/registro_sd.h"
 
+#include "servicos/historico/backup_configuracao.h"
 #include "servicos/historico/upload_google.h"
 
 #include <algorithm>
 #include <cerrno>
 #include <cinttypes>
-#include <cmath>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <dirent.h>
@@ -23,21 +22,18 @@
 #include "esp_chip_info.h"
 #include "esp_system.h"
 #include "esp_flash.h"
-#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "gerenciadores/sd.h"
 #include "nucleo/configuracao/historico.h"
-#include "nucleo/configuracao/placa.h"
+#include "nucleo/tempo.h"
 #include "servicos/comunicacao/relogio_http.h"
 #include "servicos/comunicacao/wifi_sessoes.h"
 #include "servicos/manutencao/diagnostico.h"
 #include "servicos/manutencao/supervisao.h"
-#include "servicos/veiculo/odometro.h"
 #include "servicos/manutencao/ota.h"
-#include "servicos/interface_local/relatorios.h"
 #include "servicos/comunicacao/telemetria_uart.h"
 
 namespace {
@@ -83,7 +79,6 @@ uint32_t sessao = 0;
 uint32_t sequencia_arquivo = 0;
 uint32_t inicio_arquivo_ms = 0;
 uint32_t linhas_sem_sincronizar = 0;
-uint32_t proximo_registro_ms = 0;
 EstadoRegistroTelemetria estado{};
 portMUX_TYPE trava_estado = portMUX_INITIALIZER_UNLOCKED;
 esp_err_t erro_preparacao_upload = ESP_OK;
@@ -158,11 +153,6 @@ uint32_t amostras_ram_descartadas = 0;
 uint64_t ordem_historico_tentativa = 0;
 bool historico_parcial_possivel = false;
 SemaphoreHandle_t mutex_historico = nullptr;
-uint32_t ultimo_backup_ms = 0;
-uint32_t ultima_tentativa_backup_falha_ms = 0;
-bool aguarda_nova_tentativa_backup = false;
-uint32_t sequencia_backup = 0;
-uint64_t ultimo_odometro_backup_mm = UINT64_MAX;
 esp_err_t criar_diretorio(const char* caminho);
 
 void iniciar_sequencia_logs() {
@@ -187,250 +177,6 @@ void iniciar_sequencia_logs() {
     closedir(diretorio);
     numero_log = maior + 1U;
     if (numero_log == 0) numero_log = 1;
-}
-
-uint32_t checksum_backup(const char* dados, size_t tamanho) {
-    uint32_t hash = 2166136261U;
-    for (size_t i = 0; i < tamanho; ++i) {
-        hash = (hash ^ static_cast<unsigned char>(dados[i])) * 16777619U;
-    }
-    return hash;
-}
-
-struct BackupConfiguracao {
-    uint32_t sequencia = 0;
-    uint64_t odometro_mm = 0;
-    PoliticaConexaoWifi politica_wifi{};
-    bool conexao_automatica_wifi = false;
-    uint32_t intervalo_ota_min = 0;
-    uint32_t intervalos_relatorios_ms[4]{};
-    bool relatorios_pausados = false;
-};
-
-bool ler_campo_backup(const char* conteudo, const char* chave, uint32_t* destino) {
-    char busca[48]{};
-    if (std::snprintf(busca, sizeof(busca), "\n%s=", chave) >=
-        static_cast<int>(sizeof(busca))) return false;
-    const char* campo = std::strstr(conteudo, busca);
-    if (campo == nullptr) return false;
-    campo += std::strlen(busca);
-    if (*campo < '0' || *campo > '9') return false;
-    char* fim = nullptr;
-    errno = 0;
-    const unsigned long long valor = std::strtoull(campo, &fim, 10);
-    if (errno != 0 || fim == campo || *fim != '\n' || valor > UINT32_MAX) {
-        return false;
-    }
-    *destino = static_cast<uint32_t>(valor);
-    return true;
-}
-
-bool ler_backup(const char* caminho, BackupConfiguracao* backup) {
-    if (backup == nullptr) return false;
-    FILE* arquivo = std::fopen(caminho, "rb");
-    if (arquivo == nullptr) return false;
-    char conteudo[1024]{};
-    const size_t lidos = std::fread(conteudo, 1, sizeof(conteudo) - 1, arquivo);
-    const bool completo = std::feof(arquivo) != 0;
-    std::fclose(arquivo);
-    if (!completo || lidos == 0) return false;
-    conteudo[lidos] = '\0';
-    char* checksum = std::strstr(conteudo, "checksum=");
-    unsigned esperado = 0;
-    unsigned numero = 0;
-    unsigned long long total = 0;
-    if (checksum == nullptr ||
-        std::sscanf(checksum, "checksum=%8x", &esperado) != 1 ||
-        std::sscanf(conteudo, "formato=1\nsequencia=%u\nodometro_mm=%llu\n",
-                    &numero, &total) != 2 ||
-        total > 1000000000000ULL ||
-        checksum_backup(conteudo, static_cast<size_t>(checksum - conteudo)) != esperado) {
-        return false;
-    }
-    uint32_t tentativas = 0;
-    uint32_t automatico = 0;
-    uint32_t pausados = 0;
-    if (!ler_campo_backup(conteudo, "wifi_automatico", &automatico) ||
-        automatico > 1 ||
-        !ler_campo_backup(conteudo, "wifi_tentativas", &tentativas) ||
-        tentativas > UINT8_MAX ||
-        !ler_campo_backup(conteudo, "wifi_tempo_tentativa_ms",
-                          &backup->politica_wifi.tempo_por_tentativa_ms) ||
-        !ler_campo_backup(conteudo, "wifi_intervalo_ms",
-                          &backup->politica_wifi.intervalo_entre_tentativas_ms) ||
-        !ler_campo_backup(conteudo, "wifi_limite_sessao_ms",
-                          &backup->politica_wifi.tempo_limite_sessao_ms) ||
-        !ler_campo_backup(conteudo, "ota_intervalo_min",
-                          &backup->intervalo_ota_min) ||
-        !ler_campo_backup(conteudo, "relatorio_telemetria_ms",
-                          &backup->intervalos_relatorios_ms[0]) ||
-        !ler_campo_backup(conteudo, "relatorio_uart_ms",
-                          &backup->intervalos_relatorios_ms[1]) ||
-        !ler_campo_backup(conteudo, "relatorio_sistema_ms",
-                          &backup->intervalos_relatorios_ms[2]) ||
-        !ler_campo_backup(conteudo, "relatorio_ota_ms",
-                          &backup->intervalos_relatorios_ms[3]) ||
-        !ler_campo_backup(conteudo, "relatorios_pausados", &pausados) ||
-        pausados > 1) return false;
-    backup->sequencia = numero;
-    backup->odometro_mm = static_cast<uint64_t>(total);
-    backup->politica_wifi.tentativas_por_rede = static_cast<uint8_t>(tentativas);
-    backup->conexao_automatica_wifi = automatico != 0;
-    backup->relatorios_pausados = pausados != 0;
-    return true;
-}
-
-void recuperar_backup_configuracao() {
-    BackupConfiguracao principal_backup{};
-    BackupConfiguracao temporario_backup{};
-    const bool principal = ler_backup(configuracao::ARQUIVO_BACKUP_CONFIGURACAO,
-                                      &principal_backup);
-    char temporario[96]{};
-    std::snprintf(temporario, sizeof(temporario), "%s.tmp",
-                  configuracao::ARQUIVO_BACKUP_CONFIGURACAO);
-    const bool pendente = ler_backup(temporario, &temporario_backup);
-    if (!principal && !pendente) return;
-    const bool usar_temporario = pendente &&
-        (!principal || static_cast<int32_t>(temporario_backup.sequencia -
-                                           principal_backup.sequencia) > 0);
-    const BackupConfiguracao& escolhido = usar_temporario
-        ? temporario_backup : principal_backup;
-    sequencia_backup = escolhido.sequencia;
-    ultimo_odometro_backup_mm = escolhido.odometro_mm;
-    const esp_err_t erro = servico_odometro_restaurar_se_ausente(
-        escolhido.odometro_mm);
-    if (erro != ESP_OK && erro != ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(ETIQUETA, "Backup SD encontrado, mas restauração do odômetro falhou: %s",
-                 esp_err_to_name(erro));
-    }
-    const esp_err_t wifi = servico_wifi_restaurar_politica_se_ausente(
-        escolhido.politica_wifi, escolhido.conexao_automatica_wifi);
-    if (wifi == ESP_OK) {
-        ESP_LOGI(ETIQUETA, "Política Wi-Fi restaurada do SD; redes exigem credenciais");
-    } else if (wifi != ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(ETIQUETA, "Política Wi-Fi do SD não restaurada: %s",
-                 esp_err_to_name(wifi));
-    }
-    const esp_err_t ota = servico_ota_restaurar_intervalo_se_ausente(
-        escolhido.intervalo_ota_min);
-    if (ota == ESP_OK) {
-        ESP_LOGI(ETIQUETA, "Intervalo OTA restaurado do SD");
-    } else if (ota != ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(ETIQUETA, "Intervalo OTA do SD não restaurado: %s",
-                 esp_err_to_name(ota));
-    }
-    const esp_err_t relatorios =
-        servico_relatorios_restaurar_configuracao_antes_de_iniciar(
-            escolhido.intervalos_relatorios_ms, escolhido.relatorios_pausados);
-    if (relatorios != ESP_OK && relatorios != ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(ETIQUETA, "Relatórios do SD não restaurados: %s",
-                 esp_err_to_name(relatorios));
-    }
-    if (usar_temporario) {
-        (void)std::remove(configuracao::ARQUIVO_BACKUP_CONFIGURACAO);
-        if (std::rename(temporario, configuracao::ARQUIVO_BACKUP_CONFIGURACAO) != 0) {
-            ESP_LOGW(ETIQUETA, "Backup temporário válido preservado: errno=%d", errno);
-        }
-    }
-}
-
-void atualizar_backup_configuracao(uint32_t instante) {
-    if (ultimo_backup_ms != 0 && instante - ultimo_backup_ms <
-            configuracao::INTERVALO_BACKUP_CONFIGURACAO_MS) return;
-    // Falhas no SD devem ser repetidas em breve, sem tentar e registrar erro a cada amostra.
-    if (aguarda_nova_tentativa_backup &&
-        instante - ultima_tentativa_backup_falha_ms < 5000) return;
-    const EstadoOdometro odometro = servico_odometro_obter_estado();
-    if (!odometro.iniciado || !std::isfinite(odometro.odometro_m) ||
-        odometro.odometro_m < 0) return;
-    const uint64_t total_mm = static_cast<uint64_t>(
-        std::llround(odometro.odometro_m * 1000.0));
-    const ResumoWifi wifi = servico_wifi_obter_resumo();
-    const SituacaoOta ota = servico_ota_obter_situacao();
-    if (ota.intervalo_verificacao_minutos == 0) return;
-    aguarda_nova_tentativa_backup = true;
-    ultima_tentativa_backup_falha_ms = instante;
-    const uint32_t proxima_sequencia_backup = sequencia_backup + 1;
-    // Um minuto limita desgaste do SD; o retrato guarda configuração sem senhas.
-    char conteudo[1024]{};
-    const int tamanho = std::snprintf(conteudo, sizeof(conteudo),
-        "formato=1\nsequencia=%" PRIu32 "\nodometro_mm=%" PRIu64 "\n"
-        "wifi_secundarias=%u\nwifi_automatico=%u\n"
-        "wifi_tentativas=%u\nwifi_tempo_tentativa_ms=%" PRIu32 "\n"
-        "wifi_intervalo_ms=%" PRIu32 "\nwifi_limite_sessao_ms=%" PRIu32 "\n"
-        "ota_intervalo_min=%" PRIu32 "\n"
-        "relatorio_telemetria_ms=%" PRIu32 "\nrelatorio_uart_ms=%" PRIu32 "\n"
-        "relatorio_sistema_ms=%" PRIu32 "\nrelatorio_ota_ms=%" PRIu32 "\n"
-        "relatorios_pausados=%u\n"
-        "registro_intervalo_ms=%" PRIu32 "\nregistro_duracao_arquivo_ms=%" PRIu32 "\n",
-        proxima_sequencia_backup, total_mm,
-        static_cast<unsigned>(wifi.quantidade_redes_usuario),
-        static_cast<unsigned>(wifi.conectar_secundarias_automaticamente),
-        static_cast<unsigned>(wifi.politica.tentativas_por_rede),
-        wifi.politica.tempo_por_tentativa_ms,
-        wifi.politica.intervalo_entre_tentativas_ms,
-        wifi.politica.tempo_limite_sessao_ms,
-        ota.intervalo_verificacao_minutos,
-        servico_relatorios_obter_intervalo(GrupoRelatorio::Telemetria),
-        servico_relatorios_obter_intervalo(GrupoRelatorio::Uart),
-        servico_relatorios_obter_intervalo(GrupoRelatorio::Sistema),
-        servico_relatorios_obter_intervalo(GrupoRelatorio::Ota),
-        static_cast<unsigned>(servico_relatorios_estao_pausados()),
-        configuracao::INTERVALO_REGISTRO_TELEMETRIA_MS,
-        configuracao::DURACAO_ARQUIVO_TELEMETRIA_MS);
-    if (tamanho <= 0 || tamanho + 19 >= static_cast<int>(sizeof(conteudo))) return;
-    size_t usados = static_cast<size_t>(tamanho);
-    auto adicionar_rede = [&](const char* chave, const char* ssid) {
-        if (usados + std::strlen(chave) + 34 >= sizeof(conteudo)) return;
-        usados += static_cast<size_t>(std::snprintf(conteudo + usados,
-                sizeof(conteudo) - usados, "%s=", chave));
-        for (size_t i = 0; i < 32 && ssid[i] != '\0'; ++i) {
-            const unsigned char c = static_cast<unsigned char>(ssid[i]);
-            conteudo[usados++] = c >= 32 && c < 127 && c != '=' ? c : '_';
-        }
-        conteudo[usados++] = '\n';
-        conteudo[usados] = '\0';
-    };
-    adicionar_rede("wifi_principal", wifi.rede_principal);
-    for (unsigned i = 0; i < wifi.quantidade_redes_usuario; ++i) {
-        char chave[32]{};
-        std::snprintf(chave, sizeof(chave), "wifi_secundaria_%u", i + 1);
-        adicionar_rede(chave, wifi.redes_usuario[i]);
-    }
-    if (usados + 19 >= sizeof(conteudo)) return;
-    const uint32_t hash = checksum_backup(conteudo, usados);
-    const int final = std::snprintf(conteudo + usados, sizeof(conteudo) - usados,
-                                    "checksum=%08" PRIx32 "\n", hash);
-    if (final <= 0 || final >= static_cast<int>(sizeof(conteudo) - usados)) return;
-    char temporario[96]{};
-    std::snprintf(temporario, sizeof(temporario), "%s.tmp",
-                  configuracao::ARQUIVO_BACKUP_CONFIGURACAO);
-    FILE* arquivo = std::fopen(temporario, "wb");
-    if (arquivo == nullptr) {
-        ESP_LOGW(ETIQUETA, "Falha ao abrir backup SD: errno=%d", errno);
-        return;
-    }
-    const size_t comprimento = usados + static_cast<size_t>(final);
-    const bool falhou = std::fwrite(conteudo, 1, comprimento, arquivo) != comprimento ||
-        std::fflush(arquivo) != 0 || fsync(fileno(arquivo)) != 0;
-    const bool fechamento_falhou = std::fclose(arquivo) != 0;
-    if (falhou || fechamento_falhou) {
-        ESP_LOGW(ETIQUETA, "Falha ao gravar backup SD: errno=%d", errno);
-        return;
-    }
-    (void)std::remove(configuracao::ARQUIVO_BACKUP_CONFIGURACAO);
-    if (std::rename(temporario, configuracao::ARQUIVO_BACKUP_CONFIGURACAO) != 0) {
-        ESP_LOGW(ETIQUETA, "Backup temporário preservado: errno=%d", errno);
-        return;
-    }
-    sequencia_backup = proxima_sequencia_backup;
-    aguarda_nova_tentativa_backup = false;
-    ultimo_backup_ms = instante;
-    if (total_mm != ultimo_odometro_backup_mm) {
-        ESP_LOGI(ETIQUETA, "Backup de configuração atualizado: sequência %" PRIu32
-                 ", odômetro %.3f km", sequencia_backup, odometro.odometro_m / 1000.0);
-        ultimo_odometro_backup_mm = total_mm;
-    }
 }
 
 esp_err_t preparar_historico_no_arquivo(FILE* arquivo, uint32_t sessao_atual,
@@ -494,7 +240,7 @@ esp_err_t preparar_historico_no_arquivo(FILE* arquivo, uint32_t sessao_atual,
 }
 
 void registrar_diagnostico_esp() {
-    const uint32_t instante = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+    const uint32_t instante = tempo_monotonico::agora_ms32();
     if (repetir_log_ms != 0 && static_cast<int32_t>(instante - repetir_log_ms) < 0) return;
     bool ha_historico_pendente = historico_parcial_possivel;
     bool historico_grave_pendente = false;
@@ -954,10 +700,6 @@ falhou:
     ESP_LOGW(ETIQUETA, "Falha ao persistir diagnóstico ESP no SD; tentativa em 30 s (errno=%d)", errno);
 }
 
-uint32_t agora_ms() {
-    return static_cast<uint32_t>(esp_timer_get_time() / 1000);
-}
-
 void tarefa_historico(void*) {
     AmostraHistorico anterior{};
     bool tem_anterior = false;
@@ -974,7 +716,7 @@ void tarefa_historico(void*) {
             const auto registro = servico_registro_telemetria_obter_estado();
             const auto telemetria = servico_telemetria_obter_estatisticas();
             AmostraHistorico amostra{};
-            amostra.ms = agora_ms();
+            amostra.ms = tempo_monotonico::agora_ms32();
             amostra.utc = static_cast<int64_t>(relogio_utc_obter());
             amostra.causas = saude.causas_ativas;
             amostra.heap_interno = saude.heap_interno_livre;
@@ -1346,11 +1088,14 @@ esp_err_t fechar_arquivo_atual() {
 esp_err_t formatar_linha_csv(const ComandoRegistro& comando, char* linha,
                              size_t capacidade, size_t* tamanho) {
     const auto& d = comando.dados;
+    char carga[16]{};
+    if (d.simulado || d.soc_estimado)
+        std::snprintf(carga, sizeof(carga), "%.2f", d.carga_percentual);
     const int escritos = std::snprintf(
         linha, capacidade,
         "%" PRIu32 ",%u,%d,%d,%d,%d,%d,%d,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,"
         "%.6f,%.6f,%.6f,%.3f,%u,%u,%u,%u,%d,%u,%.3f,%.6f,%.6f,%.2f,%.2f,"
-        "%.3f,%.3f,%.2f,%.4f,%.4f,%.4f,%.4f,%.7f,%.7f,%.2f,%.2f,%.2f,"
+        "%.3f,%.3f,%s,%.4f,%.4f,%.4f,%.4f,%.7f,%.7f,%.2f,%.2f,%.2f,"
         "%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.3f,%.6f,%.6f,%u\n",
         comando.tempo_sessao_ms, static_cast<unsigned>(d.tensao_adc_bruta),
         d.aceleracao_x, d.aceleracao_y, d.aceleracao_z, d.giroscopio_x,
@@ -1363,7 +1108,7 @@ esp_err_t formatar_linha_csv(const ComandoRegistro& comando, char* linha,
         static_cast<int>(d.sentido_aceleracao_longitudinal),
         static_cast<unsigned>(d.marcha), d.velocidade_kmh, d.aceleracao_ms2,
         d.aceleracao_g, d.acelerador_percentual, d.freio_percentual,
-        d.tensao_pacote_v, d.corrente_a, d.carga_percentual,
+        d.tensao_pacote_v, d.corrente_a, carga,
         d.tensoes_celulas_v[0], d.tensoes_celulas_v[1], d.tensoes_celulas_v[2],
         d.tensoes_celulas_v[3], d.latitude, d.longitude, d.rumo_graus,
         d.distancias_cm[0], d.distancias_cm[1], d.distancias_cm[2],
@@ -1391,7 +1136,7 @@ esp_err_t gravar_amostra(const ComandoRegistro& comando) {
         if (erro != ESP_OK) return erro;
     }
 
-    char linha[1024]{};
+    char linha[configuracao::TAMANHO_LINHA_CSV_BYTES]{};
     size_t tamanho = 0;
     esp_err_t erro = formatar_linha_csv(comando, linha, sizeof(linha), &tamanho);
     if (erro != ESP_OK) return erro;
@@ -1582,15 +1327,7 @@ esp_err_t sincronizar_com_google(ResultadoSincronizacao* resultado) {
 }
 
 esp_err_t preparar_cartao(bool restaurar_backup) {
-    ConfiguracaoCartaoSd sd{};
-    sd.ponto_montagem = configuracao::PONTO_MONTAGEM_SD;
-    sd.pino_clk = configuracao::PINO_SD_CLK;
-    sd.pino_mosi = configuracao::PINO_SD_MOSI;
-    sd.pino_miso = configuracao::PINO_SD_MISO;
-    sd.pino_cs = configuracao::PINO_SD_CS;
-    sd.frequencia_hz = configuracao::FREQUENCIA_SD_HZ;
-    sd.frequencia_alternativa_hz = configuracao::FREQUENCIA_SD_ALTERNATIVA_HZ;
-    esp_err_t erro = gerenciador_cartao_sd_iniciar(sd);
+    esp_err_t erro = gerenciador_cartao_sd_iniciar();
     if (erro != ESP_OK) return erro;
     erro = criar_diretorio(configuracao::DIRETORIO_TELEMETRIA);
     if (erro == ESP_OK) {
@@ -1605,7 +1342,7 @@ esp_err_t preparar_cartao(bool restaurar_backup) {
     if (criar_diretorio(configuracao::DIRETORIO_LOG_ESP) == ESP_OK) {
         iniciar_sequencia_logs();
     }
-    if (restaurar_backup) recuperar_backup_configuracao();
+    if (restaurar_backup) backup_configuracao::recuperar();
     atualizar_pendentes();
     return ESP_OK;
 }
@@ -1618,13 +1355,14 @@ void tarefa_registro(void*) {
     }
     ComandoRegistro comando{};
     uint8_t falhas_seguidas = 0;
-    bool restauracao_pendente = !servico_registro_telemetria_obter_estado().cartao_disponivel;
-    uint32_t proxima_montagem_ms =
-        agora_ms() + configuracao::INTERVALO_NOVA_TENTATIVA_SD_MS;
+    const auto inicio = servico_registro_telemetria_obter_estado();
+    bool restauracao_pendente = !inicio.cartao_disponivel;
+    uint32_t proxima_montagem_ms = tempo_monotonico::agora_ms32() + (inicio.ultimo_erro == ESP_OK ? 0u :
+        configuracao::INTERVALO_NOVA_TENTATIVA_SD_MS);
     while (true) {
         const auto registro = servico_registro_telemetria_obter_estado();
         bool disponivel = registro.cartao_disponivel;
-        const uint32_t instante_ms = agora_ms();
+        const uint32_t instante_ms = tempo_monotonico::agora_ms32();
         servico_supervisao_informar_atividade(ModuloSupervisionado::RegistroSd,
             "registro_csv", disponivel ? "gravacao/diagnostico SD" : "recuperacao SD", 30000);
         if (!disponivel && !registro.sincronizacao_em_andamento &&
@@ -1642,10 +1380,11 @@ void tarefa_registro(void*) {
             if (disponivel) {
                 restauracao_pendente = false;
                 falhas_seguidas = 0;
-                ESP_LOGI(ETIQUETA, "Cartão SD recuperado; registro retomado");
+                ESP_LOGI(ETIQUETA, "Cartão SD disponível; registro ativo");
             } else {
                 proxima_montagem_ms =
-                    agora_ms() + configuracao::INTERVALO_NOVA_TENTATIVA_SD_MS;
+                    tempo_monotonico::agora_ms32() +
+                    configuracao::INTERVALO_NOVA_TENTATIVA_SD_MS;
                 ESP_LOGW(ETIQUETA, "SD indisponível; nova tentativa em %lu s: %s",
                          static_cast<unsigned long>(
                              configuracao::INTERVALO_NOVA_TENTATIVA_SD_MS / 1000U),
@@ -1653,7 +1392,7 @@ void tarefa_registro(void*) {
             }
         }
         if (disponivel) {
-            atualizar_backup_configuracao(instante_ms);
+            backup_configuracao::atualizar(instante_ms);
             registrar_diagnostico_esp();
         }
         if (xQueueReceive(fila, &comando, pdMS_TO_TICKS(500)) != pdTRUE) continue;
@@ -1684,7 +1423,8 @@ void tarefa_registro(void*) {
                 portENTER_CRITICAL(&trava_estado);
                 estado.cartao_disponivel = false;
                 portEXIT_CRITICAL(&trava_estado);
-                proxima_montagem_ms = agora_ms() + configuracao::INTERVALO_NOVA_TENTATIVA_SD_MS;
+                proxima_montagem_ms = tempo_monotonico::agora_ms32() +
+                    configuracao::INTERVALO_NOVA_TENTATIVA_SD_MS;
                 ESP_LOGW(ETIQUETA, "Falhas consecutivas no SD; remontagem programada");
             }
         } else {
@@ -1701,7 +1441,7 @@ void tarefa_upload(void*) {
         (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         servico_supervisao_informar_atividade(ModuloSupervisionado::UploadGoogle,
             "upload_csv", "preparacao/rede", 180000);
-        const uint32_t inicio_sincronizacao_ms = agora_ms();
+        const uint32_t inicio_sincronizacao_ms = tempo_monotonico::agora_ms32();
         ResultadoSincronizacao resultado{};
         ComandoRegistro comando{};
         comando.tipo = TipoComandoRegistro::FecharArquivo;
@@ -1729,7 +1469,8 @@ void tarefa_upload(void*) {
         }
         if (erro == ESP_OK) erro = sincronizar_com_google(&resultado);
         definir_ultimo_erro(erro);
-        const uint32_t duracao_ms = agora_ms() - inicio_sincronizacao_ms;
+        const uint32_t duracao_ms =
+            tempo_monotonico::agora_ms32() - inicio_sincronizacao_ms;
         const uint32_t velocidade_media = duracao_ms == 0
             ? 0
             : static_cast<uint32_t>(
@@ -1742,7 +1483,7 @@ void tarefa_upload(void*) {
         estado.arquivos_ultima_sincronizacao = resultado.arquivos_enviados;
         estado.bytes_ultima_sincronizacao = resultado.bytes_enviados;
         estado.duracao_ultima_sincronizacao_ms = duracao_ms;
-        estado.fim_ultima_sincronizacao_ms = agora_ms();
+        estado.fim_ultima_sincronizacao_ms = tempo_monotonico::agora_ms32();
         estado.ultimo_resultado_sincronizacao = erro;
         portEXIT_CRITICAL(&trava_estado);
         ESP_LOGI(
@@ -1763,7 +1504,7 @@ void tarefa_upload(void*) {
         }
     }
 }
-esp_err_t iniciar_registro() {
+esp_err_t iniciar_registro(bool montar_na_partida) {
     if (!configuracao::HABILITAR_REGISTRO_TELEMETRIA) {
         return ESP_ERR_NOT_SUPPORTED;
     }
@@ -1771,7 +1512,6 @@ esp_err_t iniciar_registro() {
     // A amostragem RAM continua mesmo se o SD falhar e o início for repetido.
     iniciar_historico_ram();
 
-    const esp_err_t erro_cartao = preparar_cartao(true);
     sessao = esp_random();
     fila = xQueueCreate(configuracao::CAPACIDADE_FILA_REGISTRO,
                         sizeof(ComandoRegistro));
@@ -1805,34 +1545,26 @@ esp_err_t iniciar_registro() {
         return ESP_ERR_NO_MEM;
     }
 
+    // A partida normal restaura o backup antes dos serviços que usam a NVS.
+    // As novas tentativas criam apenas as tarefas; o registrador monta o cartão.
+    const esp_err_t erro_cartao = montar_na_partida ? preparar_cartao(true) : ESP_OK;
     portENTER_CRITICAL(&trava_estado);
     estado.iniciado = true;
-    estado.cartao_disponivel = erro_cartao == ESP_OK;
+    estado.cartao_disponivel = montar_na_partida && erro_cartao == ESP_OK;
     estado.ultimo_erro = erro_cartao;
     portEXIT_CRITICAL(&trava_estado);
-    if (erro_cartao == ESP_OK) {
-        ESP_LOGI(ETIQUETA, "Histórico ativo a 1 Hz; upload somente sob demanda");
-    }
     return erro_cartao;
 }
 
 esp_err_t enfileirar_amostra(
     const DadosTelemetriaVeiculo& dados) {
-    const uint32_t instante = agora_ms();
+    const uint32_t instante = tempo_monotonico::agora_ms32();
     portENTER_CRITICAL(&trava_estado);
     if (!estado.iniciado || !estado.cartao_disponivel) {
         portEXIT_CRITICAL(&trava_estado);
         return ESP_ERR_INVALID_STATE;
     }
-    const bool deve_registrar =
-        proximo_registro_ms == 0 ||
-        static_cast<int32_t>(instante - proximo_registro_ms) >= 0;
-    if (deve_registrar) {
-        proximo_registro_ms =
-            instante + configuracao::INTERVALO_REGISTRO_TELEMETRIA_MS;
-    }
     portEXIT_CRITICAL(&trava_estado);
-    if (!deve_registrar) return ESP_OK;
 
     ComandoRegistro comando{};
     comando.tipo = TipoComandoRegistro::Amostra;
@@ -1845,42 +1577,40 @@ esp_err_t enfileirar_amostra(
     return ESP_OK;
 }
 
-// O boot configura a tentativa inicial. Só a tarefa de aquisição roda este
-// atendimento depois da partida.
-bool tentar_recuperar_sd = false;
-int64_t proxima_tentativa_sd_ms = 0;
+esp_err_t recuperar_inicializacao_registro() {
+    const esp_err_t erro = iniciar_registro(false);
+    if (erro == ESP_OK) {
+        (void)servico_supervisao_desregistrar(ModuloSupervisionado::InicializacaoRegistroSd);
+    }
+    return erro;
+}
+
 int64_t ultimo_log_erro_amostra_ms = -5000;
 }  // namespace
 
 esp_err_t servico_registro_telemetria_iniciar() {
-    const esp_err_t erro = iniciar_registro();
-    tentar_recuperar_sd = erro == ESP_ERR_NO_MEM &&
-                         !servico_registro_telemetria_obter_estado().iniciado;
+    const esp_err_t erro = iniciar_registro(true);
+    if (erro == ESP_ERR_NO_MEM && !servico_registro_telemetria_obter_estado().iniciado) {
+        const esp_err_t erro_supervisao = servico_supervisao_registrar(
+            ModuloSupervisionado::InicializacaoRegistroSd, "inicialização do registro SD",
+            configuracao::INTERVALO_NOVA_TENTATIVA_SD_MS, recuperar_inicializacao_registro);
+        if (erro_supervisao != ESP_OK)
+            ESP_LOGE(ETIQUETA, "Não foi possível supervisionar a partida do registro: %s",
+                     esp_err_to_name(erro_supervisao));
+    }
     return erro;
 }
 
 void servico_registro_telemetria_processar_amostra(
     const DadosTelemetriaVeiculo& dados) {
     constexpr char ETIQUETA_CICLO[] = "mestre";
-    const int64_t agora_ms = esp_timer_get_time() / 1000;
-    if (tentar_recuperar_sd) {
-        if (agora_ms < proxima_tentativa_sd_ms) return;
-        const esp_err_t erro = servico_registro_telemetria_iniciar();
-        if (tentar_recuperar_sd) {
-            proxima_tentativa_sd_ms =
-                agora_ms + configuracao::INTERVALO_NOVA_TENTATIVA_SD_MS;
-            ESP_LOGW(ETIQUETA_CICLO, "Falha ao iniciar tarefas do registro: %s",
-                     esp_err_to_name(erro));
-            return;
-        }
-    }
-
+    const int64_t instante_ms = tempo_monotonico::agora_ms();
     const esp_err_t erro = enfileirar_amostra(dados);
     if (erro != ESP_OK && erro != ESP_ERR_INVALID_STATE &&
-        agora_ms - ultimo_log_erro_amostra_ms >= 5000) {
+        instante_ms - ultimo_log_erro_amostra_ms >= 5000) {
         ESP_LOGW(ETIQUETA_CICLO, "Amostra histórica não enfileirada: %s",
                  esp_err_to_name(erro));
-        ultimo_log_erro_amostra_ms = agora_ms;
+        ultimo_log_erro_amostra_ms = instante_ms;
     }
 }
 

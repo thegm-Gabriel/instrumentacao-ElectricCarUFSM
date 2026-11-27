@@ -1,17 +1,22 @@
-// Monta, envia e acompanha confirmações dos pacotes de telemetria.
+// Coordena o ciclo de publicação e acompanha confirmações da telemetria UART.
 #include "servicos/comunicacao/telemetria_uart.h"
 
 #include <algorithm>
 #include <cstddef>
 #include <cmath>
-#include <cstring>
 
 #include "gerenciadores/uart.h"
 #include "esp_log.h"
-#include "esp_timer.h"
-#include "nucleo/configuracao/placa.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "nucleo/configuracao/comunicacao.h"
-#include "protocolo_telemetria.h"
+#include "nucleo/configuracao/diagnostico.h"
+#include "nucleo/configuracao/historico.h"
+#include "nucleo/configuracao/tarefas.h"
+#include "nucleo/tempo.h"
+#include "servicos/manutencao/supervisao.h"
+#include "servicos/veiculo/aquisicao.h"
+#include "servicos/veiculo/simulador.h"
 
 namespace {
 constexpr char ETIQUETA[] = "servico_telemetria";
@@ -23,7 +28,14 @@ static_assert(
 uint16_t proxima_sequencia = 0;
 EstatisticasTelemetria estatisticas{};
 DadosTelemetriaVeiculo ultima_amostra_validada{};
+pacote_telemetria_t ultimo_pacote_validado{};
+bool pacote_validado_disponivel = false;
 portMUX_TYPE trava_estatisticas = portMUX_INITIALIZER_UNLOCKED;
+DadosTelemetriaVeiculo ultima_amostra_local{};
+bool amostra_local_disponivel = false;
+portMUX_TYPE trava_amostra_local = portMUX_INITIALIZER_UNLOCKED;
+TaskHandle_t tarefa_publicacao_handle = nullptr;
+ConsumidorAmostraTelemetria consumir_amostra_local = nullptr;
 uint32_t intervalo_durante_ota_ms =
     configuracao::INTERVALO_TELEMETRIA_OTA_PADRAO_MS;
 bool ota_satelite_ativa = false;
@@ -55,7 +67,7 @@ void registrar_confirmacao(MonitorConfirmacao& monitor,
                                       ? SATELITE_TELEMETRIA_EQUIPE
                                       : SATELITE_TELEMETRIA_VISITANTES;
     if (confirmacao.tipo_satelite != tipo_esperado) {
-        const uint32_t agora_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+        const uint32_t agora_ms = tempo_monotonico::agora_ms32();
         portENTER_CRITICAL(&trava_estatisticas);
         monitor.estatisticas.confirmacoes_invalidas++;
         const bool deve_registrar = monitor.ultimo_log_identidade_ms == 0 ||
@@ -70,7 +82,7 @@ void registrar_confirmacao(MonitorConfirmacao& monitor,
         }
         return;
     }
-    const uint32_t agora_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+    const uint32_t agora_ms = tempo_monotonico::agora_ms32();
     const uint32_t latencia_ms = agora_ms - confirmacao.tempo_mestre_ms;
     portENTER_CRITICAL(&trava_estatisticas);
     auto& link = monitor.estatisticas;
@@ -89,6 +101,11 @@ void registrar_confirmacao(MonitorConfirmacao& monitor,
     link.confirmacoes_recebidas++;
     monitor.instante_ultima_confirmacao_ms = agora_ms;
     portEXIT_CRITICAL(&trava_estatisticas);
+}
+
+uint16_t escalar_uint16(float valor, float fator) {
+    return static_cast<uint16_t>(std::lround(
+        std::clamp(valor * fator, 0.0f, 65535.0f)));
 }
 
 int16_t escalar_int16(float valor, float fator) {
@@ -155,38 +172,7 @@ bool dados_validos(const DadosTelemetriaVeiculo& dados) {
     return true;
 }
 
-}  // namespace
-
-uint16_t telemetria_escalar_uint16(float valor, float fator) {
-    return static_cast<uint16_t>(std::lround(
-        std::clamp(valor * fator, 0.0f, 65535.0f)));
-}
-
-esp_err_t servico_telemetria_iniciar() {
-    if (iniciado) return ESP_OK;
-    iniciado = true;
-    ESP_LOGI(ETIQUETA,
-             "Serviço pronto para publicar dados e acompanhar confirmações");
-    return ESP_OK;
-}
-
-esp_err_t servico_telemetria_receber_confirmacao(
-    SateliteTelemetria satelite, const confirmacao_telemetria_t& confirmacao) {
-    MonitorConfirmacao* monitor = encontrar_monitor(satelite);
-    if (monitor == nullptr) return ESP_ERR_INVALID_ARG;
-    if (protocolo_telemetria_confirmacao_valida(&confirmacao)) {
-        registrar_confirmacao(*monitor, confirmacao);
-        return ESP_OK;
-    } else {
-        portENTER_CRITICAL(&trava_estatisticas);
-        monitor->estatisticas.confirmacoes_invalidas++;
-        portEXIT_CRITICAL(&trava_estatisticas);
-        return ESP_ERR_INVALID_CRC;
-    }
-}
-
-esp_err_t servico_telemetria_enviar(const DadosTelemetriaVeiculo& dados) {
-    if (!iniciado) return ESP_ERR_INVALID_STATE;
+esp_err_t enviar_pacote(const DadosTelemetriaVeiculo& dados) {
     if (!dados_validos(dados)) {
         ESP_LOGE(ETIQUETA, "Pacote rejeitado: dados ausentes, não finitos ou fora da faixa");
         return ESP_ERR_INVALID_ARG;
@@ -199,7 +185,7 @@ esp_err_t servico_telemetria_enviar(const DadosTelemetriaVeiculo& dados) {
     pacote.tipo = TELEMETRIA_TIPO_DADOS;
     pacote.tamanho_carga = TELEMETRIA_TAMANHO_CARGA_DADOS;
     pacote.sequencia = proxima_sequencia++;
-    pacote.tempo_mestre_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+    pacote.tempo_mestre_ms = tempo_monotonico::agora_ms32();
     pacote.tensao_adc_bruta = dados.tensao_adc_bruta;
     pacote.aceleracao_x = dados.aceleracao_x;
     pacote.aceleracao_y = dados.aceleracao_y;
@@ -210,34 +196,34 @@ esp_err_t servico_telemetria_enviar(const DadosTelemetriaVeiculo& dados) {
     pacote.marcha = static_cast<uint8_t>(dados.marcha) & 0x7Fu;
     if (dados.simulado) pacote.marcha |= 0x80u;
     pacote.velocidade_centesimos_kmh =
-        telemetria_escalar_uint16(dados.velocidade_kmh, 100.0f);
+        escalar_uint16(dados.velocidade_kmh, 100.0f);
     pacote.aceleracao_milesimos_ms2 = escalar_int16(dados.aceleracao_ms2, 1000.0f);
     pacote.acelerador_decimos_percentual =
-        telemetria_escalar_uint16(dados.acelerador_percentual, 10.0f);
+        escalar_uint16(dados.acelerador_percentual, 10.0f);
     pacote.freio_decimos_percentual =
-        telemetria_escalar_uint16(dados.freio_percentual, 10.0f);
+        escalar_uint16(dados.freio_percentual, 10.0f);
     pacote.tensao_pacote_mv =
-        telemetria_escalar_uint16(dados.tensao_pacote_v, 1000.0f);
+        escalar_uint16(dados.tensao_pacote_v, 1000.0f);
     pacote.corrente_centesimos_a = escalar_int16(dados.corrente_a, 100.0f);
     pacote.carga_decimos_percentual =
-        telemetria_escalar_uint16(dados.carga_percentual, 10.0f);
+        escalar_uint16(dados.carga_percentual, 10.0f);
     for (size_t indice = 0; indice < 4; ++indice) {
         pacote.tensoes_celulas_mv[indice] =
-            telemetria_escalar_uint16(dados.tensoes_celulas_v[indice], 1000.0f);
+            escalar_uint16(dados.tensoes_celulas_v[indice], 1000.0f);
     }
     pacote.latitude_micrograus = static_cast<int32_t>(std::llround(
         std::clamp(dados.latitude * 1000000.0, -2147483648.0, 2147483647.0)));
     pacote.longitude_micrograus = static_cast<int32_t>(std::llround(
         std::clamp(dados.longitude * 1000000.0, -2147483648.0, 2147483647.0)));
     pacote.rumo_decimos_grau =
-        telemetria_escalar_uint16(dados.rumo_graus, 10.0f);
+        escalar_uint16(dados.rumo_graus, 10.0f);
     for (size_t indice = 0; indice < 8; ++indice) {
         pacote.distancias_cm[indice] =
-            telemetria_escalar_uint16(dados.distancias_cm[indice], 1.0f);
+            escalar_uint16(dados.distancias_cm[indice], 1.0f);
     }
     pacote.potencia_w = escalar_int16(dados.potencia_w, 1.0f);
     pacote.autonomia_decimos_km =
-        telemetria_escalar_uint16(dados.autonomia_km, 10.0f);
+        escalar_uint16(dados.autonomia_km, 10.0f);
     pacote.percurso_metros = escalar_uint32(dados.percurso_km, 1000.0f);
     pacote.odometro_metros = escalar_uint32(dados.odometro_km, 1000.0f);
     pacote.aceleracao_x_milesimos_g =
@@ -277,6 +263,7 @@ esp_err_t servico_telemetria_enviar(const DadosTelemetriaVeiculo& dados) {
                 std::llround(dados.ina_carga_ah * 1000.0));
         }
     }
+    if (dados.soc_estimado) pacote.estado_ina |= TELEMETRIA_SOC_ESTIMADO;
     if (dados.mpu_ativo) pacote.estado_mpu |= TELEMETRIA_MPU_ATIVO;
     if (dados.simulado || dados.eletrica_valida)
         pacote.estado_mpu |= TELEMETRIA_ELETRICA_VALIDA;
@@ -295,11 +282,45 @@ esp_err_t servico_telemetria_enviar(const DadosTelemetriaVeiculo& dados) {
         dados.eixo_longitudinal_mpu << TELEMETRIA_MPU_EIXO_DESLOCAMENTO;
     pacote.crc16 = protocolo_telemetria_calcular_crc16(&pacote);
 
-    const esp_err_t erro = gerenciador_uart_enfileirar(
-        DestinoUart::Todos, &pacote, sizeof(pacote));
+    esp_err_t erro;
+    if (dados.soc_estimado) {
+        const uint32_t agora_ms = tempo_monotonico::agora_ms32();
+        const uint32_t prazo_ms = std::max<uint32_t>(1000u, 3u * servico_telemetria_obter_intervalo_atual());
+        const auto confirma_soc = [agora_ms, prazo_ms](const MonitorConfirmacao& monitor) {
+            return monitor.instante_ultima_confirmacao_ms != 0 &&
+                agora_ms - monitor.instante_ultima_confirmacao_ms <= prazo_ms &&
+                (monitor.estatisticas.capacidades & CAPACIDADE_SATELITE_TELEMETRIA_SOC);
+        };
+        portENTER_CRITICAL(&trava_estatisticas);
+        const bool equipe_soc = confirma_soc(monitores[0]);
+        const bool visitantes_soc = confirma_soc(monitores[1]);
+        portEXIT_CRITICAL(&trava_estatisticas);
+        if (equipe_soc && visitantes_soc) {
+            erro = gerenciador_uart_enfileirar(DestinoUart::Todos, &pacote, sizeof(pacote));
+        } else {
+            // Quadros para firmware anterior preservam o byte de estado que ele valida.
+            auto legado = pacote;
+            legado.estado_ina &= static_cast<uint8_t>(~TELEMETRIA_SOC_ESTIMADO);
+            legado.carga_decimos_percentual = 0;
+            legado.crc16 = protocolo_telemetria_calcular_crc16(&legado);
+            if (!equipe_soc && !visitantes_soc) {
+                erro = gerenciador_uart_enfileirar(DestinoUart::Todos, &legado, sizeof(legado));
+            } else {
+                const esp_err_t erro_equipe = gerenciador_uart_enfileirar(
+                    DestinoUart::Equipe, equipe_soc ? &pacote : &legado, sizeof(pacote));
+                const esp_err_t erro_visitantes = gerenciador_uart_enfileirar(
+                    DestinoUart::Visitantes, visitantes_soc ? &pacote : &legado, sizeof(pacote));
+                erro = erro_equipe != ESP_OK ? erro_equipe : erro_visitantes;
+            }
+        }
+    } else {
+        erro = gerenciador_uart_enfileirar(DestinoUart::Todos, &pacote, sizeof(pacote));
+    }
 
     portENTER_CRITICAL(&trava_estatisticas);
     ultima_amostra_validada = dados;
+    ultimo_pacote_validado = pacote;
+    pacote_validado_disponivel = true;
     estatisticas.ultima_sequencia = pacote.sequencia;
     estatisticas.ultimo_crc16 = pacote.crc16;
     estatisticas.pacotes_gerados++;
@@ -311,11 +332,166 @@ esp_err_t servico_telemetria_enviar(const DadosTelemetriaVeiculo& dados) {
     return erro;
 }
 
+void avancar_prazo(int64_t& prazo_ms, int64_t agora_ms, uint32_t intervalo_ms) {
+    // Mantém a fase e pula períodos perdidos sem enfileirar amostras repetidas.
+    prazo_ms += ((agora_ms - prazo_ms) / intervalo_ms + 1) * intervalo_ms;
+}
+
+void tarefa_publicacao(void*) {
+    (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    DadosTelemetriaVeiculo amostra{};
+    int64_t ultimo_log_erro_envio_ms = -5000;
+    int64_t proximo_envio_ms = tempo_monotonico::agora_ms();
+    int64_t proximo_registro_ms = proximo_envio_ms;
+    int64_t ultimo_envio_ms = proximo_envio_ms;
+    uint32_t intervalo_envio_ms = servico_telemetria_obter_intervalo_atual();
+    while (true) {
+        const int64_t agora_ms = tempo_monotonico::agora_ms();
+        const uint32_t intervalo_atual = servico_telemetria_obter_intervalo_atual();
+        if (intervalo_atual != intervalo_envio_ms) {
+            intervalo_envio_ms = intervalo_atual;
+            proximo_envio_ms = ultimo_envio_ms + intervalo_envio_ms;
+        }
+        const bool enviar = agora_ms >= proximo_envio_ms;
+        const bool registrar = configuracao::HABILITAR_REGISTRO_TELEMETRIA &&
+                               agora_ms >= proximo_registro_ms;
+        if (!enviar && !registrar) {
+            const int64_t prazo_ms = configuracao::HABILITAR_REGISTRO_TELEMETRIA
+                ? std::min(proximo_envio_ms, proximo_registro_ms) : proximo_envio_ms;
+            const auto ticks = static_cast<TickType_t>(
+                ((prazo_ms - agora_ms) * configTICK_RATE_HZ + 999) / 1000);
+            (void)ulTaskNotifyTake(pdTRUE, ticks);
+            continue;
+        }
+        servico_supervisao_alimentar(ModuloSupervisionado::TarefaTelemetria);
+        if (servico_simulador_telemetria_esta_ativo()) {
+            if (!amostra.simulado) amostra = {};
+            const esp_err_t erro = servico_simulador_telemetria_gerar(&amostra);
+            if (erro != ESP_OK) {
+                ESP_LOGE(ETIQUETA, "Falha no simulador de telemetria: %s",
+                         esp_err_to_name(erro));
+            }
+        } else {
+            amostra = servico_aquisicao_obter_amostra_real();
+        }
+
+        if (registrar) {
+            consumir_amostra_local(amostra);
+            avancar_prazo(proximo_registro_ms, agora_ms,
+                          configuracao::INTERVALO_REGISTRO_TELEMETRIA_MS);
+        }
+        if (enviar) {
+            const esp_err_t erro_envio = enviar_pacote(amostra);
+            if (erro_envio != ESP_OK && agora_ms - ultimo_log_erro_envio_ms >= 5000) {
+                ESP_LOGW(ETIQUETA, "Telemetria não enviada: %s",
+                         esp_err_to_name(erro_envio));
+                ultimo_log_erro_envio_ms = agora_ms;
+            }
+            ultimo_envio_ms = agora_ms;
+            avancar_prazo(proximo_envio_ms, agora_ms, intervalo_envio_ms);
+        }
+        portENTER_CRITICAL(&trava_amostra_local);
+        ultima_amostra_local = amostra;
+        amostra_local_disponivel = true;
+        portEXIT_CRITICAL(&trava_amostra_local);
+    }
+}
+
+esp_err_t criar_tarefa_publicacao() {
+    if (tarefa_publicacao_handle != nullptr) return ESP_ERR_INVALID_STATE;
+    if (configuracao::criar_tarefa(tarefa_publicacao, "telemetria", nullptr,
+                                   &tarefa_publicacao_handle) != pdPASS) {
+        tarefa_publicacao_handle = nullptr;
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
+}
+
+esp_err_t recuperar_tarefa_publicacao() {
+    if (tarefa_publicacao_handle != nullptr) {
+        // A notificação antecipa o ciclo sem interromper as operações em andamento.
+        xTaskNotifyGive(tarefa_publicacao_handle);
+        ESP_LOGW(ETIQUETA, "Tarefa de telemetria notificada para antecipar o próximo ciclo");
+        return ESP_OK;
+    }
+
+    esp_err_t erro = criar_tarefa_publicacao();
+    if (erro != ESP_OK) return erro;
+    erro = servico_supervisao_associar_tarefa(ModuloSupervisionado::TarefaTelemetria,
+                                              tarefa_publicacao_handle);
+    if (erro != ESP_OK) {
+        vTaskDelete(tarefa_publicacao_handle);
+        tarefa_publicacao_handle = nullptr;
+        return erro;
+    }
+    xTaskNotifyGive(tarefa_publicacao_handle);
+    return ESP_OK;
+}
+}  // namespace
+
+esp_err_t servico_telemetria_iniciar() {
+    if (iniciado) return ESP_OK;
+    const esp_err_t erro = servico_simulador_telemetria_iniciar();
+    if (erro != ESP_OK) return erro;
+    iniciado = true;
+    ESP_LOGI(ETIQUETA,
+             "Serviço pronto para publicar dados e acompanhar confirmações");
+    return ESP_OK;
+}
+
+esp_err_t servico_telemetria_iniciar_publicacao(ConsumidorAmostraTelemetria consumidor) {
+    if (consumidor == nullptr) return ESP_ERR_INVALID_ARG;
+    if (!iniciado) return ESP_ERR_INVALID_STATE;
+    esp_err_t erro = criar_tarefa_publicacao();
+    if (erro != ESP_OK) return erro;
+
+    consumir_amostra_local = consumidor;
+    const auto modulo = ModuloSupervisionado::TarefaTelemetria;
+    erro = servico_supervisao_registrar(
+        modulo, "tarefa de telemetria",
+        configuracao::INTERVALO_TELEMETRIA_OTA_MAXIMO_MS +
+            configuracao::MARGEM_SUPERVISAO_TELEMETRIA_MS,
+        recuperar_tarefa_publicacao);
+    if (erro == ESP_OK) {
+        erro = servico_supervisao_associar_tarefa(modulo, tarefa_publicacao_handle);
+        if (erro != ESP_OK) (void)servico_supervisao_desregistrar(modulo);
+    }
+    if (erro != ESP_OK) {
+        vTaskDelete(tarefa_publicacao_handle);
+        tarefa_publicacao_handle = nullptr;
+        return erro;
+    }
+    xTaskNotifyGive(tarefa_publicacao_handle);
+    return ESP_OK;
+}
+
+esp_err_t servico_telemetria_receber_confirmacao(
+    SateliteTelemetria satelite, const confirmacao_telemetria_t& confirmacao) {
+    MonitorConfirmacao* monitor = encontrar_monitor(satelite);
+    if (monitor == nullptr) return ESP_ERR_INVALID_ARG;
+    if (protocolo_telemetria_confirmacao_valida(&confirmacao)) {
+        registrar_confirmacao(*monitor, confirmacao);
+        return ESP_OK;
+    }
+    portENTER_CRITICAL(&trava_estatisticas);
+    monitor->estatisticas.confirmacoes_invalidas++;
+    portEXIT_CRITICAL(&trava_estatisticas);
+    return ESP_ERR_INVALID_CRC;
+}
+
 EstatisticasTelemetria servico_telemetria_obter_estatisticas() {
     portENTER_CRITICAL(&trava_estatisticas);
     EstatisticasTelemetria copia = estatisticas;
     portEXIT_CRITICAL(&trava_estatisticas);
     return copia;
+}
+
+bool servico_telemetria_obter_ultima_amostra_local(DadosTelemetriaVeiculo& dados) {
+    portENTER_CRITICAL(&trava_amostra_local);
+    dados = ultima_amostra_local;
+    const bool disponivel = amostra_local_disponivel;
+    portEXIT_CRITICAL(&trava_amostra_local);
+    return disponivel;
 }
 
 DadosTelemetriaVeiculo servico_telemetria_obter_ultima_amostra_validada() {
@@ -325,12 +501,20 @@ DadosTelemetriaVeiculo servico_telemetria_obter_ultima_amostra_validada() {
     return copia;
 }
 
+bool servico_telemetria_obter_ultimo_pacote_validado(pacote_telemetria_t& pacote) {
+    portENTER_CRITICAL(&trava_estatisticas);
+    pacote = ultimo_pacote_validado;
+    const bool disponivel = pacote_validado_disponivel;
+    portEXIT_CRITICAL(&trava_estatisticas);
+    return disponivel;
+}
+
 EstatisticasLinkTelemetria servico_telemetria_obter_estatisticas_link(
     SateliteTelemetria satelite) {
     EstatisticasLinkTelemetria copia{};
     const MonitorConfirmacao* monitor = encontrar_monitor(satelite);
     if (monitor == nullptr) return copia;
-    const uint32_t agora_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+    const uint32_t agora_ms = tempo_monotonico::agora_ms32();
     portENTER_CRITICAL(&trava_estatisticas);
     copia = monitor->estatisticas;
     copia.idade_ultima_confirmacao_ms = monitor->instante_ultima_confirmacao_ms == 0

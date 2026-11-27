@@ -3,7 +3,7 @@
 
 #include <cstdint>
 
-#include "dados_telemetria_veiculo.h"
+#include "nucleo/dados_telemetria_veiculo.h"
 #include "esp_err.h"
 
 enum class SensorControlado : uint8_t {
@@ -16,14 +16,11 @@ enum class SensorControlado : uint8_t {
 };
 
 using RegistradorResultadoSensor = esp_err_t (*)(SensorControlado, esp_err_t);
-// O consumidor roda na tarefa de aquisição, com a amostra do ciclo.
-using ConsumidorAmostraLocal = void (*)(const DadosTelemetriaVeiculo&);
 
 esp_err_t servico_aquisicao_preparar(RegistradorResultadoSensor registrar_resultado);
-esp_err_t servico_aquisicao_iniciar(ConsumidorAmostraLocal consumidor);
 
-// Retorna false até o primeiro ciclo publicar uma amostra local.
-bool servico_aquisicao_obter_ultima_amostra(DadosTelemetriaVeiculo& dados);
+// Reúne os estados reais mais recentes, sem disparar leituras dos dispositivos.
+DadosTelemetriaVeiculo servico_aquisicao_obter_amostra_real();
 
 bool servico_aquisicao_sensor_ativo(SensorControlado sensor);
 uint32_t servico_aquisicao_obter_sensores_ativos();

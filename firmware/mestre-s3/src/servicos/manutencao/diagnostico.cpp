@@ -1,6 +1,7 @@
 // Consolida saúde, falhas e um retrato neutro dos subsistemas.
 #include "nucleo/configuracao/tarefas.h"
 #include "nucleo/configuracao/diagnostico.h"
+#include "nucleo/configuracao/veiculo.h"
 #include "servicos/manutencao/diagnostico.h"
 
 #include <cstring>
@@ -19,6 +20,8 @@
 #include "gerenciadores/uart.h"
 #include "servicos/veiculo/odometro.h"
 #include "servicos/veiculo/aquisicao.h"
+#include "servicos/veiculo/aceleracao.h"
+#include "servicos/veiculo/controle.h"
 #include "servicos/manutencao/ota.h"
 #include "servicos/manutencao/supervisao.h"
 #include "servicos/comunicacao/telemetria_uart.h"
@@ -36,6 +39,8 @@ struct MemoriaEstadoSaude {
     int64_t alerta_uart_ate_ms = 0;
     int64_t alerta_i2c_ate_ms = 0;
     int64_t alerta_ota_ate_ms = 0;
+    int64_t alerta_divergencia_ate_ms = 0;
+    uint32_t divergencias_observadas = 0;
     int64_t recuperando_ate_ms = 0;
     int64_t inicio_janela_uart_ms = 0;
     uint32_t erros_uart_na_janela = 0;
@@ -51,6 +56,10 @@ struct MemoriaEstadoSaude {
     uint8_t amostras_visitantes_sem_resposta = 0;
     uint8_t amostras_wifi_fraco = 0;
     uint8_t amostras_wifi_recuperado = 0;
+    uint8_t amostras_sem_velocidade = 0;
+    uint8_t amostras_sem_dac = 0;
+    uint8_t amostras_sem_pedal = 0;
+    uint8_t amostras_mpu_sem_calibracao = 0;
     bool alerta_wifi_fraco_ativo = false;
 };
 
@@ -213,6 +222,9 @@ void registrar_resultado(RegistroErroDiagnostico& registro, esp_err_t resultado,
 ResumoSaudeSistema calcular_resumo() {
     const EstatisticasSensoresDiagnostico sensores =
         servico_diagnostico_obter_sensores();
+    const auto odometro = servico_odometro_obter_estado();
+    const auto controle = servico_controle_remoto_obter_estado();
+    const auto aceleracao = servico_aceleracao_obter_estado();
     const EstatisticasI2c i2c = gerenciador_i2c_obter_estatisticas();
     const EstatisticasUart equipe =
         gerenciador_uart_obter_estatisticas(DestinoUart::Equipe);
@@ -374,7 +386,7 @@ ResumoSaudeSistema calcular_resumo() {
          sensores.encoder.consecutivos >= 3) ||
         (servico_aquisicao_sensor_ativo(SensorControlado::Ina228) &&
          sensores.ina228.consecutivos >= 3)) causas |= CausaSaudeSensor;
-    if (sensores.persistencia_odometro.consecutivos >= 2) {
+    if (odometro.iniciado && sensores.persistencia_odometro.ultimo_erro != ESP_OK) {
         causas |= CausaSaudePersistencia;
     }
     // Os últimos códigos permanecem disponíveis para diagnóstico, mas não
@@ -404,6 +416,30 @@ ResumoSaudeSistema calcular_resumo() {
         else if (amostras < limite) amostras++;
         return amostras >= limite;
     };
+    const bool encoders_ativos = servico_aquisicao_sensor_ativo(SensorControlado::Encoders);
+    if (encoders_ativos && odometro.divergencias_detectadas > memoria_saude.divergencias_observadas)
+        memoria_saude.alerta_divergencia_ate_ms = instante_ms + 10000;
+    memoria_saude.divergencias_observadas = odometro.divergencias_detectadas;
+    if (encoders_ativos && (!odometro.rodas_coerentes || instante_ms < memoria_saude.alerta_divergencia_ate_ms))
+        causas |= CausaSaudeEncodersDivergentes;
+    if (contar_amostras(memoria_saude.amostras_sem_velocidade,
+            controle.partida_concluida && encoders_ativos && odometro.rodas_coerentes &&
+            !servico_odometro_velocidade_valida(odometro, esp_timer_get_time()), 3))
+        causas |= CausaSaudeVelocidadeIndisponivel;
+    if (contar_amostras(memoria_saude.amostras_sem_dac,
+            controle.partida_concluida && configuracao::HABILITAR_SAIDA_ACELERADOR_DAC &&
+            !controle.dac_disponivel, 3))
+        causas |= CausaSaudeDacIndisponivel;
+    if (contar_amostras(memoria_saude.amostras_sem_pedal,
+            controle.partida_concluida && servico_aquisicao_sensor_ativo(SensorControlado::Adc) &&
+            (!controle.pedal_disponivel || controle.amostra_pedal_restante_ms == 0), 3))
+        causas |= CausaSaudePedalIndisponivel;
+    if (contar_amostras(memoria_saude.amostras_mpu_sem_calibracao,
+            controle.partida_concluida && servico_aquisicao_sensor_ativo(SensorControlado::Mpu6050) &&
+            aceleracao.iniciado && aceleracao.ultimo_erro == ESP_OK && !aceleracao.calibrado, 5))
+        causas |= CausaSaudeMpuSemCalibracao;
+    if ((controle.bloqueios & CONTROLE_BLOQUEIO_FALHA_TRAVADA) != 0)
+        causas |= CausaSaudeSaidasTracao;
     if (contar_amostras(memoria_saude.amostras_equipe_sem_resposta,
                        telemetria.pacotes_gerados >= 10u &&
                            !resumo.equipe_respondendo,
@@ -491,7 +527,7 @@ ResumoSaudeSistema calcular_resumo() {
 
     resumo.causas_ativas = causas;
     const uint32_t causas_criticas =
-        CausaSaudeHeapCritico | CausaSaudePilhaCritica;
+        CausaSaudeHeapCritico | CausaSaudePilhaCritica | CausaSaudeSaidasTracao;
     if ((causas & causas_criticas) != 0) {
         resumo.estado = EstadoSaudeSistema::Falha;
     } else if (causas != CausaSaudeNenhuma) {

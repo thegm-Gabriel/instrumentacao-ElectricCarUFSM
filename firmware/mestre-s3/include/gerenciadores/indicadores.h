@@ -5,11 +5,26 @@
 
 #include "esp_err.h"
 
+struct CorLed {
+    uint8_t vermelho = 0;
+    uint8_t verde = 0;
+    uint8_t azul = 0;
+
+    constexpr bool operator==(const CorLed& outra) const {
+        return vermelho == outra.vermelho && verde == outra.verde && azul == outra.azul;
+    }
+};
+
 struct EstadoLeds {
     bool verde = false;
     bool amarelo = false;
     bool vermelho = false;
-    bool azul = false;
+    CorLed integrado{};
+
+    constexpr bool operator==(const EstadoLeds& outro) const {
+        return verde == outro.verde && amarelo == outro.amarelo &&
+            vermelho == outro.vermelho && integrado == outro.integrado;
+    }
 };
 
 // Controla somente o hardware. A escolha das cores e melodias pertence ao serviço.

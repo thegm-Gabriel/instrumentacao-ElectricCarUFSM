@@ -3,7 +3,9 @@
 #include "nucleo/configuracao/veiculo.h"
 #include "servicos/manutencao/supervisao.h"
 #include "servicos/veiculo/aceleracao.h"
+#include "servicos/manutencao/ajustes.h"
 #include "servicos/veiculo/aquisicao.h"
+#include "servicos/veiculo/odometro.h"
 
 #include <algorithm>
 #include <cmath>
@@ -169,6 +171,29 @@ bool veiculo_aparentemente_parado(const LeituraMpu6050& leitura) {
            maior_giro <= parametros.limite_giroscopio_calibracao_graus_s;
 }
 
+struct Repouso {
+    int64_t inicio_us = 0;
+    Vetor3 referencia{};
+
+    bool confirmar(bool rodas_paradas, const Vetor3& aceleracao,
+                   float maior_giro_corrigido, int64_t agora_us) {
+        const float gravidade = modulo(aceleracao);
+        if (!rodas_paradas ||
+            maior_giro_corrigido > configuracao::LIMITE_GIRO_REPOUSO_MPU6050_GRAUS_S ||
+            gravidade < parametros.gravidade_minima_calibracao_g ||
+            gravidade > parametros.gravidade_maxima_calibracao_g) {
+            inicio_us = 0;
+            return false;
+        }
+        if (inicio_us == 0 || modulo(subtrair(aceleracao, referencia)) >
+                configuracao::LIMITE_VARIACAO_REPOUSO_MPU6050_G) {
+            referencia = aceleracao;
+            inicio_us = agora_us;
+        }
+        return agora_us - inicio_us >= configuracao::TEMPO_CONFIRMACAO_REPOUSO_MPU6050_MS * 1000LL;
+    }
+};
+
 void tarefa_aquisicao(void*) {
     const TickType_t periodo = std::max<TickType_t>(
         1, pdMS_TO_TICKS(1000u / parametros.frequencia_amostragem_hz));
@@ -177,6 +202,7 @@ void tarefa_aquisicao(void*) {
     Vetor3 soma_giroscopio_calibracao{};
     Vetor3 gravidade_estimada{};
     Vetor3 desvio_giroscopio{};
+    Repouso repouso{};
     float modulo_gravidade_calibrada = 1.0f;
     uint16_t amostras_calibracao = 0;
     float aceleracao_filtrada_g = 0.0f;
@@ -218,6 +244,7 @@ void tarefa_aquisicao(void*) {
             soma_giroscopio_calibracao = {};
             gravidade_estimada = {};
             desvio_giroscopio = {};
+            repouso = {};
             modulo_gravidade_calibrada = 1.0f;
             amostras_calibracao = 0;
             aceleracao_filtrada_g = 0.0f;
@@ -277,13 +304,19 @@ void tarefa_aquisicao(void*) {
             // leitura válida do giroscópio. Isso evita um salto artificial na
             // orientação estimada após uma falha temporária no barramento I2C.
             instante_anterior_us = agora_us;
+            repouso = {};
             vTaskDelayUntil(&proximo_ciclo, periodo);
             continue;
         }
 
         falhas_seguidas = 0;
+        const float fator_longitudinal = ajustes_desenvolvedor_obter().fator_aceleracao_mpu;
         const Vetor3 aceleracao_medida = aceleracao_vetor(leitura);
         const Vetor3 giroscopio_medido = giroscopio_vetor(leitura);
+        const auto rodas = servico_odometro_obter_estado();
+        const bool rodas_validas = servico_odometro_velocidade_valida(rodas, esp_timer_get_time());
+        const bool rodas_paradas = rodas_validas &&
+            rodas.roda_esquerda.velocidade_kmh == 0.0f && rodas.roda_direita.velocidade_kmh == 0.0f;
         const float longitudinal_medido_g =
             componente_eixo(leitura, parametros.eixo_longitudinal) *
             parametros.sinal_eixo_longitudinal;
@@ -298,7 +331,7 @@ void tarefa_aquisicao(void*) {
                 std::fabs(longitudinal_medido_g) <=
                 parametros.gravidade_maxima_eixo_longitudinal_g;
             const bool aparentemente_parado =
-                veiculo_aparentemente_parado(leitura);
+                (!rodas_validas || rodas_paradas) && veiculo_aparentemente_parado(leitura);
             if (aparentemente_parado && eixo_compativel_local) {
                 soma_aceleracao_calibracao = somar(
                     soma_aceleracao_calibracao, aceleracao_medida);
@@ -348,6 +381,8 @@ void tarefa_aquisicao(void*) {
 
         Vetor3 aceleracao_linear{};
         if (calibrado_local) {
+            if (agora_us - instante_anterior_us > configuracao::PRAZO_ACELERACAO_MS * 1000LL)
+                repouso = {};
             const float delta_s = std::clamp(static_cast<float>(
                                                   agora_us - instante_anterior_us) /
                                                   1000000.0f,
@@ -376,12 +411,25 @@ void tarefa_aquisicao(void*) {
                 std::fabs(giroscopio_corrigido_graus_s.x),
                 std::max(std::fabs(giroscopio_corrigido_graus_s.y),
                          std::fabs(giroscopio_corrigido_graus_s.z)));
+            const bool em_repouso = repouso.confirmar(
+                rodas_paradas, aceleracao_medida, maior_giro_corrigido, agora_us);
 
             // O acelerômetro só corrige lentamente a deriva do giroscópio em
             // condição quase estática. Durante aceleração real, usar seus
             // dados como referência de inclinação absorveria justamente o
             // sinal longitudinal que queremos medir.
-            if (modulo(aceleracao_linear) <=
+            if (em_repouso) {
+                // A roda parada fornece uma referência independente do erro
+                // acumulado no estimador de gravidade.
+                const float alfa_repouso = 1.0f - std::exp(
+                    -DOIS_PI * configuracao::FREQUENCIA_CORRECAO_REPOUSO_MPU6050_HZ * delta_s);
+                gravidade_estimada = somar(gravidade_estimada,
+                    multiplicar(aceleracao_linear, alfa_repouso));
+                modulo_gravidade_calibrada = modulo(gravidade_estimada);
+                desvio_giroscopio = somar(desvio_giroscopio,
+                    multiplicar(giroscopio_corrigido_graus_s, alfa_repouso));
+                aceleracao_linear = subtrair(aceleracao_medida, gravidade_estimada);
+            } else if (modulo(aceleracao_linear) <=
                     parametros.limite_aceleracao_correcao_gravidade_g &&
                 maior_giro_corrigido <=
                     parametros.limite_giroscopio_calibracao_graus_s) {
@@ -406,12 +454,13 @@ void tarefa_aquisicao(void*) {
                 parametros.sinal_eixo_longitudinal;
             const float alfa = 1.0f - std::exp(
                 -DOIS_PI * parametros.frequencia_corte_filtro_hz * delta_s);
-            aceleracao_filtrada_g +=
-                alfa * (aceleracao_longitudinal_sem_gravidade_g -
-                        aceleracao_filtrada_g);
+            aceleracao_filtrada_g = em_repouso ? 0.0f :
+                aceleracao_filtrada_g + alfa * (aceleracao_longitudinal_sem_gravidade_g -
+                                               aceleracao_filtrada_g);
+            if (em_repouso) sentido_confirmado = SentidoAceleracaoLongitudinal::Neutro;
 
             const SentidoAceleracaoLongitudinal desejado =
-                classificar_sentido(aceleracao_filtrada_g,
+                classificar_sentido(aceleracao_filtrada_g * fator_longitudinal,
                                     sentido_confirmado);
             if (desejado == sentido_confirmado) {
                 candidato_sentido = sentido_confirmado;
@@ -448,7 +497,7 @@ void tarefa_aquisicao(void*) {
         estado.desvio_giroscopio_y_graus_s = desvio_giroscopio.y;
         estado.desvio_giroscopio_z_graus_s = desvio_giroscopio.z;
         estado.aceleracao_longitudinal_g =
-            calibrado_local ? aceleracao_filtrada_g : 0.0f;
+            calibrado_local ? aceleracao_filtrada_g * fator_longitudinal : 0.0f;
         estado.aceleracao_longitudinal_ms2 =
             estado.aceleracao_longitudinal_g * GRAVIDADE_PADRAO_MS2;
         estado.sentido = calibrado_local

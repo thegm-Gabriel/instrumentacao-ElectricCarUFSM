@@ -13,8 +13,8 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "protocolo_enlace_uart.h"
-#include "servico_comandos_satelite.h"
-#include "servico_ota_satelite.h"
+#include "servicos/comandos_satelite.h"
+#include "servicos/ota_satelite.h"
 #include "gerenciadores/gerenciador_uart.h"
 
 static const char *TAG = "receptor_uart";
@@ -65,34 +65,16 @@ static void atualizar_metricas_comunicacao(const pacote_telemetria_t *pacote,
 
 static void enviar_confirmacao(const pacote_telemetria_t *pacote)
 {
-    confirmacao_telemetria_t confirmacao = {
-        .inicio_1 = TELEMETRIA_INICIO_1,
-        .inicio_2 = TELEMETRIA_INICIO_CONFIRMACAO_2,
-        .versao = TELEMETRIA_VERSAO_PROTOCOLO,
-        .tipo = TELEMETRIA_TIPO_CONFIRMACAO,
-        .sequencia = pacote->sequencia,
-        .tempo_mestre_ms = pacote->tempo_mestre_ms,
-        .tipo_satelite = SATELITE_TELEMETRIA_EQUIPE,
-        .versao_maior = 0,
-        .versao_menor = 0,
-        .versao_correcao = 0,
-        .capacidades = CAPACIDADE_SATELITE_PAINEL_WEB |
-                       CAPACIDADE_SATELITE_PORTAL_CATIVO |
-                       CAPACIDADE_SATELITE_METRICAS_LINK |
-                       CAPACIDADE_SATELITE_OTA_UART |
-                       CAPACIDADE_SATELITE_OTA_BLOCO_4096 |
-                       CAPACIDADE_SATELITE_COMANDOS,
-        .crc16 = 0,
-    };
-    unsigned maior = 0, menor = 0, correcao = 0;
-    if (sscanf(esp_app_get_description()->version, "%u.%u.%u",
-               &maior, &menor, &correcao) == 3 &&
-        maior <= UINT8_MAX && menor <= UINT8_MAX && correcao <= UINT8_MAX) {
-        confirmacao.versao_maior = (uint8_t)maior;
-        confirmacao.versao_menor = (uint8_t)menor;
-        confirmacao.versao_correcao = (uint8_t)correcao;
-    }
-    confirmacao.crc16 = protocolo_telemetria_calcular_crc_confirmacao(&confirmacao);
+    const uint32_t capacidades =
+        CAPACIDADE_SATELITE_PAINEL_WEB | CAPACIDADE_SATELITE_PORTAL_CATIVO |
+        CAPACIDADE_SATELITE_METRICAS_LINK | CAPACIDADE_SATELITE_OTA_UART |
+        CAPACIDADE_SATELITE_OTA_BLOCO_4096 | CAPACIDADE_SATELITE_COMANDOS |
+        CAPACIDADE_SATELITE_OTA_ESTADO_BOOT | CAPACIDADE_SATELITE_TELEMETRIA_SOC |
+        (servico_ota_satelite_firmware_em_observacao() ? ESTADO_SATELITE_OTA_EM_OBSERVACAO : 0u);
+    const confirmacao_telemetria_t confirmacao =
+        protocolo_telemetria_montar_confirmacao(
+            pacote, SATELITE_TELEMETRIA_EQUIPE, capacidades,
+            esp_app_get_description()->version);
     (void)gerenciador_uart_enviar(&confirmacao, sizeof(confirmacao));
 }
 
@@ -346,7 +328,7 @@ esp_err_t receptor_uart_iniciar(void)
     const configuracao_servico_ota_satelite_t configuracao_ota = {
         .nome_satelite = "equipe",
         .enviar = enviar_quadro_enlace,
-        .tempo_limite_sem_dados_ms = 15000,
+        .tempo_limite_sem_dados_ms = OTA_SATELITE_INATIVIDADE_MS,
     };
     ESP_RETURN_ON_ERROR(servico_ota_satelite_iniciar(&configuracao_ota), TAG,
                         "servico OTA do satelite");

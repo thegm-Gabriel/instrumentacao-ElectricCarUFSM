@@ -13,8 +13,8 @@ demais funções do veículo.
 ```mermaid
 flowchart LR
     S["Sensores e encoders"] --> M["ESP32-S3 Mestre"]
-    M <-->|UART| E["ESP32-S3 Equipe"]
-    M <-->|UART| V["ESP32-S3 Visitantes"]
+    M <-->|UART| E["ESP32-C3 Equipe"]
+    M <-->|UART| V["ESP32-C3 Visitantes"]
     E <-->|Wi-Fi / HTTP| PE["Navegador · painel técnico"]
     V <-->|Wi-Fi / HTTP| PV["Navegador · painel público"]
     M <-->|SPI2| SD["microSD · histórico e logs"]
@@ -31,8 +31,11 @@ Wi-Fi com seu próprio satélite, não diretamente com o mestre. Veja
 
 ## Responsabilidades
 
-Cada firmware é um projeto PlatformIO independente. Os contratos binários ficam
-em `firmware/compartilhado`, evitando cópias divergentes entre os três projetos.
+Cada firmware é um projeto PlatformIO independente. A pasta
+`firmware/compartilhado/protocolos` reúne os contratos binários e as funções
+portáveis de codificação e validação. Os recursos visuais comuns ficam em
+`firmware/compartilhado/web`. Cada projeto possui seus gerenciadores e
+serviços de execução.
 
 No mestre:
 
@@ -40,16 +43,16 @@ No mestre:
 - `gerenciadores` encapsula drivers e periféricos do ESP-IDF;
 - `dispositivos` representa componentes físicos, como MPU6050, encoders e ADC;
 - `servicos` implementa regras de aplicação, diagnóstico, telemetria e OTA;
-- `main.cpp` inicializa e liga os módulos. O serviço de aquisição coordena o fluxo periódico.
+- `main.cpp` inicializa e liga os módulos. O serviço de telemetria coordena a publicação.
 
 Nos satélites:
 
 - `servicos/receptor_uart` valida a telemetria, mantém o último retrato e
-  encaminha quadros de comandos e OTA aos serviços compartilhados;
-- `gerenciadores/gerenciador_wifi` mantém o ponto de acesso local;
-- `servicos/servidor_web` publica o painel e as APIs HTTP;
-- somente na equipe, `gerenciadores/gerenciador_uart` serializa as consultas
-  feitas pelo painel ao mestre e `servicos/diagnostico_sistema` mede o estado local.
+  encaminha quadros de comandos e OTA aos serviços do próprio satélite.
+- `gerenciadores/gerenciador_wifi` mantém o ponto de acesso e as sessões dos clientes.
+- `gerenciadores/gerenciador_uart` opera o driver. Na Equipe, também serializa a
+  transmissão das consultas do painel e registra métricas do driver.
+- `servicos/servidor_web` publica o painel e as APIs HTTP.
 
 ## Fluxos de dados
 
@@ -63,7 +66,7 @@ fio de retorno de cada UART. As confirmações permitem medir atraso, perdas e
 disponibilidade. A equipe expõe consultas e ações do mestre por HTTP; o módulo
 de visitantes expõe somente a telemetria pública.
 
-O mesmo retrato é amostrado a 1 Hz pelo serviço de registro. Uma tarefa é a única
+O registro coleta um retrato a cada 100 ms (10 Hz), com prazo próprio. Uma tarefa é a única
 proprietária dos CSVs no cartão SD; por isso, aquisição e transmissão não esperam
 gravações. O envio ao Google ocorre somente por solicitação e não faz parte do
 caminho de tempo real.
@@ -147,11 +150,10 @@ As conexões Wi-Fi são sessões temporárias. O gerenciador mede RSSI, canal e 
 de desconexão, enquanto o serviço decide a prioridade dos perfis, as autorizações
 e quando o rádio deve entrar em repouso.
 
-`servicos/comunicacao/wifi_sessoes.cpp` mantém a política de redes: prioridade da rede principal,
-perfis secundários persistidos na NVS, autorização manual e modo automático
-protegido por senha. `gerenciadores/wifi.cpp` cuida apenas da conexão e
-da troca de credenciais no ESP-IDF. Assim, terminal e telemetria podem usar a mesma
-API sem duplicar regras.
+`servicos/comunicacao/wifi_sessoes.cpp` mantém a política de redes, os perfis na
+NVS, a autorização manual e a preferência de conexão automática.
+`gerenciadores/wifi.cpp` valida o tamanho de SSID e senha e opera o rádio pelo
+ESP-IDF. Terminal, comandos UART e sessões usam a mesma validação.
 
 `diagnostico` agrega estatísticas dos módulos e classifica a saúde do
 sistema. `supervisao` acompanha a atividade das tarefas e dispara sua
@@ -164,12 +166,26 @@ pelas consultas e ações. A partida registra esse despacho antes de iniciar a
 recepção UART. Os relatórios leem as métricas do protocolo. A parada urgente
 continua a ser despachada fora da fila de operações.
 
-`aquisicao` escolhe entre sensores reais e simulador e produz o modelo
-`DadosTelemetriaVeiculo`. A aquisição publica a amostra do ciclo para os relatórios.
-O serviço de telemetria preserva o último valor aceito pela validação UART para as
-consultas que usam esse retrato. Uma falha de enfileiramento pode ocorrer depois
-dessa validação. O MPU6050 e o controle do veículo mantêm tarefas com cadências
-próprias.
+`aquisicao.cpp` mantém os ciclos dos sensores e reúne suas últimas leituras
+quando solicitado. A tarefa em `telemetria_uart.cpp` consulta essas leituras ou
+gera o retrato simulado na sua própria cadência. No ciclo de publicação, repassa
+ao histórico a amostra selecionada e disponibiliza esse retrato aos relatórios.
+A consulta UART lê os valores, a sequência e o horário de um único quadro
+validado. Uma falha ao enfileirar o quadro pode aparecer em um enlace mesmo
+quando há amostra local.
+
+| Atividade no Mestre | Intervalo nominal | Responsabilidade |
+|---|---:|---|
+| Controle | 20 ms | Lê o pedal, valida condições de operação e calcula a referência de tração. |
+| Odômetro | 20 ms | Consulta os contadores das rodas e publica distância e velocidade com horário. |
+| MPU6050 | 100 ms | Amostra e filtra a aceleração e o giroscópio. |
+| Sensores elétricos | 100 ms | Lê o INA228 e coleta a última amostra bruta do pedal, executa tentativas de recuperação e atende persistência pendente do odômetro. |
+| Publicação UART | 250 ms em operação normal | Reúne as últimas amostras e envia aos satélites. Durante OTA de satélites, o intervalo configurável começa em 2 s. |
+| Registro CSV | 100 ms | Enfileira um retrato das últimas leituras para a tarefa do SD. |
+
+Alterar o intervalo UART muda a frequência de publicação. Controle, cálculo de
+velocidade, aquisição dos sensores e registro local continuam com seus períodos próprios. Os
+comandos recebidos pela UART entram por evento e são validados no Mestre.
 
 A transmissão UART usa uma fila independente por destino. O protocolo compartilhado
 v5 identifica versão, tipo e tamanho da carga, transporta as grandezas processadas
@@ -193,15 +209,16 @@ O buffer de recepção do manifesto também é reservado uma única vez na
 inicialização do serviço OTA e reutilizado nas verificações periódicas. Dessa
 forma, apenas as estruturas transitórias do analisador JSON permanecem dinâmicas.
 
-A aquisição roda a 4 Hz em condições normais. Em paralelo,
-`registro_sd` reduz as amostras locais para 1 Hz e o entrega por
-fila a uma única tarefa proprietária dos CSVs. O arquivo ativo é sincronizado a
+A telemetria enfileira uma amostra a cada 100 ms para a tarefa proprietária
+dos CSVs. A publicação aos satélites tem prazo independente. `gerenciadores/sd.cpp` monta o cartão e controla
+os recursos de SPI. `backup_configuracao` lê, valida e grava o retrato da
+configuração. O arquivo CSV ativo é sincronizado a
 cada dez segundos, fechado a cada hora ou 8 MiB e recuperado após reinicialização.
 Se o cartão não estiver disponível na partida, o mestre mantém a telemetria ao
 vivo e tenta habilitar novamente o histórico a cada trinta segundos.
 O upload é iniciado explicitamente, abre uma sessão Wi-Fi temporária, transmite
-o CSV em blocos com progresso compartilhado com o painel local, exige confirmação
-nominal do Google e só então move o CSV para `enviados`. O registro fecha e
+uma exportação a 1 Hz em blocos com progresso compartilhado com o painel local, exige confirmação
+nominal do Google e só então move o CSV completo para `enviados`. O registro fecha e
 seleciona os CSVs e delega o envio HTTPS a `upload_google`. OTA e upload
 compartilham o acerto inicial do relógio por HTTP em `comunicacao/relogio_http`.
 O backup do SD preserva as políticas de restauração de cada serviço na partida
@@ -226,7 +243,7 @@ alterar a média usada pelo odômetro.
 e ao PWM do buzzer passivo. `servicos/interface_local/sinalizacao.cpp` interpreta os
 estados de saúde, Wi-Fi e OTA, escolhe o padrão visual e agenda melodias sem
 bloquear as outras tarefas. A avaliação dos serviços ocorre a cada 500 ms; a
-máquina de LEDs e notas avança a cada 50 ms.
+máquina de LEDs e notas avança a cada 20 ms.
 
 `dispositivos/saidas/ssd1306.cpp` implementa o controlador OLED, a fonte e o
 framebuffer usando exclusivamente a API do `gerenciadores/i2c`. O
@@ -252,10 +269,11 @@ pinos e velocidade sem reiniciar o restante do mestre; a tarefa de telemetria n�
 
 `include/nucleo/configuracao/tarefas.h` centraliza nomes, pilhas, prioridades e
 afinidades. Cada serviço continua responsável pela criação e pelo ciclo de vida
-de suas tarefas. Aquisição, telemetria, controle do veículo, enlaces e pipeline
-de OTA por UART ficam no núcleo 1. A tarefa principal de OTA, o diagnóstico, o
-upload e o registro SD ficam no núcleo 0. Painel, terminal, sinalização,
-relatórios e supervisão ficam sem afinidade fixa. O ESP-IDF também executa suas
+de suas tarefas. Odômetro, aquisição inercial, telemetria, controle do veículo,
+enlaces e pipeline de OTA por UART ficam no núcleo 1. Sensores elétricos,
+OTA do Mestre, upload e registro SD ficam no núcleo 0. Painel, terminal,
+sinalização, relatórios, diagnóstico e supervisão ficam sem afinidade fixa.
+O ESP-IDF também executa suas
 próprias tarefas nos dois núcleos.
 Pilhas e buffers UART existentes foram preservados para ajuste posterior com
 medição sob TLS, OTA e recuperação. Buffers DMA continuam sob as restrições dos

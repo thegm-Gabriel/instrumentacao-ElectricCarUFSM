@@ -5,15 +5,7 @@
 
 #include "esp_err.h"
 
-struct ConfiguracaoRodaOdometro {
-    float diametro_roda_m = 0.0f;
-    // Quantidade de giros do encoder para cada giro completo desta roda.
-    float giros_encoder_por_giro_roda = 1.0f;
-};
-
 struct ConfiguracaoOdometro {
-    ConfiguracaoRodaOdometro roda_esquerda{};
-    ConfiguracaoRodaOdometro roda_direita{};
     float intervalo_persistencia_m = 100.0f;
     float velocidade_maxima_kmh = 200.0f;
     float razao_minima_movimento_rodas = 0.20f;
@@ -32,6 +24,7 @@ struct EstadoRodaOdometro {
 
 struct EstadoOdometro {
     bool iniciado = false;
+    bool ativo = true;
     bool persistencia_disponivel = false;
     EstadoRodaOdometro roda_esquerda{};
     EstadoRodaOdometro roda_direita{};
@@ -39,6 +32,9 @@ struct EstadoOdometro {
     double percurso_m = 0.0;
     double odometro_m = 0.0;
     float velocidade_kmh = 0.0f;
+    int64_t instante_velocidade_us = 0;
+    int64_t parado_desde_us = 0;
+    uint32_t revisao_geometria = 0;
     uint32_t atualizacoes = 0;
     uint32_t erros_leitura = 0;
     uint32_t erros_persistencia = 0;
@@ -53,8 +49,12 @@ struct EstadoOdometro {
 };
 
 esp_err_t servico_odometro_iniciar(const ConfiguracaoOdometro& configuracao);
-esp_err_t servico_odometro_atualizar();
+void servico_odometro_definir_ativo(bool ativo);
 EstadoOdometro servico_odometro_obter_estado();
+bool servico_odometro_amostra_recente(const EstadoOdometro& amostra, int64_t agora_us);
+bool servico_odometro_velocidade_valida(const EstadoOdometro& amostra,
+                                       int64_t agora_us);
+void servico_odometro_persistir_pendente();
 // Recupera o total do backup no SD somente quando a chave NVS não existe.
 esp_err_t servico_odometro_restaurar_se_ausente(uint64_t total_mm);
 esp_err_t servico_odometro_zerar_percurso();

@@ -15,7 +15,6 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
-#include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -24,14 +23,36 @@
 #include "servicos/painel_web.h"
 #include "protocolo_comandos.h"
 #include "servicos/receptor_uart.h"
-#include "servico_comandos_satelite.h"
-#include "servico_ota_satelite.h"
+#include "servicos/comandos_satelite.h"
+#include "servicos/ota_satelite.h"
 
 static const char *TAG = "servidor_web";
 // Cada chamada usa uma tarefa de 8 KiB; uma vaga exclusiva preserva as acoes.
 static SemaphoreHandle_t vagas_api_mestre_consultas;
 static SemaphoreHandle_t vaga_api_mestre_acao;
-#define MAXIMO_CONSULTAS_MESTRE_SIMULTANEAS 2
+static SemaphoreHandle_t vaga_api_mestre_parada;
+static StaticSemaphore_t memoria_vaga_api_mestre_parada;
+// Cada consulta ocupa uma pilha de 8 KiB. Ações e parada têm vagas próprias.
+#define MAXIMO_CONSULTAS_MESTRE_SIMULTANEAS 1
+
+static esp_err_t receber_corpo_texto(httpd_req_t *requisicao, char *corpo,
+                                     size_t capacidade)
+{
+    if (capacidade == 0 ||
+        (size_t)requisicao->content_len >= capacidade) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    size_t recebido = 0;
+    while (recebido < (size_t)requisicao->content_len) {
+        const int trecho = httpd_req_recv(
+            requisicao, corpo + recebido,
+            (size_t)requisicao->content_len - recebido);
+        if (trecho <= 0) return ESP_FAIL;
+        recebido += (size_t)trecho;
+    }
+    corpo[recebido] = '\0';
+    return ESP_OK;
+}
 
 static esp_err_t responder_clientes_wifi(httpd_req_t *requisicao)
 {
@@ -60,25 +81,11 @@ static esp_err_t responder_clientes_wifi(httpd_req_t *requisicao)
     return httpd_resp_send(requisicao, json, usados);
 }
 
-static esp_err_t ler_corpo_wifi(httpd_req_t *requisicao, char corpo[128])
-{
-    if (requisicao->content_len <= 0 || requisicao->content_len >= 128)
-        return ESP_ERR_INVALID_SIZE;
-    int recebidos = 0;
-    while (recebidos < requisicao->content_len) {
-        const int n = httpd_req_recv(requisicao, corpo + recebidos,
-                                    requisicao->content_len - recebidos);
-        if (n <= 0) return ESP_FAIL;
-        recebidos += n;
-    }
-    corpo[recebidos] = '\0';
-    return ESP_OK;
-}
-
 static esp_err_t responder_limite_wifi(httpd_req_t *requisicao)
 {
     char corpo[128];
-    if (ler_corpo_wifi(requisicao, corpo) != ESP_OK)
+    if (requisicao->content_len == 0 ||
+        receber_corpo_texto(requisicao, corpo, sizeof(corpo)) != ESP_OK)
         return httpd_resp_send_err(requisicao, HTTPD_400_BAD_REQUEST, "corpo invalido");
     const char *campo = strstr(corpo, "\"minutos\"");
     if (!campo || !(campo = strchr(campo, ':')))
@@ -102,7 +109,8 @@ static esp_err_t responder_limite_wifi(httpd_req_t *requisicao)
 static esp_err_t responder_desconexao_wifi(httpd_req_t *requisicao)
 {
     char corpo[128];
-    if (ler_corpo_wifi(requisicao, corpo) != ESP_OK)
+    if (requisicao->content_len == 0 ||
+        receber_corpo_texto(requisicao, corpo, sizeof(corpo)) != ESP_OK)
         return httpd_resp_send_err(requisicao, HTTPD_400_BAD_REQUEST, "corpo invalido");
     const char *campo = strstr(corpo, "\"mac\"");
     if (!campo || !(campo = strchr(campo, ':')) || !(campo = strchr(campo, '"')))
@@ -175,6 +183,7 @@ static void escapar_texto_json(char *destino, size_t capacidade,
 static codigo_comando_t localizar_consulta_mestre(const char *consulta)
 {
     if (strcmp(consulta, "controle_remoto") == 0) return COMANDO_OBTER_CONTROLE_REMOTO;
+    if (strcmp(consulta, "ajustes_desenvolvedor") == 0) return COMANDO_OBTER_AJUSTES_DESENVOLVEDOR;
     if (strcmp(consulta, "ping") == 0) return COMANDO_PING;
     if (strcmp(consulta, "versao") == 0) return COMANDO_OBTER_VERSAO;
     if (strcmp(consulta, "saude") == 0) return COMANDO_OBTER_SAUDE;
@@ -205,6 +214,9 @@ static codigo_comando_t localizar_consulta_mestre(const char *consulta)
         strcmp(consulta, "satelite_visitantes_diagnostico") == 0 ||
         strcmp(consulta, "satelite_visitantes_clientes") == 0)
         return COMANDO_CONSULTAR_SATELITE;
+    if (strcmp(consulta, "satelite_equipe_radio") == 0 ||
+        strcmp(consulta, "satelite_visitantes_radio") == 0)
+        return COMANDO_AJUSTAR_RADIO_SATELITE;
     if (strcmp(consulta, "satelite_visitantes_limite") == 0 ||
         strcmp(consulta, "satelite_visitantes_kick") == 0)
         return COMANDO_GERIR_WIFI_SATELITE;
@@ -230,6 +242,8 @@ static codigo_comando_t localizar_consulta_mestre(const char *consulta)
         strcmp(consulta, "velocidade_maxima") == 0 ||
         strcmp(consulta, "aceleracao_maxima") == 0 ||
         strcmp(consulta, "parada_remota") == 0 ||
+        strcmp(consulta, "parada_emergencia") == 0 ||
+        strcmp(consulta, "ajuste_desenvolvedor") == 0 ||
         strcmp(consulta, "alternar_relatorios") == 0 ||
         strcmp(consulta, "zerar_percurso") == 0 ||
         strcmp(consulta, "sincronizar_google") == 0 ||
@@ -287,7 +301,10 @@ static acao_mestre_t localizar_acao_mestre(const char *consulta)
     if (strcmp(consulta, "permitir_re") == 0) return ACAO_MESTRE_PERMITIR_REVERSAO;
     if (strcmp(consulta, "velocidade_maxima") == 0) return ACAO_MESTRE_DEFINIR_VELOCIDADE_MAXIMA;
     if (strcmp(consulta, "aceleracao_maxima") == 0) return ACAO_MESTRE_DEFINIR_ACELERACAO_MAXIMA;
-    if (strcmp(consulta, "parada_remota") == 0) return ACAO_MESTRE_DEFINIR_PARADA_REMOTA;
+    if (strcmp(consulta, "parada_remota") == 0 || strcmp(consulta, "parada_emergencia") == 0)
+        return ACAO_MESTRE_DEFINIR_PARADA_REMOTA;
+    if (strcmp(consulta, "ajuste_desenvolvedor") == 0)
+        return ACAO_MESTRE_DEFINIR_AJUSTE_DESENVOLVEDOR;
     if (strcmp(consulta, "alternar_relatorios") == 0)
         return ACAO_MESTRE_ALTERNAR_RELATORIOS;
     if (strcmp(consulta, "zerar_percurso") == 0)
@@ -349,25 +366,6 @@ static char *proximo_campo(char **cursor)
     return campo;
 }
 
-static esp_err_t receber_corpo_texto(httpd_req_t *requisicao, char *corpo,
-                                     size_t capacidade)
-{
-    if (capacidade == 0 ||
-        (size_t)requisicao->content_len >= capacidade) {
-        return ESP_ERR_INVALID_SIZE;
-    }
-    size_t recebido = 0;
-    while (recebido < (size_t)requisicao->content_len) {
-        const int trecho = httpd_req_recv(
-            requisicao, corpo + recebido,
-            (size_t)requisicao->content_len - recebido);
-        if (trecho <= 0) return ESP_FAIL;
-        recebido += (size_t)trecho;
-    }
-    corpo[recebido] = '\0';
-    return ESP_OK;
-}
-
 static bool preparar_acao_mestre(const char *consulta, char *corpo,
                                  solicitacao_acao_mestre_t *solicitacao)
 {
@@ -377,7 +375,24 @@ static bool preparar_acao_mestre(const char *consulta, char *corpo,
     char *cursor = corpo;
     char *campo = NULL;
     uint32_t valor = 0;
+    if (strcmp(consulta, "parada_emergencia") == 0) {
+        if (strcmp(corpo, "1") != 0) return false;
+        solicitacao->valor = 1;
+        return true;
+    }
     switch ((acao_mestre_t)solicitacao->acao) {
+        case ACAO_MESTRE_DEFINIR_AJUSTE_DESENVOLVEDOR:
+            if (!converter_uint32(proximo_campo(&cursor), &valor) || valor >= AJUSTES_DESENVOLVEDOR_TOTAL)
+                return false;
+            solicitacao->alvo = (uint8_t)valor;
+            if (!converter_uint32(proximo_campo(&cursor), &valor) || valor > INT32_MAX)
+                return false;
+            solicitacao->valor = valor;
+            campo = proximo_campo(&cursor);
+            if (campo == NULL || cursor != NULL || !campo[0] || strlen(campo) >= sizeof(solicitacao->texto))
+                return false;
+            strcpy(solicitacao->texto, campo);
+            return true;
         case ACAO_MESTRE_DEFINIR_SENSOR:
             if (!converter_uint32(proximo_campo(&cursor), &valor) ||
                 (valor > SENSOR_MESTRE_TEMPERATURA_ESP && valor != SENSOR_MESTRE_TODOS))
@@ -573,7 +588,8 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
         return enviar_json_comando(requisicao, "400 Bad Request",
                                    "{\"ok\":false,\"erro\":\"consulta desconhecida\"}");
     }
-    const bool acao = comando_exige_confirmacao(comando);
+    const bool acao = comando == COMANDO_AJUSTAR_RADIO_SATELITE
+        ? requisicao->method == HTTP_POST : comando_exige_confirmacao(comando);
     if ((acao && requisicao->method != HTTP_POST) ||
         (!acao && requisicao->method != HTTP_GET)) {
         return enviar_json_comando(requisicao, "405 Method Not Allowed",
@@ -589,11 +605,37 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
     solicitacao_rede_wifi_salva_t solicitacao_rede = {0};
     solicitacao_consulta_satelite_t solicitacao_satelite = {0};
     solicitacao_gestao_wifi_satelite_t solicitacao_wifi_satelite = {0};
+    solicitacao_radio_satelite_t solicitacao_radio = {0};
     uint8_t inicio_tarefas = 0;
     const uint8_t formato_controle_remoto = CONTROLE_REMOTO_FORMATO;
     char corpo[256] = {0};
     TickType_t tempo_limite = pdMS_TO_TICKS(1500);
-    if (comando == COMANDO_GERIR_WIFI_SATELITE) {
+    if (comando == COMANDO_AJUSTAR_RADIO_SATELITE) {
+        solicitacao_radio.alvo = strcmp(consulta, "satelite_equipe_radio") == 0
+            ? NO_COMANDO_EQUIPE : NO_COMANDO_VISITANTES;
+        solicitacao_radio.alterar = acao;
+        if (acao) {
+            char *cursor = corpo;
+            uint32_t canal, largura, potencia, clientes;
+            if (receber_corpo_texto(requisicao, corpo, sizeof(corpo)) != ESP_OK ||
+                !converter_uint32(proximo_campo(&cursor), &canal) || canal > UINT8_MAX ||
+                !converter_uint32(proximo_campo(&cursor), &largura) || largura > UINT8_MAX ||
+                !converter_uint32(proximo_campo(&cursor), &potencia) || potencia > UINT8_MAX ||
+                !converter_uint32(proximo_campo(&cursor), &clientes) || clientes > UINT8_MAX ||
+                !cursor || !cursor[0] || strchr(cursor, '\n') ||
+                strlen(cursor) >= sizeof(solicitacao_radio.permissao))
+                return enviar_json_comando(requisicao, "400 Bad Request",
+                    "{\"ok\":false,\"erro\":\"preencha o perfil Wi-Fi e a senha dos ajustes\"}");
+            solicitacao_radio.perfil = (perfil_radio_satelite_t){
+                .canal = (uint8_t)canal, .largura_mhz = (uint8_t)largura,
+                .potencia_quartos_dbm = (uint8_t)potencia, .maximo_clientes = (uint8_t)clientes,
+            };
+            strcpy(solicitacao_radio.permissao, cursor);
+        }
+        carga_solicitacao = &solicitacao_radio;
+        tamanho_carga_solicitacao = sizeof(solicitacao_radio);
+        tempo_limite = pdMS_TO_TICKS(3500);
+    } else if (comando == COMANDO_GERIR_WIFI_SATELITE) {
         if (receber_corpo_texto(requisicao, corpo, sizeof(corpo)) != ESP_OK)
             return enviar_json_comando(requisicao, "400 Bad Request",
                 "{\"ok\":false,\"erro\":\"corpo inválido\"}");
@@ -722,11 +764,18 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
     }
     if (erro == ESP_OK && resultado == RESPOSTA_COMANDO_CARGA_INVALIDA &&
         comando == COMANDO_OBTER_CONTROLE_REMOTO) {
-        // O mestre anterior a v7 aceita apenas a consulta sem carga.
+        const uint8_t formato_rearme = CONTROLE_REMOTO_FORMATO_REARME;
         tamanho_resposta = 0;
         erro = servico_comandos_satelite_solicitar_detalhado(
-            comando, NULL, 0, resposta, sizeof(resposta), &tamanho_resposta,
+            comando, &formato_rearme, sizeof(formato_rearme), resposta, sizeof(resposta), &tamanho_resposta,
             &resultado, tempo_limite, &informacoes);
+        if (erro == ESP_OK && resultado == RESPOSTA_COMANDO_CARGA_INVALIDA) {
+            // Antes do formato 7, o Mestre aceita a consulta sem carga.
+            tamanho_resposta = 0;
+            erro = servico_comandos_satelite_solicitar_detalhado(
+                comando, NULL, 0, resposta, sizeof(resposta), &tamanho_resposta,
+                &resultado, tempo_limite, &informacoes);
+        }
     }
     if (erro != ESP_OK) {
         if (acao) {
@@ -1125,22 +1174,60 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
             (unsigned long)dados.tempo_tentativa_wifi_ms,
             (unsigned long)dados.intervalo_tentativas_wifi_ms,
             (unsigned long)dados.tempo_limite_wifi_ms);
+    } else if (comando == COMANDO_OBTER_AJUSTES_DESENVOLVEDOR) {
+        resposta_ajustes_desenvolvedor_t dados;
+        if (tamanho_resposta != sizeof(dados) || resposta[0] != 1)
+            return enviar_json_comando(requisicao, "502 Bad Gateway",
+                "{\"ok\":false,\"erro\":\"formato de ajustes incompatível\"}");
+        memcpy(&dados, resposta, sizeof(dados));
+        tamanho = snprintf(json, sizeof(json),
+            "{\"ok\":true,\"revisao\":%u,\"edicao_permitida\":%s,\"valores\":[",
+            (unsigned)dados.revisao, dados.edicao_permitida ? "true" : "false");
+        for (size_t i = 0; i < AJUSTE_soc_baterias_serie && tamanho >= 0 && (size_t)tamanho < sizeof(json); ++i)
+            tamanho += snprintf(json + tamanho, sizeof(json) - (size_t)tamanho, "%s%ld",
+                i ? "," : "", (long)dados.valores[i]);
+        resposta_ajustes_desenvolvedor_extras_t extras;
+        uint16_t tamanho_extras = 0;
+        codigo_resposta_comando_t resultado_extras = RESPOSTA_COMANDO_TIMEOUT;
+        const uint8_t formato_extras = AJUSTES_EXTRAS_FORMATO_COM_LED;
+        esp_err_t erro_extras = servico_comandos_satelite_solicitar_detalhado(
+            COMANDO_OBTER_AJUSTES_DESENVOLVEDOR_EXTRAS, &formato_extras, sizeof(formato_extras),
+            (uint8_t*)&extras, sizeof(extras), &tamanho_extras, &resultado_extras,
+            tempo_limite, &informacoes);
+        if (erro_extras == ESP_OK && resultado_extras == RESPOSTA_COMANDO_CARGA_INVALIDA) {
+            erro_extras = servico_comandos_satelite_solicitar_detalhado(
+                COMANDO_OBTER_AJUSTES_DESENVOLVEDOR_EXTRAS, NULL, 0,
+                (uint8_t*)&extras, sizeof(extras), &tamanho_extras, &resultado_extras,
+                tempo_limite, &informacoes);
+        }
+        if (erro_extras == ESP_OK && resultado_extras == RESPOSTA_COMANDO_OK &&
+            (tamanho_extras == sizeof(extras) || tamanho_extras == AJUSTES_EXTRAS_TAMANHO_LEGADO)) {
+            for (size_t i = 0; i < tamanho_extras / sizeof(extras.valores[0]) &&
+                 tamanho >= 0 && (size_t)tamanho < sizeof(json); ++i)
+                tamanho += snprintf(json + tamanho, sizeof(json) - (size_t)tamanho, ",%ld",
+                                    (long)extras.valores[i]);
+        }
+        if (tamanho >= 0 && (size_t)tamanho < sizeof(json))
+            tamanho += snprintf(json + tamanho, sizeof(json) - (size_t)tamanho, "]}");
     } else if (comando == COMANDO_OBTER_CONTROLE_REMOTO) {
         const bool atual = tamanho_resposta == sizeof(estado_controle_remoto_t) &&
             resposta[0] == CONTROLE_REMOTO_FORMATO;
+        const bool com_rearme = tamanho_resposta == CONTROLE_REMOTO_TAMANHO_REARME &&
+            resposta[0] == CONTROLE_REMOTO_FORMATO_REARME;
         const bool legado = tamanho_resposta == CONTROLE_REMOTO_TAMANHO_LEGADO &&
             resposta[0] == CONTROLE_REMOTO_FORMATO_LEGADO;
-        if (!atual && !legado)
+        if (!atual && !com_rearme && !legado)
             return enviar_json_comando(requisicao, "502 Bad Gateway",
                 "{\"ok\":false,\"erro\":\"formato de controle remoto incompatível\"}");
         estado_controle_remoto_t dados = {0};
         memcpy(&dados, resposta, tamanho_resposta);
         char rearme_restante[11] = "null";
-        if (atual)
+        if (atual || com_rearme)
             snprintf(rearme_restante, sizeof(rearme_restante), "%lu",
                 (unsigned long)dados.rearme_restante_ms);
         tamanho = snprintf(json, sizeof(json),
             "{\"ok\":true,\"formato\":%u,\"atuacao_habilitada\":%s,"
+            "\"dac_isolado_habilitado\":%s,"
             "\"faixa_marcha_solicitada\":%u,\"faixa_marcha_fisica\":%u,"
             "\"faixa_marcha_maxima\":%u,"
             "\"parada_solicitada\":%s,\"corte_por_rele_solicitado\":%s,"
@@ -1163,6 +1250,7 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
             "\"ota_em_andamento\":%s,"
             "\"dac_zero_confirmado\":%s}",
             dados.formato, dados.atuacao_habilitada ? "true" : "false",
+            atual ? (dados.dac_isolado_habilitado ? "true" : "false") : "null",
             dados.faixa_marcha_solicitada, dados.faixa_marcha_fisica,
             dados.faixa_marcha_maxima,
             dados.parada_solicitada ? "true" : "false",
@@ -1338,6 +1426,19 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
         }
         if (tamanho > 0 && tamanho < (int)sizeof(json))
             tamanho += snprintf(json + tamanho, sizeof(json) - (size_t)tamanho, "]}");
+    } else if (comando == COMANDO_AJUSTAR_RADIO_SATELITE &&
+               tamanho_resposta == sizeof(resposta_radio_satelite_t)) {
+        resposta_radio_satelite_t dados;
+        memcpy(&dados, resposta, sizeof(dados));
+        tamanho = snprintf(json, sizeof(json),
+            "{\"ok\":true,\"canal_minimo\":%u,\"canal_maximo\":%u,\"capacidade_clientes\":%u,"
+            "\"reinicio_pendente\":%s,\"salvo\":[%u,%u,%u,%u],\"ativo\":[%u,%u,%u,%u]}",
+            (unsigned)dados.canal_minimo, (unsigned)dados.canal_maximo,
+            (unsigned)dados.capacidade_clientes, dados.reinicio_pendente ? "true" : "false",
+            (unsigned)dados.salvo.canal, (unsigned)dados.salvo.largura_mhz,
+            (unsigned)dados.salvo.potencia_quartos_dbm, (unsigned)dados.salvo.maximo_clientes,
+            (unsigned)dados.ativo.canal, (unsigned)dados.ativo.largura_mhz,
+            (unsigned)dados.ativo.potencia_quartos_dbm, (unsigned)dados.ativo.maximo_clientes);
     } else if (comando == COMANDO_GERIR_WIFI_SATELITE &&
                tamanho_resposta == sizeof(resposta_gestao_wifi_satelite_t)) {
         resposta_gestao_wifi_satelite_t dados;
@@ -1443,12 +1544,22 @@ static esp_err_t processar_mestre_api(httpd_req_t *requisicao)
     return enviar_json_comando(requisicao, NULL, json);
 }
 
+static SemaphoreHandle_t vaga_mestre_api(httpd_req_t *requisicao)
+{
+    if (requisicao->method != HTTP_POST) return vagas_api_mestre_consultas;
+    char query[64];
+    char consulta[32];
+    if (httpd_req_get_url_query_str(requisicao, query, sizeof(query)) == ESP_OK &&
+        httpd_query_key_value(query, "consulta", consulta, sizeof(consulta)) == ESP_OK &&
+        strcmp(consulta, "parada_emergencia") == 0)
+        return vaga_api_mestre_parada;
+    return vaga_api_mestre_acao;
+}
+
 static void tarefa_responder_mestre_api(void *argumento)
 {
     httpd_req_t *requisicao = (httpd_req_t *)argumento;
-    SemaphoreHandle_t vagas = requisicao->method == HTTP_POST
-                                  ? vaga_api_mestre_acao
-                                  : vagas_api_mestre_consultas;
+    SemaphoreHandle_t vagas = vaga_mestre_api(requisicao);
     (void)processar_mestre_api(requisicao);
     httpd_req_async_handler_complete(requisicao);
     xSemaphoreGive(vagas);
@@ -1457,9 +1568,7 @@ static void tarefa_responder_mestre_api(void *argumento)
 
 static esp_err_t responder_mestre_api(httpd_req_t *requisicao)
 {
-    SemaphoreHandle_t vagas = requisicao->method == HTTP_POST
-                                  ? vaga_api_mestre_acao
-                                  : vagas_api_mestre_consultas;
+    SemaphoreHandle_t vagas = vaga_mestre_api(requisicao);
     if (xSemaphoreTake(vagas, 0) != pdTRUE)
         return enviar_json_comando(requisicao, "503 Service Unavailable",
             "{\"ok\":false,\"erro\":\"mestre ocupado; tente novamente\"}");
@@ -1471,7 +1580,7 @@ static esp_err_t responder_mestre_api(httpd_req_t *requisicao)
         return erro;
     }
     if (xTaskCreate(tarefa_responder_mestre_api, "api_mestre", 8192,
-                    requisicao_assincrona, 4, NULL) != pdPASS) {
+                    requisicao_assincrona, vagas == vaga_api_mestre_parada ? 6 : 4, NULL) != pdPASS) {
         (void)enviar_json_comando(
             requisicao_assincrona, "503 Service Unavailable",
             "{\"ok\":false,\"erro\":\"sem recursos para processar comando\"}");
@@ -1572,17 +1681,9 @@ static esp_err_t responder_diagnostico_api(httpd_req_t *requisicao)
     const situacao_servico_ota_satelite_t ota =
         servico_ota_satelite_obter_situacao();
     const diagnostico_sistema_t sistema = diagnostico_sistema_obter();
-    wifi_sta_list_t clientes = {0};
-    uint8_t canal_wifi = 0;
-    wifi_second_chan_t canal_secundario = WIFI_SECOND_CHAN_NONE;
-    wifi_bandwidth_t largura_wifi = WIFI_BW_HT20;
-    int8_t potencia_wifi = 0;
     receptor_uart_obter_dados(&dados);
     gerenciador_uart_obter_estatisticas(&uart);
-    (void)esp_wifi_ap_get_sta_list(&clientes);
-    (void)esp_wifi_get_channel(&canal_wifi, &canal_secundario);
-    (void)esp_wifi_get_bandwidth(WIFI_IF_AP, &largura_wifi);
-    (void)esp_wifi_get_max_tx_power(&potencia_wifi);
+    const situacao_radio_wifi_t radio = gerenciador_wifi_obter_radio();
     const uint32_t agora_ms = (uint32_t)(esp_timer_get_time() / 1000);
     const uint32_t idade_ms = dados.ultimo_recebimento_ms == 0
                                   ? UINT32_MAX : agora_ms - dados.ultimo_recebimento_ms;
@@ -1602,7 +1703,7 @@ static esp_err_t responder_diagnostico_api(httpd_req_t *requisicao)
         "\"heap_interno_total\":%lu,\"heap_interno_livre\":%lu,\"heap_interno_minimo\":%lu,\"heap_interno_maior_bloco\":%lu,"
         "\"psram_total\":%lu,\"psram_livre\":%lu,\"psram_minima\":%lu,\"psram_maior_bloco\":%lu,"
         "\"dma_livre\":%lu,\"dma_maior_bloco\":%lu,\"cpu_valida\":%s,\"cpu_total_decimos_percentual\":%u,"
-        "\"cpu_nucleo_0_decimos_percentual\":%u,\"cpu_nucleo_1_decimos_percentual\":%u,\"cpu_tarefa_pico_decimos_percentual\":%u,"
+        "\"cpu_nucleo_0_decimos_percentual\":%u,\"cpu_nucleo_1_decimos_percentual\":null,\"cpu_tarefa_pico_decimos_percentual\":%u,"
         "\"cpu_tarefa_pico\":\"%s\",\"tarefas_ativas\":%lu,\"tarefas_truncadas\":%s,\"menor_pilha_livre_bytes\":%lu,\"tarefa_menor_pilha\":\"%s\","
         "\"temperatura_valida\":%s,\"temperatura_centesimos_c\":%ld,\"temperatura_ultimo_erro\":%ld,"
         "\"nome_local\":\"%s\",\"wifi_ssid\":\"%s\",\"wifi_ip\":\"%s\",\"wifi_largura_mhz\":%u,"
@@ -1626,7 +1727,7 @@ static esp_err_t responder_diagnostico_api(httpd_req_t *requisicao)
         (unsigned long)esp_get_free_heap_size(),
         (unsigned long)esp_get_minimum_free_heap_size(),
         (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
-        (unsigned)clientes.num,
+        radio.clientes,
         (unsigned long)sistema.heap_interno_total,
         (unsigned long)sistema.heap_interno_livre,
         (unsigned long)sistema.heap_interno_minimo,
@@ -1640,7 +1741,6 @@ static esp_err_t responder_diagnostico_api(httpd_req_t *requisicao)
         sistema.cpu_valida ? "true" : "false",
         (unsigned)sistema.cpu_total_decimos_percentual,
         (unsigned)sistema.cpu_nucleo_0_decimos_percentual,
-        (unsigned)sistema.cpu_nucleo_1_decimos_percentual,
         (unsigned)sistema.cpu_tarefa_pico_decimos_percentual,
         tarefa_cpu, (unsigned long)sistema.tarefas_ativas,
         sistema.tarefas_truncadas ? "true" : "false",
@@ -1649,8 +1749,8 @@ static esp_err_t responder_diagnostico_api(httpd_req_t *requisicao)
         (long)sistema.temperatura_centesimos_c,
         (long)sistema.temperatura_ultimo_erro,
         WIFI_IP_AP_TEXTO, WIFI_SSID, WIFI_IP_AP_TEXTO,
-        largura_wifi == WIFI_BW_HT40 ? 40u : 20u, (unsigned)canal_wifi,
-        (int)potencia_wifi, (unsigned)dados.sequencia,
+        (unsigned)radio.largura_mhz, (unsigned)radio.canal,
+        (int)radio.potencia_quartos_dbm, (unsigned)dados.sequencia,
         (unsigned long)dados.reinicios_mestre,
         (unsigned long)dados.taxa_perda_centesimos_percentual,
         (unsigned long)dados.taxa_pacotes_centesimos_hz,
@@ -1713,7 +1813,11 @@ esp_err_t servidor_web_iniciar(void)
             MAXIMO_CONSULTAS_MESTRE_SIMULTANEAS);
     if (vaga_api_mestre_acao == NULL)
         vaga_api_mestre_acao = xSemaphoreCreateCounting(1, 1);
-    if (vagas_api_mestre_consultas == NULL || vaga_api_mestre_acao == NULL)
+    if (vaga_api_mestre_parada == NULL) {
+        vaga_api_mestre_parada = xSemaphoreCreateBinaryStatic(&memoria_vaga_api_mestre_parada);
+        if (vaga_api_mestre_parada != NULL) xSemaphoreGive(vaga_api_mestre_parada);
+    }
+    if (vagas_api_mestre_consultas == NULL || vaga_api_mestre_acao == NULL || vaga_api_mestre_parada == NULL)
         return ESP_ERR_NO_MEM;
     httpd_handle_t servidor = NULL;
     httpd_config_t configuracao = HTTPD_DEFAULT_CONFIG();

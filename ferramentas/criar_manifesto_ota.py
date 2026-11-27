@@ -8,9 +8,16 @@ import re
 from pathlib import Path
 
 
-def obter_sha256_imagem(conteudo: bytes) -> str:
+CHIP_ESP32_C3 = 5
+CHIP_ESP32_S3 = 9
+
+
+def obter_sha256_imagem(conteudo: bytes, chip_esperado: int) -> str:
     if len(conteudo) < 56 or conteudo[0] != 0xE9:
         raise ValueError("o arquivo não parece ser uma imagem ESP32 válida")
+    chip = int.from_bytes(conteudo[12:14], "little")
+    if chip != chip_esperado:
+        raise ValueError(f"imagem para chip {chip:#06x}, esperado {chip_esperado:#06x}")
 
     possui_hash_anexado = conteudo[23] == 1
     if not possui_hash_anexado:
@@ -55,20 +62,25 @@ def main() -> None:
         raise ValueError("etiqueta de release inválida")
 
     imagens = {
-        "mestre-s3": (argumentos.firmware_mestre, "mestre-s3.bin"),
-        "equipe-s3": (argumentos.firmware_equipe, "equipe-s3.bin"),
-        "visitantes-s3": (argumentos.firmware_visitantes, "visitantes-s3.bin"),
+        "mestre-s3": (argumentos.firmware_mestre, "mestre-s3.bin", CHIP_ESP32_S3),
+        # As chaves do manifesto identificam os satélites no firmware do Mestre.
+        "equipe-s3": (argumentos.firmware_equipe, "equipe-c3.bin", CHIP_ESP32_C3),
+        "visitantes-s3": (argumentos.firmware_visitantes, "visitantes-c3.bin", CHIP_ESP32_C3),
     }
     firmwares = {}
-    for alvo, (caminho, nome_arquivo) in imagens.items():
+    for alvo, (caminho, nome_arquivo, chip) in imagens.items():
         conteudo = caminho.read_bytes()
+        try:
+            sha256 = obter_sha256_imagem(conteudo, chip)
+        except ValueError as erro:
+            raise ValueError(f"{caminho}: {erro}") from erro
         firmwares[alvo] = {
             "versao": versoes[alvo],
             "url_firmware": (
                 f"https://github.com/{argumentos.repositorio}/releases/download/"
                 f"{argumentos.etiqueta}/{nome_arquivo}"
             ),
-            "sha256": obter_sha256_imagem(conteudo),
+            "sha256": sha256,
             "tamanho_bytes": len(conteudo),
         }
     manifesto = {

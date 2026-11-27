@@ -4,8 +4,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "nucleo/configuracao.h"
-#include "driver/uart.h"
 #include "esp_check.h"
 #include "esp_app_desc.h"
 #include "esp_log.h"
@@ -14,8 +12,10 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "protocolo_enlace_uart.h"
-#include "servico_comandos_satelite.h"
+#include "servicos/comandos_satelite.h"
+#include "servicos/ota_satelite.h"
 #include "servicos/diagnostico_visitantes.h"
+#include "gerenciadores/gerenciador_uart.h"
 #include "gerenciadores/gerenciador_wifi.h"
 
 static esp_err_t obter_clientes_para_comando(uint8_t inicio,
@@ -60,7 +60,6 @@ static esp_err_t gerir_wifi_para_comando(
     };
     return ESP_OK;
 }
-#include "servico_ota_satelite.h"
 
 static const char *TAG = "uart_visitantes";
 static dados_telemetria_t dados_compartilhados;
@@ -106,35 +105,17 @@ static void atualizar_metricas_comunicacao(const pacote_telemetria_t *pacote,
 
 static void enviar_confirmacao(const pacote_telemetria_t *pacote)
 {
-    confirmacao_telemetria_t confirmacao = {
-        .inicio_1 = TELEMETRIA_INICIO_1,
-        .inicio_2 = TELEMETRIA_INICIO_CONFIRMACAO_2,
-        .versao = TELEMETRIA_VERSAO_PROTOCOLO,
-        .tipo = TELEMETRIA_TIPO_CONFIRMACAO,
-        .sequencia = pacote->sequencia,
-        .tempo_mestre_ms = pacote->tempo_mestre_ms,
-        .tipo_satelite = SATELITE_TELEMETRIA_VISITANTES,
-        .versao_maior = 0,
-        .versao_menor = 0,
-        .versao_correcao = 0,
-        .capacidades = CAPACIDADE_SATELITE_PAINEL_WEB |
-                       CAPACIDADE_SATELITE_PORTAL_CATIVO |
-                       CAPACIDADE_SATELITE_METRICAS_LINK |
-                       CAPACIDADE_SATELITE_OTA_UART |
-                       CAPACIDADE_SATELITE_OTA_BLOCO_4096 |
-                       CAPACIDADE_SATELITE_COMANDOS,
-        .crc16 = 0,
-    };
-    unsigned maior = 0, menor = 0, correcao = 0;
-    if (sscanf(esp_app_get_description()->version, "%u.%u.%u",
-               &maior, &menor, &correcao) == 3 &&
-        maior <= UINT8_MAX && menor <= UINT8_MAX && correcao <= UINT8_MAX) {
-        confirmacao.versao_maior = (uint8_t)maior;
-        confirmacao.versao_menor = (uint8_t)menor;
-        confirmacao.versao_correcao = (uint8_t)correcao;
-    }
-    confirmacao.crc16 = protocolo_telemetria_calcular_crc_confirmacao(&confirmacao);
-    const int escritos = uart_write_bytes(UART_TELEMETRIA, &confirmacao, sizeof(confirmacao));
+    const uint32_t capacidades =
+        CAPACIDADE_SATELITE_PAINEL_WEB | CAPACIDADE_SATELITE_PORTAL_CATIVO |
+        CAPACIDADE_SATELITE_METRICAS_LINK | CAPACIDADE_SATELITE_OTA_UART |
+        CAPACIDADE_SATELITE_OTA_BLOCO_4096 | CAPACIDADE_SATELITE_COMANDOS |
+        CAPACIDADE_SATELITE_OTA_ESTADO_BOOT | CAPACIDADE_SATELITE_TELEMETRIA_SOC |
+        (servico_ota_satelite_firmware_em_observacao() ? ESTADO_SATELITE_OTA_EM_OBSERVACAO : 0u);
+    const confirmacao_telemetria_t confirmacao =
+        protocolo_telemetria_montar_confirmacao(
+            pacote, SATELITE_TELEMETRIA_VISITANTES, capacidades,
+            esp_app_get_description()->version);
+    const int escritos = gerenciador_uart_escrever(&confirmacao, sizeof(confirmacao));
     if (escritos != (int)sizeof(confirmacao)) {
         ESP_LOGW(TAG, "Nao foi possivel confirmar o pacote %u", (unsigned)pacote->sequencia);
     }
@@ -213,6 +194,7 @@ static resultado_validacao_t validar_e_salvar_pacote(
     dados_compartilhados.tensao_pacote_mv = pacote->tensao_pacote_mv;
     dados_compartilhados.corrente_centesimos_a = pacote->corrente_centesimos_a;
     dados_compartilhados.carga_decimos_percentual = pacote->carga_decimos_percentual;
+    dados_compartilhados.estado_ina = pacote->estado_ina;
     memcpy(dados_compartilhados.tensoes_celulas_mv, pacote->tensoes_celulas_mv,
            sizeof(dados_compartilhados.tensoes_celulas_mv));
     dados_compartilhados.latitude_micrograus = pacote->latitude_micrograus;
@@ -302,13 +284,6 @@ static void registrar_pacote_invalido(const uint8_t *buffer,
     }
 }
 
-static esp_err_t enviar_quadro_enlace(const void *dados, size_t tamanho)
-{
-    const int escritos = uart_write_bytes(UART_TELEMETRIA, dados, tamanho);
-    if (escritos != (int)tamanho) return ESP_FAIL;
-    return uart_wait_tx_done(UART_TELEMETRIA, pdMS_TO_TICKS(100));
-}
-
 static void processar_quadro_telemetria(const uint8_t *quadro)
 {
     pacote_telemetria_t pacote;
@@ -331,8 +306,8 @@ static void tarefa_recepcao_uart(void *argumento)
     protocolo_enlace_uart_inicializar(&parser, TELEMETRIA_INICIO_2,
                                       TAMANHO_PACOTE_TELEMETRIA);
     while (true) {
-        const int recebidos = uart_read_bytes(
-            UART_TELEMETRIA, lote, sizeof(lote), pdMS_TO_TICKS(100));
+        const int recebidos = gerenciador_uart_receber(
+            lote, sizeof(lote), pdMS_TO_TICKS(100));
         if (recebidos <= 0) {
             servico_ota_satelite_verificar_timeout();
             continue;
@@ -361,16 +336,11 @@ esp_err_t receptor_uart_iniciar(void)
 {
     mutex_dados = xSemaphoreCreateMutex();
     if (mutex_dados == NULL) return ESP_ERR_NO_MEM;
-    const uart_config_t configuracao = {.baud_rate = UART_BAUD_RATE, .data_bits = UART_DATA_8_BITS,
-        .parity = UART_PARITY_DISABLE, .stop_bits = UART_STOP_BITS_1,
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE, .source_clk = UART_SCLK_DEFAULT};
-    ESP_RETURN_ON_ERROR(uart_driver_install(UART_TELEMETRIA, UART_TAMANHO_BUFFER, 0, 0, NULL, 0), TAG, "driver UART");
-    ESP_RETURN_ON_ERROR(uart_param_config(UART_TELEMETRIA, &configuracao), TAG, "configuracao UART");
-    ESP_RETURN_ON_ERROR(uart_set_pin(UART_TELEMETRIA, PINO_UART_TX, PINO_UART_RX, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE), TAG, "pinos UART");
+    ESP_RETURN_ON_ERROR(gerenciador_uart_iniciar(), TAG, "gerenciador UART");
     const configuracao_servico_ota_satelite_t configuracao_ota = {
         .nome_satelite = "visitantes",
-        .enviar = enviar_quadro_enlace,
-        .tempo_limite_sem_dados_ms = 15000,
+        .enviar = gerenciador_uart_enviar,
+        .tempo_limite_sem_dados_ms = OTA_SATELITE_INATIVIDADE_MS,
     };
     ESP_RETURN_ON_ERROR(servico_ota_satelite_iniciar(&configuracao_ota), TAG,
                         "servico OTA do satelite");
@@ -378,7 +348,7 @@ esp_err_t receptor_uart_iniciar(void)
         .nome_satelite = "visitantes",
         .no_satelite = NO_COMANDO_VISITANTES,
         .capacidades_adicionais = 0,
-        .enviar = enviar_quadro_enlace,
+        .enviar = gerenciador_uart_enviar,
         .obter_diagnostico = diagnostico_visitantes_obter,
         .obter_clientes_wifi = obter_clientes_para_comando,
         .gerir_wifi = gerir_wifi_para_comando,
@@ -387,7 +357,6 @@ esp_err_t receptor_uart_iniciar(void)
         servico_comandos_satelite_iniciar(&configuracao_comandos), TAG,
         "servico de comandos do satelite");
     if (xTaskCreate(tarefa_recepcao_uart, "uart_visitantes", 8192, NULL, 5, NULL) != pdPASS) return ESP_ERR_NO_MEM;
-    ESP_LOGI(TAG, "UART visitantes: RX GPIO %d, TX GPIO %d, %d baud", PINO_UART_RX, PINO_UART_TX, UART_BAUD_RATE);
     return ESP_OK;
 }
 

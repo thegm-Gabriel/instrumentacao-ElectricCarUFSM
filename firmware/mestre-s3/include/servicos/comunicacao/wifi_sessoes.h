@@ -51,7 +51,9 @@ struct ResumoWifi {
 // Carrega os perfis da NVS já inicializada; na sessão, procura redes disponíveis
 // e preserva a prioridade da principal entre as redes autorizadas encontradas.
 esp_err_t servico_wifi_iniciar();
-esp_err_t servico_wifi_abrir_sessao(FinalidadeSessaoWifi finalidade);
+esp_err_t servico_wifi_abrir_sessao(FinalidadeSessaoWifi finalidade,
+                                    bool* ocupado = nullptr);
+esp_err_t servico_wifi_restabelecer_sessao(FinalidadeSessaoWifi finalidade, uint32_t tempo_limite_ms);
 esp_err_t servico_wifi_encerrar_sessao(FinalidadeSessaoWifi finalidade);
 const char* servico_wifi_nome_finalidade_sessao(FinalidadeSessaoWifi finalidade);
 

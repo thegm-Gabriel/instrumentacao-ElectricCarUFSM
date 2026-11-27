@@ -53,6 +53,29 @@ ModuloSupervisionado modulo_supervisionado(DestinoUart destino) {
                                           : ModuloSupervisionado::UartVisitantes;
 }
 
+esp_err_t encerrar_enlace() {
+    esp_err_t primeiro_erro = ESP_OK;
+    for (const auto& canal : canais) {
+        const esp_err_t erro =
+            servico_supervisao_desregistrar(modulo_supervisionado(canal.origem));
+        if (erro != ESP_OK && erro != ESP_ERR_INVALID_STATE &&
+            primeiro_erro == ESP_OK) {
+            primeiro_erro = erro;
+        }
+    }
+    destruir_tarefas_recepcao();
+    const esp_err_t erro_comandos = servico_comandos_encerrar();
+    if (primeiro_erro == ESP_OK && erro_comandos != ESP_OK) {
+        primeiro_erro = erro_comandos;
+    }
+    const esp_err_t erro_ota = transporte_ota_satelites_encerrar();
+    if (primeiro_erro == ESP_OK && erro_ota != ESP_OK) primeiro_erro = erro_ota;
+    const esp_err_t erro_uart = gerenciador_uart_encerrar();
+    if (primeiro_erro == ESP_OK && erro_uart != ESP_OK) primeiro_erro = erro_uart;
+    iniciado = false;
+    return primeiro_erro;
+}
+
 esp_err_t recuperar_uart_equipe() {
     return gerenciador_uart_recuperar(DestinoUart::Equipe);
 }
@@ -142,7 +165,7 @@ esp_err_t servico_enlace_satelites_iniciar() {
                                       ? "enlace_equipe" : "enlace_visitantes";
         if (configuracao::criar_tarefa(tarefa_recepcao, nome_tarefa, &canal, &canal.tarefa) != pdPASS) {
             ESP_LOGE(ETIQUETA, "Não foi possível iniciar o enlace de %s", canal.nome);
-            servico_enlace_satelites_encerrar();
+            encerrar_enlace();
             return ESP_ERR_NO_MEM;
         }
     }
@@ -158,13 +181,13 @@ esp_err_t servico_enlace_satelites_iniciar() {
                 configuracao::MARGEM_SUPERVISAO_UART_MS,
             recuperar);
         if (erro != ESP_OK) {
-            servico_enlace_satelites_encerrar();
+            encerrar_enlace();
             return erro;
         }
         const esp_err_t erro_associacao =
             servico_supervisao_associar_tarefa(modulo, canal.tarefa);
         if (erro_associacao != ESP_OK) {
-            servico_enlace_satelites_encerrar();
+            encerrar_enlace();
             return erro_associacao;
         }
         (void)servico_supervisao_alimentar(modulo);
@@ -173,27 +196,4 @@ esp_err_t servico_enlace_satelites_iniciar() {
     ESP_LOGI(ETIQUETA,
              "Enlace dos satélites pronto e supervisionado: telemetria, comandos e OTA");
     return ESP_OK;
-}
-
-esp_err_t servico_enlace_satelites_encerrar() {
-    esp_err_t primeiro_erro = ESP_OK;
-    for (const auto& canal : canais) {
-        const esp_err_t erro =
-            servico_supervisao_desregistrar(modulo_supervisionado(canal.origem));
-        if (erro != ESP_OK && erro != ESP_ERR_INVALID_STATE &&
-            primeiro_erro == ESP_OK) {
-            primeiro_erro = erro;
-        }
-    }
-    destruir_tarefas_recepcao();
-    const esp_err_t erro_comandos = servico_comandos_encerrar();
-    if (primeiro_erro == ESP_OK && erro_comandos != ESP_OK) {
-        primeiro_erro = erro_comandos;
-    }
-    const esp_err_t erro_ota = transporte_ota_satelites_encerrar();
-    if (primeiro_erro == ESP_OK && erro_ota != ESP_OK) primeiro_erro = erro_ota;
-    const esp_err_t erro_uart = gerenciador_uart_encerrar();
-    if (primeiro_erro == ESP_OK && erro_uart != ESP_OK) primeiro_erro = erro_uart;
-    iniciado = false;
-    return primeiro_erro;
 }

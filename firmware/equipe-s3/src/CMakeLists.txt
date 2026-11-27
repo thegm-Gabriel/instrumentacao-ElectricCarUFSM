@@ -1,23 +1,17 @@
-# This file was automatically generated for projects
-# without default 'CMakeLists.txt' file.
-
-FILE(GLOB_RECURSE app_sources
-    ${CMAKE_SOURCE_DIR}/src/gerenciadores/*.c
-    ${CMAKE_SOURCE_DIR}/src/servicos/*.c)
-LIST(APPEND app_sources
-    ${CMAKE_SOURCE_DIR}/src/main.c
-    ${CMAKE_SOURCE_DIR}/../compartilhado/ota/servico_ota_satelite.c
-    ${CMAKE_SOURCE_DIR}/../compartilhado/comandos/servico_comandos_satelite.c)
-
 idf_component_register(
-    SRCS ${app_sources}
+    SRCS
+        "main.c"
+        "gerenciadores/gerenciador_uart.c"
+        "gerenciadores/gerenciador_wifi.c"
+        "servicos/comandos_satelite.c"
+        "servicos/diagnostico_sistema.c"
+        "servicos/ota_satelite.c"
+        "servicos/painel_web.c"
+        "servicos/receptor_uart.c"
+        "servicos/servidor_web.c"
     INCLUDE_DIRS
         "../include"
         "../../compartilhado/protocolos"
-        "../../compartilhado/telemetria"
-        "../../compartilhado/comum"
-        "../../compartilhado/ota"
-        "../../compartilhado/comandos"
     PRIV_REQUIRES
         app_update
         nvs_flash

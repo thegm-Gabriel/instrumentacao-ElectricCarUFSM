@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <cstddef>
 
-#include "dados_telemetria_veiculo.h"
+#include "nucleo/dados_telemetria_veiculo.h"
 #include "esp_err.h"
 
 enum class EstadoSaudeSistema : uint8_t {
@@ -28,6 +28,12 @@ enum CausaSaudeSistema : uint32_t {
     CausaSaudeOtaRecente = 1u << 9,
     CausaSaudePersistencia = 1u << 10,
     CausaSaudeMemoriaBaixa = 1u << 11,
+    CausaSaudeEncodersDivergentes = 1u << 12,
+    CausaSaudeVelocidadeIndisponivel = 1u << 13,
+    CausaSaudeDacIndisponivel = 1u << 14,
+    CausaSaudeSaidasTracao = 1u << 15,
+    CausaSaudePedalIndisponivel = 1u << 16,
+    CausaSaudeMpuSemCalibracao = 1u << 17,
 };
 
 struct ResumoSaudeSistema {

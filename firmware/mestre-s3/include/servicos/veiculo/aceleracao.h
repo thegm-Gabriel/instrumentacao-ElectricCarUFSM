@@ -5,6 +5,7 @@
 
 #include "dispositivos/entradas/mpu6050.h"
 #include "esp_err.h"
+#include "nucleo/configuracao/veiculo.h"
 
 enum class EixoAceleracaoVeiculo : uint8_t {
     X = 0,
@@ -24,9 +25,9 @@ enum class SentidoAceleracaoLongitudinal : int8_t {
 struct ConfiguracaoServicoAceleracao {
     EixoAceleracaoVeiculo eixo_longitudinal = EixoAceleracaoVeiculo::X;
     float sinal_eixo_longitudinal = 1.0f;
-    uint32_t frequencia_amostragem_hz = 100;
+    uint32_t frequencia_amostragem_hz = configuracao::FREQUENCIA_AMOSTRAGEM_MPU6050_HZ;
     float frequencia_corte_filtro_hz = 3.0f;
-    uint16_t amostras_calibracao = 100;
+    uint16_t amostras_calibracao = configuracao::AMOSTRAS_CALIBRACAO_MPU6050;
     float limite_giroscopio_calibracao_graus_s = 5.0f;
     float gravidade_minima_calibracao_g = 0.85f;
     float gravidade_maxima_calibracao_g = 1.15f;

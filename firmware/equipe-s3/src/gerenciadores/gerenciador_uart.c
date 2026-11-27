@@ -136,13 +136,7 @@ esp_err_t gerenciador_uart_iniciar(void)
 
 esp_err_t gerenciador_uart_enviar(const void *dados, size_t tamanho)
 {
-    return gerenciador_uart_enviar_com_timeout(
-        dados, tamanho, pdMS_TO_TICKS(UART_TEMPO_LIMITE_TX_MS));
-}
-
-esp_err_t gerenciador_uart_enviar_com_timeout(const void *dados, size_t tamanho,
-                                              TickType_t tempo_limite)
-{
+    const TickType_t tempo_limite = pdMS_TO_TICKS(UART_TEMPO_LIMITE_TX_MS);
     if (dados == NULL || tamanho == 0 || tamanho > INT_MAX) {
         ESP_LOGE(TAG, "Envio rejeitado: buffer ou tamanho invalido (%u bytes)",
                  (unsigned)tamanho);
@@ -198,7 +192,12 @@ int gerenciador_uart_receber(void *buffer, size_t capacidade, TickType_t tempo_l
         registrar_erro(ESP_ERR_TIMEOUT, false);
         return -1;
     }
-    int recebidos = uart_read_bytes(UART_TELEMETRIA, buffer, capacidade, tempo_limite);
+    int recebidos = uart_read_bytes(UART_TELEMETRIA, buffer, 1, tempo_limite);
+    if (recebidos == 1 && capacidade > 1) {
+        const int disponiveis = uart_read_bytes(
+            UART_TELEMETRIA, (uint8_t *)buffer + 1, capacidade - 1, 0);
+        if (disponiveis > 0) recebidos += disponiveis;
+    }
     xSemaphoreGive(mutex_rx);
 
     xSemaphoreTake(mutex_estatisticas, portMAX_DELAY);

@@ -2,7 +2,7 @@
 
 O **Carro Elétrico UFSM-CS** é o veículo do projeto. **NEXUS** é seu sistema de
 instrumentação, telemetria e controle experimental. O sistema reúne os
-ESP32-S3 e os painéis que medem, registram e apresentam seu funcionamento.
+ESPs e os painéis que medem, registram e apresentam seu funcionamento.
 Um ESP32-S3 mestre cuida da aquisição, diagnóstico, registro e atualização;
 dois satélites apresentam os dados à equipe e aos visitantes.
 Os guias descrevem o comportamento implementado, o modo de operação e os
@@ -26,14 +26,15 @@ depois o guia do componente que pretende operar ou modificar.
 | Versões, publicação e atualização | [OTA e releases](ota.md) | Major/minor/patch, versões independentes, preparador, tag, GitHub Release, autorização e rollback. |
 | Comandos de desenvolvimento | [Ferramentas](ferramentas.md) | Geradores das páginas e QR, segredos, compilação, testes e scripts de release. |
 | Histórico remoto | [Google Drive e Sheets](google.md) | CSV, Apps Script, credenciais, envio e recuperação. |
+| Manual para consulta ou impressão | [Manual do Overleaf](../manual_overleaf/LEIA-ME.txt) | Seis capítulos e instruções para compilar o documento. |
 
 ## Visão do sistema
 
 ```mermaid
 flowchart LR
     S["Sensores e encoders"] --> M["ESP32-S3 Mestre"]
-    M <-->|UART| E["ESP32-S3 Equipe"]
-    M <-->|UART| V["ESP32-S3 Visitantes"]
+    M <-->|UART| E["ESP32-C3 Equipe"]
+    M <-->|UART| V["ESP32-C3 Visitantes"]
     E <-->|Wi-Fi / HTTP| PE["Navegador · painel técnico"]
     V <-->|Wi-Fi / HTTP| PV["Navegador · painel público"]
     M <-->|SPI2| SD["microSD · CSV e logs"]
@@ -46,11 +47,14 @@ envia telemetria e blocos de atualização; os satélites devolvem confirmaçõe
 e respostas. O navegador também envia consultas HTTP ao ESP da rede à qual
 está conectado e recebe as páginas e os dados.
 
-O mestre publica telemetria normal a 4 Hz. Cada satélite valida o quadro,
+O Mestre publica telemetria em intervalo nominal de 250 ms (4 Hz). O controle
+local tem ciclo nominal de 20 ms e o odômetro amostra as rodas a cada 20 ms.
+Mudar a frequência de consulta do painel ou da publicação UART não muda
+esses ritmos. Cada satélite valida o quadro,
 mantém o último retrato e devolve um ACK. A equipe também pode consultar e
 solicitar ações ao mestre pela UART; o painel público de visitantes expõe
 somente dados de telemetria e informações sobre o projeto. O mestre registra
-CSV a 1 Hz no cartão e envia os arquivos pendentes ao Google quando solicitado.
+CSV a 10 Hz no cartão e exporta uma amostra por segundo ao Google quando solicitado.
 O cartão também contém diagnóstico de baixa cadência e capturas detalhadas após
 falhas. Atualizações OTA podem atingir cada firmware separadamente ou todos em
 sequência, com os satélites primeiro. Um comando aceito não é, por si, uma
@@ -58,7 +62,7 @@ operação concluída: o painel acompanha o estado posterior de OTA e Google.
 
 | Informação | Onde nasce | Onde é vista | Persistência |
 |---|---|---|---|
-| Velocidade, aceleração e percurso | Sensores/odômetro ou simulador no mestre | OLED, terminal e painéis via UART | Amostra ao vivo; cópia CSV no SD a 1 Hz. |
+| Velocidade, aceleração e percurso | Sensores/odômetro ou simulador no mestre | OLED, terminal e painéis via UART | Amostra ao vivo; cópia CSV no SD a 10 Hz. |
 | Estado dos ESPs e dos enlaces | Diagnóstico local e respostas UART | Terminal e painel técnico da Equipe | Resumos e incidentes do mestre no log SD. |
 | Histórico dos gráficos | Amostras recebidas pelo navegador | Página aberta da Equipe ou de Visitantes | Somente na sessão do navegador; não recupera CSV do SD. |
 | Arquivos pendentes para Google | Registro CSV do mestre | Terminal e página Comandos | Permanecem no SD até confirmação do Web App. |
@@ -77,8 +81,8 @@ operação concluída: o painel acompanha o estado posterior de OTA e Google.
 | [`versoes`](../versoes/) | Estado do último release preparado; `saida` e `historico` guardam artefatos locais de publicação. |
 
 Cada pasta de `firmware` é um projeto PlatformIO com ESP-IDF. O mestre usa
-ESP32-S3-WROOM-1-N16R8, com 16 MB de flash e 8 MB de PSRAM; cada satélite usa
-4 MB de flash com duas partições OTA de aplicação.
+ESP32-S3-WROOM-1-N16R8, com 16 MiB de flash e 8 MiB de PSRAM. Equipe e
+Visitantes usam ESP32-C3 SuperMini Plus de 4 MiB, com duas partições OTA.
 Os arquivos sob `hardware` registram referências físicas; consulte o
 [inventário das revisões](hardware.md) antes de tomar um esquema como revisão
 validada da montagem.
@@ -89,8 +93,8 @@ Instale Python e PlatformIO. Na raiz do repositório, execute um alvo por vez:
 
 ```powershell
 pio run -d firmware\mestre-s3 -e mestre-s3-n16r8
-pio run -d firmware\equipe-s3 -e esp32-s3-devkitm-1
-pio run -d firmware\visitantes-s3 -e esp32-s3-devkitm-1
+pio run -d firmware\equipe-s3 -e esp32-c3-supermini-plus
+pio run -d firmware\visitantes-s3 -e esp32-c3-supermini-plus
 ```
 
 Para gravar por cabo, acrescente `-t upload` ao comando do alvo. A primeira
@@ -111,11 +115,12 @@ o cabeçalho local de credenciais.
 
 - Na rede `NEXUS-Equipe`, abra `http://192.168.4.1/` por HTTP. As rotas
   `/painel`, `/diagnostico` e `/mestre` entregam a mesma interface com sete
-  páginas: **Telemetria, Comandos, Controle, ESP32 — Mestre, ESP32 — Equipe,
-  ESP32 — Visitantes e Sobre**. Comandos reúne Wi-Fi, OTA e Google; Controle
-  apresenta faixa de marcha, sentido, limites, acelerador e parada remota. O
-  mestre valida e acompanha esses comandos, mas ainda não aciona motor, DAC
-  ou relé. As páginas dos ESPs apresentam diagnóstico. O AP da Equipe não
+  páginas de **Telemetria, Controle, Comandos, Mestre, Equipe, Visitantes e
+  Sobre**. Comandos reúne diagnóstico, rede e operações. Controle apresenta
+  permissões, limites, pedal e parada remota. O Mestre valida as solicitações
+  e publica o estado lógico. A saída de tração e os GPIOs de atuação estão
+  desabilitados na configuração atual. As páginas dos ESPs apresentam
+  diagnóstico. O AP da Equipe não
   oferece DNS local; o anúncio do portal pelo DHCP depende do cliente.
 - Na rede `NEXUS-Visitantes`, abra `http://192.168.4.1/`. O DNS cativo
   responde consultas IPv4 com esse IP quando a tarefa DNS está disponível. A
@@ -127,6 +132,9 @@ limitações dos dados reais e simulados estão no [guia dos satélites](satelit
 No painel da Equipe, consultas e comandos ficam disponíveis aos clientes
 conectados ao AP. Alterações protegidas do Wi-Fi do mestre ainda exigem sua
 permissão própria. Consulte [APIs e comandos](satelites.md).
+
+Para conferir a interface sem os ESPs, abra a [prévia local de cada painel](ferramentas.md#prévias-da-equipe-e-de-visitantes).
+Ela oferece acesso só no computador ou pela rede local para testar no celular.
 
 ## Uso durante um teste
 

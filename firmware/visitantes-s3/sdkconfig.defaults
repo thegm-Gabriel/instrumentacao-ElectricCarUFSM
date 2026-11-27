@@ -1,7 +1,23 @@
-# Define rollback e a memória usada pelas duas partições OTA dos visitantes.
+# Flash e OTA do ESP32-C3 SuperMini Plus.
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
-CONFIG_APP_ROLLBACK_ENABLE=y
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_40M=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="particoes_ota.csv"
+
+# O USB nativo fica com o console. A UART1 é dedicada ao Mestre.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_FREERTOS_UNICORE=y
+
+# Limita a memória de pico do Wi-Fi, mantendo a capacidade de associação do AP.
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=8
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16
+# Sete clientes HTTP, três sockets internos e um para DNS cativo.
+CONFIG_LWIP_MAX_SOCKETS=11
+
+# Mantém as estatísticas do único núcleo para o diagnóstico remoto.
 CONFIG_FREERTOS_USE_TRACE_FACILITY=y
 CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
 CONFIG_FREERTOS_RUN_TIME_COUNTER_TYPE_U64=y

@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "esp_err.h"
+#include "protocolo_comandos.h"
 
 #define WIFI_AP_CLIENTES_CAPACIDADE 10
 typedef struct {
@@ -17,7 +18,11 @@ typedef struct {
     cliente_wifi_ap_t clientes[WIFI_AP_CLIENTES_CAPACIDADE];
 } situacao_clientes_wifi_t;
 
-esp_err_t gerenciador_wifi_iniciar(void);
 esp_err_t gerenciador_wifi_obter_clientes(situacao_clientes_wifi_t *saida);
 esp_err_t gerenciador_wifi_definir_limite_sessao(uint16_t minutos);
+esp_err_t gerenciador_wifi_salvar_perfil(const perfil_radio_satelite_t *perfil);
+esp_err_t gerenciador_wifi_consultar_perfil(resposta_radio_satelite_t *dados);
 esp_err_t gerenciador_wifi_desconectar_cliente(const uint8_t mac[6]);
+esp_err_t gerenciador_wifi_obter_total_clientes(uint8_t *total);
+
+esp_err_t gerenciador_wifi_iniciar(void);

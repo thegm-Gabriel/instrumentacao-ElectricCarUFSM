@@ -1,4 +1,4 @@
-// Declara a interface compartilhada de comandos executados nos satélites.
+// Declara o serviço de comandos entre a Equipe e o Mestre.
 #pragma once
 
 #include <stddef.h>
@@ -49,13 +49,7 @@ esp_err_t servico_comandos_satelite_iniciar(
 void servico_comandos_satelite_processar_quadro(const uint8_t *quadro,
                                                   size_t tamanho);
 
-esp_err_t servico_comandos_satelite_solicitar(
-    codigo_comando_t comando, const void *carga, uint16_t tamanho_carga,
-    void *resposta, size_t capacidade_resposta, uint16_t *tamanho_resposta,
-    codigo_resposta_comando_t *resultado, TickType_t tempo_limite);
-
-// Variante genérica que também informa o identificador usado no protocolo,
-// a duração total e quantas tentativas foram necessárias.
+// Envia um comando ao Mestre e informa o identificador, a duração e as tentativas.
 esp_err_t servico_comandos_satelite_solicitar_detalhado(
     codigo_comando_t comando, const void *carga, uint16_t tamanho_carga,
     void *resposta, size_t capacidade_resposta, uint16_t *tamanho_resposta,

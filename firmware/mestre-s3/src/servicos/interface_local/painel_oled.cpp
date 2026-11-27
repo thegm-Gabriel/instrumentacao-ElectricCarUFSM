@@ -34,6 +34,12 @@ constexpr uint32_t CAUSAS_EXIBIVEIS[] = {
     CausaSaudeHeapCritico,
     CausaSaudeMemoriaBaixa,
     CausaSaudePilhaCritica,
+    CausaSaudeSaidasTracao,
+    CausaSaudeDacIndisponivel,
+    CausaSaudePedalIndisponivel,
+    CausaSaudeMpuSemCalibracao,
+    CausaSaudeEncodersDivergentes,
+    CausaSaudeVelocidadeIndisponivel,
     CausaSaudeSensor,
     CausaSaudeI2c,
     CausaSaudeUart,
@@ -190,6 +196,7 @@ bool estado_reserva_tela(EstadoSinalizacao estado) {
     return estado == EstadoSinalizacao::Inicializando ||
            estado == EstadoSinalizacao::OtaVerificando ||
            estado == EstadoSinalizacao::OtaBaixando ||
+           estado == EstadoSinalizacao::OtaValidando ||
            estado == EstadoSinalizacao::Falha;
 }
 
@@ -278,6 +285,29 @@ std::size_t montar_alerta(LinhasPainel& linhas, EstadoSinalizacao estado,
             std::snprintf(linhas[3], TAMANHO_LINHA, "ERROS: %lu",
                           static_cast<unsigned long>(saude.erros_sensores));
             copiar_linha(linhas[4], "VERIFIQUE CONEXOES");
+            break;
+        case CausaSaudeEncodersDivergentes:
+            copiar_linha(linhas[2], "ENCODERS DIVERGENTES");
+            copiar_linha(linhas[3], "VERIFIQUE AS RODAS");
+            break;
+        case CausaSaudeVelocidadeIndisponivel:
+            copiar_linha(linhas[2], "SEM VELOCIDADE VALIDA");
+            copiar_linha(linhas[3], "VERIFIQUE OS ENCODERS");
+            break;
+        case CausaSaudeDacIndisponivel:
+            copiar_linha(linhas[2], "DAC INDISPONIVEL");
+            copiar_linha(linhas[3], "VERIFIQUE MCP4725");
+            break;
+        case CausaSaudeSaidasTracao:
+            copiar_linha(linhas[2], "FALHA NAS SAIDAS");
+            copiar_linha(linhas[3], "TRACAO BLOQUEADA");
+            break;
+        case CausaSaudePedalIndisponivel:
+            copiar_linha(linhas[2], "SEM LEITURA DO PEDAL");
+            break;
+        case CausaSaudeMpuSemCalibracao:
+            copiar_linha(linhas[2], "MPU SEM CALIBRACAO");
+            copiar_linha(linhas[3], "MANTENHA O CARRO PARADO");
             break;
         case CausaSaudeI2c:
             copiar_linha(linhas[2], "FALHA NO BARRAMENTO I2C");
@@ -391,6 +421,9 @@ const char* nome_estado_satelite_curto(EstadoOtaSatelite estado) {
         case EstadoOtaSatelite::Transferindo: return "ENV";
         case EstadoOtaSatelite::Reiniciando: return "RST";
         case EstadoOtaSatelite::Concluido: return "OK";
+        case EstadoOtaSatelite::EmObservacao: return "OBS";
+        case EstadoOtaSatelite::Retornou: return "EXEC";
+        case EstadoOtaSatelite::Revertido: return "REV";
         case EstadoOtaSatelite::Cancelado: return "CANC";
         case EstadoOtaSatelite::Desconhecido: return "?";
     }
@@ -443,9 +476,12 @@ std::size_t montar_pagina_saudavel(LinhasPainel& linhas,
         std::snprintf(linhas[2], TAMANHO_LINHA, "VEL: %hu.%hu KM/H",
                       static_cast<uint16_t>(velocidade / 10u),
                       static_cast<uint16_t>(velocidade % 10u));
-        std::snprintf(linhas[3], TAMANHO_LINHA, "BATERIA: %hu.%hu%%",
-                      static_cast<uint16_t>(carga / 10u),
-                      static_cast<uint16_t>(carga % 10u));
+        if (dados.simulado || dados.soc_estimado)
+            std::snprintf(linhas[3], TAMANHO_LINHA, "BATERIA: %hu.%hu%%",
+                          static_cast<uint16_t>(carga / 10u),
+                          static_cast<uint16_t>(carga % 10u));
+        else
+            copiar_linha(linhas[3], "BATERIA: SEM EST.");
         std::snprintf(linhas[4], TAMANHO_LINHA, "TENSAO: %hu.%hu V",
                       static_cast<uint16_t>(converter_decimos(
                           dados.tensao_pacote_v, 9999u) / 10u),
@@ -620,7 +656,7 @@ std::size_t montar_conteudo(EstadoSinalizacao estado, LinhasPainel& linhas,
     if (estado == EstadoSinalizacao::Falha) {
         return montar_alerta(linhas, estado, saude, ota);
     }
-    if (registro.sincronizacao_em_andamento) {
+    if (registro.sincronizacao_em_andamento && !estado_reserva_tela(estado)) {
         return montar_upload_google(registro, wifi, linhas,
                                     progresso_decimos);
     }
@@ -729,13 +765,18 @@ std::size_t montar_conteudo(EstadoSinalizacao estado, LinhasPainel& linhas,
                 *progresso_decimos = static_cast<int>(ota.progresso.percentual_decimos);
                 return 7;
             }
+        case EstadoSinalizacao::OtaValidando:
+            copiar_linha(linhas[1], "OTA | VALIDACAO");
+            copiar_linha(linhas[3], ota.validacao_mestre == EstadoValidacaoOta::EmObservacao
+                ? "EM OBSERVACAO" : "VALIDANDO FIRMWARE");
+            copiar_linha(linhas[5], "AGUARDE");
+            return 6;
         case EstadoSinalizacao::OtaConcluido:
             copiar_linha(linhas[1], "OTA CONCLUIDA");
-            std::snprintf(linhas[2], TAMANHO_LINHA, "ALVO: %.12s",
-                          servico_ota_nome_alvo(ota.alvo_ativo));
-            copiar_linha(linhas[4], "FIRMWARE VALIDADO");
-            copiar_linha(linhas[6], "REINICIANDO...");
-            return 7;
+            if (ota.ultimo_alvo_concluido != AlvoOta::Nenhum)
+                std::snprintf(linhas[2], TAMANHO_LINHA, "ALVO: %.12s",
+                              servico_ota_nome_alvo(ota.ultimo_alvo_concluido));
+            return 3;
         case EstadoSinalizacao::OtaFalha:
             return montar_alerta(linhas, estado, saude, ota);
         case EstadoSinalizacao::Aviso:

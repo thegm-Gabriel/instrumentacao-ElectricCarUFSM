@@ -1,5 +1,5 @@
 // Implementa a recepção, validação e aplicação de firmware OTA no satélite.
-#include "servico_ota_satelite.h"
+#include "servicos/ota_satelite.h"
 
 #include <string.h>
 
@@ -23,6 +23,7 @@ static esp_ota_handle_t manipulador_ota;
 static uint8_t sha256_esperado[OTA_SATELITE_TAMANHO_SHA256];
 static uint32_t proxima_sequencia;
 static int64_t ultimo_dado_ms;
+static bool firmware_em_observacao;
 
 static void copiar_situacao(situacao_servico_ota_satelite_t *destino)
 {
@@ -283,6 +284,22 @@ static esp_err_t finalizar_transferencia(
     return ESP_OK;
 }
 
+static bool firmware_pendente(void)
+{
+    const esp_partition_t *execucao = esp_ota_get_running_partition();
+    esp_ota_img_states_t estado = ESP_OTA_IMG_UNDEFINED;
+    return execucao != NULL && esp_ota_get_state_partition(execucao, &estado) == ESP_OK &&
+           estado == ESP_OTA_IMG_PENDING_VERIFY;
+}
+
+bool servico_ota_satelite_firmware_em_observacao(void)
+{
+    portENTER_CRITICAL(&trava);
+    const bool pendente = firmware_em_observacao;
+    portEXIT_CRITICAL(&trava);
+    return pendente;
+}
+
 esp_err_t servico_ota_satelite_iniciar(
     const configuracao_servico_ota_satelite_t *configuracao)
 {
@@ -292,9 +309,11 @@ esp_err_t servico_ota_satelite_iniciar(
     }
     configuracao_atual = *configuracao;
     limpar_transferencia();
+    const bool pendente = firmware_pendente();
     portENTER_CRITICAL(&trava);
     situacao = (situacao_servico_ota_satelite_t){0};
     situacao.iniciado = true;
+    firmware_em_observacao = pendente;
     situacao.ultimo_erro = ESP_OK;
     portEXIT_CRITICAL(&trava);
     ESP_LOGI(TAG, "%s: receptor OTA pela UART pronto; firmware atual=%s",
@@ -305,11 +324,7 @@ esp_err_t servico_ota_satelite_iniciar(
 esp_err_t servico_ota_satelite_confirmar_firmware_em_execucao(void)
 {
     esp_err_t erro = ESP_OK;
-    const esp_partition_t *execucao = esp_ota_get_running_partition();
-    esp_ota_img_states_t estado_imagem = ESP_OTA_IMG_UNDEFINED;
-    if (execucao != NULL &&
-        esp_ota_get_state_partition(execucao, &estado_imagem) == ESP_OK &&
-        estado_imagem == ESP_OTA_IMG_PENDING_VERIFY) {
+    if (firmware_pendente()) {
         erro = esp_ota_mark_app_valid_cancel_rollback();
     }
     if (erro != ESP_OK) {
@@ -318,6 +333,9 @@ esp_err_t servico_ota_satelite_confirmar_firmware_em_execucao(void)
                  esp_err_to_name(erro));
         return erro;
     }
+    portENTER_CRITICAL(&trava);
+    firmware_em_observacao = false;
+    portEXIT_CRITICAL(&trava);
     return ESP_OK;
 }
 

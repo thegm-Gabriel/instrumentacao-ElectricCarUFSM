@@ -7,7 +7,7 @@
 #include <cstring>
 
 #include "esp_log.h"
-#include "esp_timer.h"
+#include "nucleo/tempo.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -342,17 +342,13 @@ esp_err_t salvar_perfis(const ConfiguracaoPerfis& origem) {
 
 }  // namespace persistencia
 
-int64_t agora_ms() {
-    return esp_timer_get_time() / 1000;
-}
-
 esp_err_t aplicar_perfil(const PerfilWifi& perfil,
                          const PoliticaConexaoWifi& politica,
                          int64_t instante_limite_ms) {
     esp_err_t ultimo_erro = ESP_ERR_TIMEOUT;
     for (uint8_t tentativa = 1; tentativa <= politica.tentativas_por_rede;
          ++tentativa) {
-        const int64_t restante_ms = instante_limite_ms - agora_ms();
+        const int64_t restante_ms = instante_limite_ms - tempo_monotonico::agora_ms();
         if (restante_ms <= 0) return ESP_ERR_TIMEOUT;
 
         const uint32_t tempo_tentativa_ms = std::min(
@@ -373,7 +369,8 @@ esp_err_t aplicar_perfil(const PerfilWifi& perfil,
                  static_cast<unsigned>(tentativa), esp_err_to_name(ultimo_erro));
         if (tentativa == politica.tentativas_por_rede) break;
 
-        const int64_t restante_apos_tentativa = instante_limite_ms - agora_ms();
+        const int64_t restante_apos_tentativa =
+            instante_limite_ms - tempo_monotonico::agora_ms();
         if (restante_apos_tentativa <= 0) return ESP_ERR_TIMEOUT;
         const uint32_t pausa_ms = std::min(
             politica.intervalo_entre_tentativas_ms,
@@ -388,7 +385,7 @@ esp_err_t testar_perfil_e_desligar(const PerfilWifi& perfil) {
     reiniciar_contador_tentativas();
     const esp_err_t resultado = aplicar_perfil(
         perfil, copia.politica,
-        agora_ms() + copia.politica.tempo_limite_sessao_ms);
+        tempo_monotonico::agora_ms() + copia.politica.tempo_limite_sessao_ms);
     if (resultado == ESP_OK) {
         const EstadoWifi estado = gerenciador_wifi_obter_estado();
         ESP_LOGI(ETIQUETA, "Rede '%s' validada; RSSI=%d dBm, canal=%u",
@@ -505,14 +502,19 @@ esp_err_t servico_wifi_iniciar() {
     return ESP_OK;
 }
 
-esp_err_t servico_wifi_abrir_sessao(FinalidadeSessaoWifi finalidade) {
+esp_err_t servico_wifi_abrir_sessao(FinalidadeSessaoWifi finalidade, bool* ocupado) {
+    if (ocupado != nullptr) *ocupado = false;
     if (finalidade == FinalidadeSessaoWifi::Nenhuma) return ESP_ERR_INVALID_ARG;
     if (mutex_alteracoes == nullptr) return ESP_ERR_INVALID_STATE;
     BloqueioAlteracoes bloqueio;
-    if (!bloqueio.adquirido()) return ESP_ERR_TIMEOUT;
+    if (!bloqueio.adquirido()) {
+        if (ocupado != nullptr) *ocupado = true;
+        return ESP_ERR_TIMEOUT;
+    }
     const EstadoServicoWifi estado_atual = copiar_estado_servico();
     if (!estado_atual.iniciado) return ESP_ERR_INVALID_STATE;
     if (estado_atual.sessao_em_andamento) {
+        if (ocupado != nullptr) *ocupado = true;
         ESP_LOGW(
             ETIQUETA,
             "Sessão para %s recusada: Wi-Fi reservado para %s",
@@ -528,7 +530,7 @@ esp_err_t servico_wifi_abrir_sessao(FinalidadeSessaoWifi finalidade) {
 
     const ConfiguracaoPerfis copia = copiar_perfis();
     const int64_t instante_limite =
-        agora_ms() + copia.politica.tempo_limite_sessao_ms;
+        tempo_monotonico::agora_ms() + copia.politica.tempo_limite_sessao_ms;
     const PerfilWifi principal = obter_principal(copia);
     const bool usar_autorizacao = existe_perfil_autorizado_uma_vez;
     const PerfilWifi perfil_autorizado = perfil_autorizado_uma_vez;
@@ -572,7 +574,7 @@ esp_err_t servico_wifi_abrir_sessao(FinalidadeSessaoWifi finalidade) {
                      candidatos[indice].ssid);
             return ESP_OK;
         }
-        if (agora_ms() >= instante_limite) break;
+        if (tempo_monotonico::agora_ms() >= instante_limite) break;
     }
     if (resultado_busca == ESP_OK && !alguma_vista)
         ESP_LOGW(ETIQUETA, "Nenhuma rede Wi-Fi salva/autorizada foi encontrada na varredura");
@@ -588,6 +590,19 @@ esp_err_t servico_wifi_abrir_sessao(FinalidadeSessaoWifi finalidade) {
     ESP_LOGE(ETIQUETA, "Nenhuma rede Wi-Fi autorizada conectou; último erro: %s",
              esp_err_to_name(ultimo_erro));
     return ultimo_erro;
+}
+
+esp_err_t servico_wifi_restabelecer_sessao(FinalidadeSessaoWifi finalidade,
+                                            uint32_t tempo_limite_ms) {
+    if (finalidade == FinalidadeSessaoWifi::Nenhuma) return ESP_ERR_INVALID_ARG;
+    if (mutex_alteracoes == nullptr) return ESP_ERR_INVALID_STATE;
+    BloqueioAlteracoes bloqueio;
+    if (!bloqueio.adquirido()) return ESP_ERR_TIMEOUT;
+    const EstadoServicoWifi atual = copiar_estado_servico();
+    if (!atual.iniciado || !atual.sessao_em_andamento || atual.finalidade_sessao != finalidade) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    return gerenciador_wifi_reconectar(pdMS_TO_TICKS(tempo_limite_ms));
 }
 
 esp_err_t servico_wifi_encerrar_sessao(FinalidadeSessaoWifi finalidade) {

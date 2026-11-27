@@ -8,6 +8,9 @@ import unittest
 from contextlib import redirect_stderr
 from unittest.mock import patch
 
+from ferramentas.criar_manifesto_ota import (
+    CHIP_ESP32_C3, CHIP_ESP32_S3, obter_sha256_imagem,
+)
 from ferramentas.preparar_release_ota import (
     calcular_impressao_digital,
     calcular_novas_versoes,
@@ -15,6 +18,16 @@ from ferramentas.preparar_release_ota import (
     incrementar_versao,
     main,
 )
+
+
+class ImagemOtaTest(unittest.TestCase):
+    def test_imagem_s3_nao_e_aceita_para_satelite_c3(self):
+        imagem = bytearray(56)
+        imagem[0] = 0xE9
+        imagem[12:14] = CHIP_ESP32_S3.to_bytes(2, "little")
+        self.assertEqual(len(obter_sha256_imagem(imagem, CHIP_ESP32_S3)), 64)
+        with self.assertRaisesRegex(ValueError, "esperado 0x0005"):
+            obter_sha256_imagem(imagem, CHIP_ESP32_C3)
 
 
 class VersoesSemVerTest(unittest.TestCase):
@@ -110,15 +123,20 @@ class VersoesSemVerTest(unittest.TestCase):
         with TemporaryDirectory(prefix=".tmp-release-", dir=Path(__file__).resolve().parents[2]) as pasta:
             raiz = Path(pasta)
             equipe = raiz / "firmware" / "equipe-s3"
+            visitantes = raiz / "firmware" / "visitantes-s3"
             mestre = raiz / "firmware" / "mestre-s3"
             logo = raiz / "firmware" / "compartilhado" / "web" / "logo_carro_eletrico.png"
             (equipe / "web").mkdir(parents=True)
+            (visitantes / "web").mkdir(parents=True)
             mestre.mkdir(parents=True)
             logo.parent.mkdir(parents=True)
             pagina = equipe / "web" / "app.js"
             pagina.write_text("const valor = 1;", encoding="utf-8")
             logo.write_bytes(b"logo inicial")
+            logo_publico = visitantes / "web" / "logo_carro_eletrico.webp"
+            logo_publico.write_bytes(b"logo publico inicial")
             antes_equipe = calcular_impressao_digital(raiz, equipe)
+            antes_visitantes = calcular_impressao_digital(raiz, visitantes)
             antes_mestre = calcular_impressao_digital(raiz, mestre)
             pagina.write_text("const valor = 2;", encoding="utf-8")
             self.assertNotEqual(antes_equipe, calcular_impressao_digital(raiz, equipe))
@@ -126,6 +144,12 @@ class VersoesSemVerTest(unittest.TestCase):
             depois_pagina = calcular_impressao_digital(raiz, equipe)
             logo.write_bytes(b"logo atualizado")
             self.assertNotEqual(depois_pagina, calcular_impressao_digital(raiz, equipe))
+            self.assertEqual(antes_visitantes, calcular_impressao_digital(raiz, visitantes))
+            self.assertEqual(antes_mestre, calcular_impressao_digital(raiz, mestre))
+            depois_logo = calcular_impressao_digital(raiz, equipe)
+            logo_publico.write_bytes(b"logo publico atualizado")
+            self.assertNotEqual(antes_visitantes, calcular_impressao_digital(raiz, visitantes))
+            self.assertEqual(depois_logo, calcular_impressao_digital(raiz, equipe))
             self.assertEqual(antes_mestre, calcular_impressao_digital(raiz, mestre))
 
 

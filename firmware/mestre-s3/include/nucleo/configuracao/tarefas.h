@@ -22,7 +22,7 @@ struct PoliticaTarefa {
 inline constexpr PoliticaTarefa TAREFAS[] = {
     // Controle e recuperação
     // Nome                  Pilha   Prio. Núcleo
-    {"controle_remoto",     4096,  9, 1},
+    {"controle_remoto",     4096, 10, 1},
     {"supervisao",          3072,  8, tskNO_AFFINITY},
     {"recuperacao",         6144,  4, tskNO_AFFINITY},
 
@@ -34,7 +34,9 @@ inline constexpr PoliticaTarefa TAREFAS[] = {
     {"enlace_equipe",       8192,  6, 1},
     {"enlace_visitantes",   8192,  6, 1},
     {"aceleracao",          4096,  6, 1},
+    {"odometro",            4096,  8, 1},
     {"telemetria",          6144,  5, 1},
+    {"sensores",            4096,  5, 0},
     {"acoes_mestre",        6144,  5, tskNO_AFFINITY},
     {"ota_uart_pipeline",   6144,  5, 1},
 

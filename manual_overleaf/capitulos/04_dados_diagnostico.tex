@@ -43,7 +43,9 @@ A RAM interna é o recurso mais restrito durante Wi-Fi e HTTPS: as tarefas têm 
 O mestre espera 8\,MiB de PSRAM. O histórico de saúde mantém 120 amostras a 1\,Hz nela; quando não está disponível, tenta uma versão reduzida de 30 amostras na RAM interna. Outros caminhos, como partes do pipeline OTA, também tentam PSRAM e registram quando recuam para RAM interna. Essa política permite continuar funções essenciais, mas diminui a margem de memória; não comprova que toda carga simultânea foi validada sem PSRAM. O registro CSV e o upload executam tarefas separadas no núcleo 0, enquanto aquisição e enlaces prioritários ficam configurados no núcleo 1. Essa distribuição reduz disputa, mas não transforma escrita em SD, rede e alocação em operações de tempo determinístico.
 
 \section{Caminho de uma amostra até o arquivo}\label{sec:csv_fluxo}
-O retrato ao vivo é produzido a 4\,Hz. A tarefa de histórico seleciona uma amostra por segundo, coloca-a em uma fila de 24 posições e deixa uma única tarefa proprietária da escrita de CSV. A fila absorve atrasos curtos do cartão; se a escrita ficar atrasada por mais tempo, amostras podem ser descartadas e o contador de perdas deve ser examinado. A separação impede que o tempo de resposta do cartão bloqueie diretamente o ciclo de aquisição. Os gráficos abertos no navegador contêm apenas o que aquela página recebeu e não são substitutos do arquivo local.
+O retrato ao vivo é produzido nominalmente a 4\,Hz, a partir das últimas amostras de cada serviço. O ciclo de registro coleta um retrato a cada 100\,ms e o encaminha para uma fila de 24 posições. O registrador monta o cartão nas novas tentativas e é dono da escrita. Se a fila encher, o contador de perdas indica amostras descartadas. O histórico do navegador abrange a sessão da página. O CSV no microSD segue o registro de bordo.
+
+Se o cartão não montar ou acumular três falhas de gravação, o registrador programa nova montagem após 30\,s. Se faltar memória para iniciar o registrador, a supervisão tenta criar novamente suas tarefas. A inicialização normal pode ler o backup antes dos serviços de configuração. Quando a inicialização é recuperada mais tarde, o registrador assume a montagem e as verificações disponíveis naquele momento.
 
 \begin{figure}[htbp]\centering
 \begin{tikzpicture}[
@@ -52,12 +54,12 @@ O retrato ao vivo é produzido a 4\,Hz. A tarefa de histórico seleciona uma amo
     text width=10.6cm,minimum height=11mm,inner sep=5pt,font=\small},
   seta/.style={->,line width=0.9pt,draw=accent}
 ]
-\node[etapa] (origem) {\textbf{Telemetria · 4\,Hz}\\Retrato do Mestre com aquisição, cálculo e indicação de validade.};
-\node[etapa,below=of origem] (fila) {\textbf{Histórico · 1\,Hz}\\Amostra selecionada, fila de 24 posições e um único gravador.};
+\node[etapa] (origem) {\textbf{Aquisição}\\Retrato do Mestre com aquisição, cálculo e indicação de validade.};
+\node[etapa,below=of origem] (fila) {\textbf{Histórico · 10\,Hz}\\Amostra selecionada, fila de 24 posições e um único gravador.};
 \node[etapa,below=of fila] (ativo) {\textbf{Arquivo ativo}\\microSD: \texttt{.tmp}, sincronizado aproximadamente a cada 10\,s.};
 \node[etapa,below=of ativo] (pendente) {\textbf{Arquivo pendente}\\Fechamento após 1\,h, 8\,MiB ou pedido de envio; passa a \texttt{.csv}.};
-\node[etapa,below=of pendente] (google) {\textbf{Envio e confirmação}\\Upload HTTPS solicitado manualmente; o Web App confirma o arquivo exato.};
-\node[etapa,below=of google] (enviado) {\textbf{Arquivo enviado}\\Movido para \texttt{enviados/}; original no Drive e linhas na planilha.};
+\node[etapa,below=of pendente] (google) {\textbf{Envio e confirmação}\\O mestre envia uma cópia a 1\,Hz por HTTPS; o Web App confirma o nome do arquivo.};
+\node[etapa,below=of google] (enviado) {\textbf{Arquivo enviado}\\CSV completo em \texttt{enviados/}; cópia a 1\,Hz no Drive e na planilha.};
 \draw[seta] (origem.south)--(fila.north);
 \draw[seta] (fila.south)--(ativo.north);
 \draw[seta] (ativo.south)--(pendente.north);
@@ -99,7 +101,7 @@ O microSD protege alguns ajustes contra ausência de chaves NVS, mas não fornec
 \end{nota}
 
 \section{Preparação da integração com Google Apps Script}\label{sec:google_config}
-O envio foi deliberadamente colocado fora do ciclo em tempo real e começa por pedido do operador. O destino é uma pasta do Google Drive com os CSVs originais e uma planilha \texttt{telemetria\_carro} na mesma pasta. Cada sessão de partida recebe uma aba \texttt{sessao\_XXXXXXXX}; a coluna \texttt{arquivo\_origem} vincula cada linha ao CSV de origem. O ESP não executa OAuth interativo: o Web App roda com as permissões da conta que o publicou. Como o acesso do aplicativo precisa permitir requisições sem login Google no ESP, um token compartilhado longo constitui a autorização efetiva. URL e token devem permanecer fora do repositório público e de capturas de log.
+O envio foi deliberadamente colocado fora do ciclo em tempo real e começa por pedido do operador. O destino é uma pasta do Google Drive com os CSVs exportados a 1\,Hz e uma planilha \texttt{telemetria\_carro} na mesma pasta. Cada sessão de partida recebe uma aba \texttt{sessao\_XXXXXXXX}; a coluna \texttt{arquivo\_origem} vincula cada linha ao CSV de origem. O ESP não executa OAuth interativo: o Web App roda com as permissões da conta que o publicou. Como o acesso do aplicativo precisa permitir requisições sem login Google no ESP, um token compartilhado longo constitui a autorização efetiva. URL e token devem permanecer fora do repositório público e de capturas de log.
 
 \begin{enumerate}
 \item Crie, na conta que conservará os dados, uma pasta no Drive e copie o \emph{ID} presente no endereço da pasta; o nome visível não é o ID.
@@ -112,9 +114,9 @@ O envio foi deliberadamente colocado fora do ciclo em tempo real e começa por p
 O script \path{ferramentas/gerar_segredos_ota.py} gera somente as macros iniciais de Wi-Fi e \emph{sobrescreve} o cabeçalho privado. Depois de adicionar URL e token Google, edite o cabeçalho diretamente para não perdê-los. O arquivo real é local e ignorado pelo Git; o manual não contém credenciais reais. O token deve ser tratado como segredo operacional: se for exposto, troque-o no Apps Script e no firmware mestre, reconstrua e grave uma nova versão.
 
 \subsection{Protocolo de envio, confirmação e duplicatas}\label{sec:google_fluxo}
-O operador pode solicitar sincronização pelo terminal serial do mestre a 115200\,baud ou pela página \emph{Comandos} do ESP da Equipe, depois de habilitar acesso administrativo. A página de Visitantes não tem esse comando. O mestre não inicia dois envios simultâneos nem toma uma sessão Wi-Fi já ocupada por outra operação. Ele fecha o CSV atual, abre uma sessão temporária da estação Wi-Fi na rede externa, enumera os \texttt{.csv} pendentes e faz um \texttt{POST} HTTPS por arquivo. O conteúdo é transferido em blocos de 8192 bytes; o pedido inclui os parâmetros \texttt{arquivo} e \texttt{token}. A configuração prevê 60\,s de limite por upload, até quatro tentativas por arquivo e esperas crescentes entre tentativas. O painel mostra arquivo atual, bytes, porcentagem, taxa e resultado, mas o aceite inicial do comando significa apenas que a tarefa começou.
+O operador pode solicitar sincronização pelo terminal serial do mestre a 115200\,baud ou pela página \emph{Comandos} do ESP da Equipe, depois de habilitar acesso administrativo. A página de Visitantes não tem esse comando. O mestre não inicia dois envios simultâneos nem toma uma sessão Wi-Fi já ocupada por outra operação. Ele fecha o CSV atual, abre uma sessão temporária da estação Wi-Fi na rede externa, enumera os \texttt{.csv} pendentes e faz um \texttt{POST} HTTPS por arquivo. A primeira leitura de cada segundo é selecionada para a cópia temporária, transferida em blocos de 8192 bytes; o pedido inclui os parâmetros \texttt{arquivo} e \texttt{token}. A configuração prevê 60\,s de limite por upload, até quatro tentativas por arquivo e esperas crescentes entre tentativas. O painel mostra arquivo atual, bytes, porcentagem, taxa e resultado, mas o aceite inicial do comando significa apenas que a tarefa começou.
 
-O serviço segue o redirecionamento de resposta que o Google pode fazer para \texttt{script.googleusercontent.com}. A condição de sucesso é conjunta: código HTTP 200 \emph{e} corpo exatamente \texttt{OK:} seguido do mesmo nome de arquivo enviado. Somente depois disso o mestre move o arquivo para \path{/sdcard/telemetria/enviados}. Código 200 isolado, resposta parcial, página de login, \texttt{ERRO:*} ou confirmação de outro nome não são comprovantes. Se as quatro tentativas falharem, o CSV permanece pendente e o lote termina com erro. Se não existir arquivo pendente, a operação pode terminar com sucesso sem transferir bytes.
+O serviço segue o redirecionamento de resposta que o Google pode fazer para \path{script.googleusercontent.com}. A condição de sucesso é conjunta: código HTTP 200 \emph{e} corpo exatamente \texttt{OK:} seguido do mesmo nome de arquivo enviado. Somente depois disso o mestre move o arquivo para \path{/sdcard/telemetria/enviados}. Código 200 isolado, resposta parcial, página de login, \texttt{ERRO:*} ou confirmação de outro nome não são comprovantes. Se as quatro tentativas falharem, o CSV permanece pendente e o lote termina com erro. Se não existir arquivo pendente, a operação pode terminar com sucesso sem transferir bytes.
 
 O Apps Script verifica antes de inserir linhas se aquele nome já consta da aba da sessão e verifica antes de criar um CSV se o mesmo nome já existe na pasta. Isso torna a repetição do mesmo arquivo segura nos casos previstos: por exemplo, o Google pode ter gravado o arquivo mas a resposta se perder na rede, ou o mestre pode receber \texttt{OK} e falhar ao mover o arquivo no SD. Na próxima tentativa o nome permanece igual, e o script evita duplicar arquivo e linhas. A deduplicação depende desse nome estável e do script instalado; não resolve alteração manual do nome, mudança de pasta ou planilhas antigas, que não são migradas automaticamente.
 
@@ -152,7 +154,7 @@ O mestre mede sinal da rede externa apenas quando conectado. RSSI abaixo de --85
 \caption{Causas de saúde e observações relacionadas}\label{tab:causas-saude}
 \begin{tabularx}{\textwidth}{@{}l X X@{}}\toprule
 Causa & Detecção no código & Verificação útil\\\midrule
-Sensor & Erros consecutivos de MPU ou encoder. & Alimentação, endereço, cabo, eixo, contador e último erro.\\
+Sensor & Erros consecutivos em fontes ativas, como ADC, MPU, encoders e INA228. & Alimentação, endereço, cabo, eixo, contador e último erro.\\
 I\textsuperscript{2}C & Rajada de erros no barramento. & Pull-ups, nível alto, cabos, endereços e forma de onda.\\
 UART & Erros recentes ou novo descarte. & TX/RX/GND, baud, versão, CRC e fila.\\
 Satélite sem resposta & ACK ausente após início do fluxo. & Energia do satélite, idade, RTT e UART exclusiva.\\
@@ -160,7 +162,7 @@ Supervisão & Tarefa atrasada ou em recuperação. & Fase, último pulso, pilha,
 Memória/pilha & Limiar de RAM, PSRAM, maior bloco ou pilha. & Uso sob TLS/OTA/SD e maior alocação exigida.\\
 Wi-Fi fraco & RSSI persistentemente baixo na sessão. & Distância e obstáculos; manter registro do canal.\\
 OTA recente & Falha da última operação. & Alvo, etapa, erro, versão que voltou e manifesto.\\
-Persistência & Falha ao guardar odômetro/estado. & NVS, cartão e contadores; validar a classificação ativa em bancada.\\\bottomrule
+Persistência & A coleta atual registra total e último erro do odômetro. A causa de saúde exige dois erros consecutivos e a coleta expõe apenas zero ou um. & Conferir último erro, total de falhas e persistência pendente ao investigar a NVS.\\\bottomrule
 \end{tabularx}\end{table}
 
 \subsubsection{RAM, maior bloco livre e margem de pilha}
@@ -183,6 +185,6 @@ Durante uma sessão Wi-Fi, a OLED mostra rede ativa, RSSI, canal, tentativas, pr
 Uma fila fixa guarda mensagens curtas de sucesso, atenção ou erro. Eventos importantes reservam a tela; mensagens adiadas são mostradas depois, sem alocação dinâmica por aviso. Atualização disponível e falhas reaparecem em janelas, mas devolvem a tela às páginas normais entre lembretes. A tarefa só envia novo quadro ao SSD1306 quando o conteúdo muda; falha de atualização é contada e tentada novamente. Ausência da OLED não interrompe aquisição nem UART.
 
 \subsection{LEDs, buzzer, logs e onde investigar}
-Quatro LEDs e um buzzer passivo dão sinais mesmo sem navegador. Verde contínuo representa saúde; amarelo periódico, atenção; vermelho quase contínuo com breve pausa, falha crítica. Azul indica partida, Wi-Fi ou OTA por combinações distintas. O serviço escolhe prioridade entre saúde, operação, Google e atualização; a máquina de tons avança a cada 50\,ms sem travar a aquisição. Sons marcam transições, como sistema pronto, oferta OTA, conclusão ou erro. Wi-Fi de rotina e verificações periódicas silenciosas evitam alarmes repetitivos.
+Três saídas de LED e um buzzer passivo dão sinais mesmo sem navegador. Verde contínuo representa saúde; vermelho com verde periódicos, atenção; vermelho quase contínuo com breve pausa, falha crítica. Azul indica partida, Wi-Fi ou OTA por combinações distintas. O serviço escolhe prioridade entre saúde, operação, Google e atualização; a máquina de tons avança a cada 50\,ms sem travar a aquisição. Sons marcam transições, como sistema pronto, oferta OTA, conclusão ou erro. Wi-Fi de rotina e verificações periódicas silenciosas evitam alarmes repetitivos.
 
 O terminal serial traz o detalhe que não cabe na OLED. O menu de sensores permite pausar todas as leituras ou fontes individuais para depuração, inclusive o INA228; consultar o estado de pausa antes de atribuir ausência de dado a uma falha elétrica. O menu de logs ajusta o nível global e por serviço, incluindo um perfil que silencia as mensagens do ESP-IDF durante a operação e mantém avisos e erros dos serviços NEXUS. É possível restaurar o nível geral, silenciar todos os logs ou ligar/desligar cores ANSI. Esses ajustes são temporários e não apagam os contadores de falha nem substituem os registros do SD. O painel técnico consulta retratos compactos de CPU, memória, temperatura, tarefas e causas do mestre, além da saúde local da Equipe e da resposta de Visitantes. O SD guarda logs estruturados e uma janela de histórico pré-falha em PSRAM quando disponível; sem cartão, essa janela pode permanecer apenas em memória volátil. Em diagnóstico, anotar hora relativa ao boot, versão, estado dos três enlaces, últimos erros, causas ativas e arquivos brutos. Uma causa que desapareceu pode continuar no contador histórico, e um contador crescente não significa necessariamente falha presente.

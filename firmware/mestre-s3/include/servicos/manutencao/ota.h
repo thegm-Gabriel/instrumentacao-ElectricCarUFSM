@@ -37,6 +37,13 @@ enum class EstadoOtaSatelite : uint8_t {
     Concluido,
     Cancelado,
     Falha,
+    EmObservacao,
+    Retornou,
+    Revertido,
+};
+
+enum class EstadoValidacaoOta : uint8_t {
+    Inativa, Validando, EmObservacao, Concluida, Falha, Revertida,
 };
 
 struct ProgressoTransferenciaOta {
@@ -50,6 +57,7 @@ struct ProgressoTransferenciaOta {
 
 struct SituacaoOtaSatelite {
     EstadoOtaSatelite estado = EstadoOtaSatelite::Desconhecido;
+    bool acompanhando_validacao = false;
     char versao_atual[24] = {};
     char versao_disponivel[24] = {};
     ProgressoTransferenciaOta progresso;
@@ -67,6 +75,9 @@ struct SituacaoOta {
     esp_err_t ultimo_erro = ESP_OK;
     AlvoOta alvo_ativo = AlvoOta::Nenhum;
     AlvoOta ultimo_alvo_concluido = AlvoOta::Nenhum;
+    EstadoValidacaoOta validacao_mestre = EstadoValidacaoOta::Inativa;
+    int64_t periodo_validacao_inicio_us = 0;
+    int64_t periodo_validacao_fim_us = 0;
     ProgressoTransferenciaOta progresso;
     SituacaoOtaSatelite equipe;
     SituacaoOtaSatelite visitantes;
@@ -74,6 +85,8 @@ struct SituacaoOta {
 
 esp_err_t servico_ota_iniciar();
 esp_err_t servico_ota_confirmar_firmware_em_execucao();
+void servico_ota_informar_validacao_mestre(EstadoValidacaoOta estado,
+                                         uint32_t duracao_ms = 0);
 esp_err_t servico_ota_rejeitar_firmware_em_execucao();
 esp_err_t servico_ota_solicitar_verificacao();
 esp_err_t servico_ota_autorizar_atualizacao();

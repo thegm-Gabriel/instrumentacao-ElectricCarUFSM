@@ -23,7 +23,6 @@ static UBaseType_t ids_anteriores[MAXIMO_TAREFAS_DIAGNOSTICO];
 static UBaseType_t quantidade_anterior;
 static int64_t coleta_anterior_us;
 static uint32_t menor_heap_interno = UINT32_MAX;
-static uint32_t menor_psram = UINT32_MAX;
 
 static configRUN_TIME_COUNTER_TYPE tempo_anterior_da_tarefa(
     UBaseType_t identificador, bool *encontrada)
@@ -79,16 +78,7 @@ diagnostico_sistema_t diagnostico_sistema_obter(void)
         menor_heap_interno = resultado.heap_interno_livre;
     }
     resultado.heap_interno_minimo = menor_heap_interno;
-    resultado.psram_total = heap_caps_get_total_size(
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    resultado.psram_livre = heap_caps_get_free_size(
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    resultado.psram_maior_bloco = heap_caps_get_largest_free_block(
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (resultado.psram_total != 0 && resultado.psram_livre < menor_psram) {
-        menor_psram = resultado.psram_livre;
-    }
-    resultado.psram_minima = resultado.psram_total == 0 ? 0 : menor_psram;
+    // O ESP32-C3 não tem PSRAM. Os campos de diagnóstico permanecem em zero.
     resultado.dma_livre = heap_caps_get_free_size(
         MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
     resultado.dma_maior_bloco = heap_caps_get_largest_free_block(
@@ -119,7 +109,8 @@ diagnostico_sistema_t diagnostico_sistema_obter(void)
                                   (quantidade == 0 && total_tarefas != 0);
     resultado.menor_pilha_livre_bytes = UINT32_MAX;
     uint64_t uso_nucleo_0 = 0;
-    uint64_t uso_nucleo_1 = 0;
+    bool repouso_medido = false;
+    const TaskHandle_t tarefa_ociosa = xTaskGetIdleTaskHandle();
     uint64_t maior_uso_tarefa = 0;
     const uint64_t janela_us = coleta_anterior_us != 0 &&
                                 agora_us > coleta_anterior_us
@@ -139,12 +130,10 @@ diagnostico_sistema_t diagnostico_sistema_obter(void)
         if (!encontrada || janela_us == 0 ||
             tarefa->ulRunTimeCounter < anterior) continue;
         const uint64_t delta = tarefa->ulRunTimeCounter - anterior;
-        if (strcmp(tarefa->pcTaskName, "IDLE0") == 0) {
+        if (tarefa->xHandle == tarefa_ociosa) {
             uso_nucleo_0 = 1000U - limitar_decimos_percentual(
                 delta * 1000U / janela_us);
-        } else if (strcmp(tarefa->pcTaskName, "IDLE1") == 0) {
-            uso_nucleo_1 = 1000U - limitar_decimos_percentual(
-                delta * 1000U / janela_us);
+            repouso_medido = true;
         } else if (delta > maior_uso_tarefa) {
             maior_uso_tarefa = delta;
             snprintf(resultado.cpu_tarefa_pico,
@@ -152,15 +141,11 @@ diagnostico_sistema_t diagnostico_sistema_obter(void)
                      tarefa->pcTaskName);
         }
     }
-    if (quantidade != 0 && janela_us != 0 && !resultado.tarefas_truncadas) {
+    if (repouso_medido && !resultado.tarefas_truncadas) {
         resultado.cpu_valida = true;
         resultado.cpu_nucleo_0_decimos_percentual =
             limitar_decimos_percentual(uso_nucleo_0);
-        resultado.cpu_nucleo_1_decimos_percentual =
-            limitar_decimos_percentual(uso_nucleo_1);
-        resultado.cpu_total_decimos_percentual = (uint16_t)(
-            (resultado.cpu_nucleo_0_decimos_percentual +
-             resultado.cpu_nucleo_1_decimos_percentual) / 2U);
+        resultado.cpu_total_decimos_percentual = resultado.cpu_nucleo_0_decimos_percentual;
         resultado.cpu_tarefa_pico_decimos_percentual =
             limitar_decimos_percentual(maior_uso_tarefa * 1000U / janela_us);
     }

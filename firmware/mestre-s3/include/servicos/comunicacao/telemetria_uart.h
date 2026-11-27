@@ -3,7 +3,7 @@
 
 #include <cstdint>
 
-#include "dados_telemetria_veiculo.h"
+#include "nucleo/dados_telemetria_veiculo.h"
 #include "esp_err.h"
 #include "protocolo_telemetria.h"
 
@@ -35,14 +35,20 @@ struct EstatisticasLinkTelemetria {
     uint32_t capacidades = 0;
 };
 
-// Codifica uma grandeza finita nos campos uint16_t da telemetria UART.
-uint16_t telemetria_escalar_uint16(float valor, float fator);
+// O consumidor roda na tarefa de telemetria na cadência do registro local.
+using ConsumidorAmostraTelemetria = void (*)(const DadosTelemetriaVeiculo&);
 
+// Prepara a publicação e a recepção de confirmações antes de iniciar o enlace.
 esp_err_t servico_telemetria_iniciar();
-esp_err_t servico_telemetria_enviar(const DadosTelemetriaVeiculo& dados);
+// Inicia o ciclo supervisionado após preparar a aquisição e o histórico.
+esp_err_t servico_telemetria_iniciar_publicacao(ConsumidorAmostraTelemetria consumidor);
 EstatisticasTelemetria servico_telemetria_obter_estatisticas();
+// Última amostra entregue ao consumidor local, inclusive se houve rejeição na codificação.
+bool servico_telemetria_obter_ultima_amostra_local(DadosTelemetriaVeiculo& dados);
 // Última amostra aceita para codificação, independentemente da entrega UART.
 DadosTelemetriaVeiculo servico_telemetria_obter_ultima_amostra_validada();
+// Copia o último pacote completo com seus dados, sequência e instante de publicação.
+bool servico_telemetria_obter_ultimo_pacote_validado(pacote_telemetria_t& pacote);
 EstatisticasLinkTelemetria servico_telemetria_obter_estatisticas_link(
     SateliteTelemetria satelite);
 esp_err_t servico_telemetria_receber_confirmacao(

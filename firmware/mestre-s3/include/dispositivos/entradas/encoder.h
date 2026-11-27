@@ -12,6 +12,9 @@ enum class EncoderIncrementalId : uint8_t {
     Quantidade,
 };
 
+// Modo quadratura x4 usado pelo gerenciador PCNT.
+constexpr uint32_t CONTAGENS_POR_PULSO_ENCODER = 4;
+
 struct ConfiguracaoEncoderIncremental {
     gpio_num_t pino_a = GPIO_NUM_NC;
     gpio_num_t pino_b = GPIO_NUM_NC;
@@ -35,5 +38,7 @@ struct EstadoEncoderIncremental {
 esp_err_t encoder_incremental_iniciar(
     EncoderIncrementalId id, const ConfiguracaoEncoderIncremental& configuracao);
 esp_err_t encoder_incremental_ler(EncoderIncrementalId id, uint64_t* contagem);
+// Atualiza apenas a resolução informada. O PCNT continua acumulando pulsos.
+void encoder_incremental_definir_resolucao(EncoderIncrementalId id,
+                                            uint32_t pulsos_por_giro);
 EstadoEncoderIncremental encoder_incremental_obter_estado(EncoderIncrementalId id);
-const char* encoder_incremental_nome(EncoderIncrementalId id);

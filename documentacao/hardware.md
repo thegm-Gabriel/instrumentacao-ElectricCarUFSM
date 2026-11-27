@@ -17,9 +17,8 @@ que o esquema, a PCB e a montagem física correspondem à mesma revisão.
 | `TELEMETRIA-COPIA.kicad_sch` | Cópia de esquema sem indicação de revisão principal. |
 
 Os arquivos em `KiCad_pcb_telemetria-backups/` são cópias automáticas de
-trabalho. Arquivos `.kicad_prl` guardam preferências locais do editor, e
-`.lck` é um bloqueio de sessão; nenhum desses arquivos define a placa
-validada. Este guia não modifica nem descarta os projetos ou backups.
+trabalho. Arquivos `.kicad_prl` guardam preferências locais do editor e
+`.lck` indica uma sessão aberta.
 
 Antes de montar, alterar GPIOs ou fabricar uma PCB, registre qual conjunto de
 arquivos corresponde à placa física, compare conectores e trilhas com a
@@ -27,3 +26,18 @@ arquivos corresponde à placa física, compare conectores e trilhas com a
 uma revisão, anote aqui o nome do projeto, a identificação impressa na placa e
 o estado da validação elétrica. Até isso acontecer, trate todas as revisões
 como referências a verificar.
+
+## Registro de uma revisão de bancada
+
+| Evidência | O que registrar |
+|---|---|
+| Identificação | Nome do projeto KiCad, revisão impressa da PCB, fotos do chicote e commit usado. |
+| Alimentação | Trilhos medidos, polaridade e referência de GND de cada interface. |
+| Entradas | Pinagem real, níveis dos encoders, orientação do MPU6050, shunt instalado e medições de referência. |
+| Saídas | Estado em repouso e durante reset, identificação do driver e resultado da validação da parada física. |
+| Firmware | Versões dos três ESPs, cabeçalhos ajustados e arquivos brutos do ensaio. |
+
+O [capítulo de hardware do manual](../manual_overleaf/capitulos/02_hardware.tex)
+relaciona alimentação, barramentos, eletrônica de medição e acionamento ao
+esquema. O [capítulo de operação](../manual_overleaf/capitulos/06_operacao.tex)
+traz a sequência de conferência e os ensaios.

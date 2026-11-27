@@ -21,6 +21,7 @@ static const char *TAG = "web_visitantes";
 static esp_err_t responder_painel(httpd_req_t *requisicao)
 {
     httpd_resp_set_type(requisicao, "text/html; charset=utf-8");
+    httpd_resp_set_hdr(requisicao, "Cache-Control", "no-store");
     return httpd_resp_send(requisicao, PAGINA_WEB_VISITANTES, HTTPD_RESP_USE_STRLEN);
 }
 
@@ -53,12 +54,16 @@ static esp_err_t responder_telemetria(httpd_req_t *requisicao)
         snprintf(corrente, sizeof(corrente), "%d", dados.corrente_centesimos_a);
         snprintf(potencia, sizeof(potencia), "%d", dados.potencia_w);
     }
-    if (dados.valido && dados.simulado) {
-        // Pedais, carga e autonomia ainda dependem do simulador.
+    if (dados.valido) {
         snprintf(acelerador, sizeof(acelerador), "%u", (unsigned)dados.acelerador_decimos_percentual);
+    }
+    if (dados.valido && dados.simulado) {
+        // Freio e autonomia ainda dependem do simulador.
         snprintf(freio, sizeof(freio), "%u", (unsigned)dados.freio_decimos_percentual);
-        snprintf(carga, sizeof(carga), "%u", (unsigned)dados.carga_decimos_percentual);
         snprintf(autonomia, sizeof(autonomia), "%u", (unsigned)dados.autonomia_decimos_km);
+    }
+    if (dados.valido && (dados.simulado || (dados.estado_ina & TELEMETRIA_SOC_ESTIMADO))) {
+        snprintf(carga, sizeof(carga), "%u", (unsigned)dados.carga_decimos_percentual);
     }
     char json[768];
     const int tamanho = snprintf(
@@ -174,6 +179,7 @@ esp_err_t servidor_web_iniciar(void)
     httpd_config_t configuracao = HTTPD_DEFAULT_CONFIG();
     configuracao.server_port = PORTA_HTTP;
     configuracao.stack_size = 8192;
+    configuracao.lru_purge_enable = true;
     esp_err_t erro = httpd_start(&servidor, &configuracao);
     if (erro != ESP_OK) {
         return erro;

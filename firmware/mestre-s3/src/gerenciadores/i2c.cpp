@@ -157,6 +157,7 @@ esp_err_t gerenciador_i2c_escrever(uint8_t endereco, const void* dados, size_t t
     }
     if (xSemaphoreTake(mutex_barramento, tempo_limite) != pdTRUE) {
         registrar_resultado(ESP_ERR_TIMEOUT, 0, 0);
+        registrar_falha_operacao("reservar o barramento para", endereco, ESP_ERR_TIMEOUT);
         return ESP_ERR_TIMEOUT;
     }
     esp_err_t erro = i2c_master_write_to_device(

@@ -22,6 +22,7 @@ enum class EstadoSinalizacao : uint8_t {
     OtaVerificando,
     OtaAguardandoAutorizacao,
     OtaBaixando,
+    OtaValidando,
     OtaConcluido,
     OtaFalha,
     Aviso,

@@ -1,7 +1,9 @@
 #include "servicos/historico/upload_google.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <strings.h>
 
@@ -9,7 +11,7 @@
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
-#include "esp_timer.h"
+#include "nucleo/tempo.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nucleo/configuracao/historico.h"
@@ -19,15 +21,58 @@
 namespace {
 constexpr char ETIQUETA[] = "registro_telemetria";
 
+esp_err_t preparar_exportacao_google(const char* caminho) {
+    FILE* origem = std::fopen(caminho, "rb");
+    if (origem == nullptr) return ESP_FAIL;
+    FILE* destino = std::fopen(configuracao::ARQUIVO_EXPORTACAO_GOOGLE, "wb");
+    if (destino == nullptr) {
+        std::fclose(origem);
+        return ESP_FAIL;
+    }
+
+    // Mantém o cabeçalho e a primeira leitura de cada segundo da sessão.
+    char linha[configuracao::TAMANHO_LINHA_CSV_BYTES];
+    constexpr char coluna_tempo[] = "tempo_sessao_ms,";
+    esp_err_t erro = ESP_OK;
+    if (std::fgets(linha, sizeof(linha), origem) == nullptr ||
+        std::strncmp(linha, coluna_tempo, sizeof(coluna_tempo) - 1) != 0 ||
+        std::strchr(linha, '\n') == nullptr) {
+        erro = ESP_ERR_INVALID_RESPONSE;
+    } else if (std::fputs(linha, destino) < 0) {
+        erro = ESP_FAIL;
+    }
+
+    uint32_t ultimo_periodo = UINT32_MAX;
+    while (erro == ESP_OK && std::fgets(linha, sizeof(linha), origem) != nullptr) {
+        char* fim_tempo = nullptr;
+        errno = 0;
+        const unsigned long long tempo_ms = std::strtoull(linha, &fim_tempo, 10);
+        if (linha[0] < '0' || linha[0] > '9' || *fim_tempo != ',' ||
+            errno == ERANGE || tempo_ms > UINT32_MAX || std::strchr(fim_tempo, '\n') == nullptr) {
+            erro = ESP_ERR_INVALID_RESPONSE;
+            break;
+        }
+        const auto periodo = static_cast<uint32_t>(tempo_ms) /
+            configuracao::INTERVALO_EXPORTACAO_GOOGLE_MS;
+        if (periodo == ultimo_periodo) continue;
+        if (std::fputs(linha, destino) < 0) {
+            erro = ESP_FAIL;
+            break;
+        }
+        ultimo_periodo = periodo;
+    }
+    if (std::ferror(origem)) erro = ESP_FAIL;
+    std::fclose(origem);
+    if (std::fclose(destino) != 0) erro = ESP_FAIL;
+    if (erro == ESP_OK && ultimo_periodo == UINT32_MAX) erro = ESP_ERR_INVALID_SIZE;
+    return erro;
+}
+
 struct RespostaHttp {
     char texto[160]{};
     char redirecionamento[2048]{};
     size_t tamanho = 0;
 };
-
-uint32_t agora_ms() {
-    return static_cast<uint32_t>(esp_timer_get_time() / 1000);
-}
 
 esp_err_t tratar_evento_http(esp_http_client_event_t* evento) {
     if (evento == nullptr || evento->user_data == nullptr) {
@@ -151,7 +196,7 @@ esp_err_t transmitir_arquivo(esp_http_client_handle_t cliente, FILE* arquivo,
     }
     if (bloco == nullptr) return ESP_ERR_NO_MEM;
 
-    const uint32_t inicio_ms = agora_ms();
+    const uint32_t inicio_ms = tempo_monotonico::agora_ms32();
     uint32_t proximo_relatorio_ms =
         inicio_ms + configuracao::INTERVALO_RELATORIO_UPLOAD_MS;
     size_t enviados = 0;
@@ -179,7 +224,8 @@ esp_err_t transmitir_arquivo(esp_http_client_handle_t cliente, FILE* arquivo,
         }
         if (erro != ESP_OK) break;
 
-        const uint32_t decorrido_ms = std::max<uint32_t>(1, agora_ms() - inicio_ms);
+        const uint32_t decorrido_ms = std::max<uint32_t>(
+            1, tempo_monotonico::agora_ms32() - inicio_ms);
         const uint32_t velocidade = static_cast<uint32_t>(
             (static_cast<uint64_t>(enviados) * 1000U) / decorrido_ms);
         const uint32_t restantes = enviados >= tamanho
@@ -192,7 +238,7 @@ esp_err_t transmitir_arquivo(esp_http_client_handle_t cliente, FILE* arquivo,
                   velocidade);
         observador.atualizar(static_cast<uint32_t>(enviados), velocidade,
                             tempo_restante);
-        const uint32_t instante_ms = agora_ms();
+        const uint32_t instante_ms = tempo_monotonico::agora_ms32();
         if (enviados == tamanho ||
             static_cast<int32_t>(instante_ms - proximo_relatorio_ms) >= 0) {
             const uint32_t percentual_decimos = tamanho == 0
@@ -339,7 +385,15 @@ esp_err_t upload_google_enviar(const char* caminho, const char* nome,
                               uint32_t indice, uint32_t quantidade,
                               uint32_t* tamanho_enviado,
                               const ObservadorUploadGoogle& observador) {
-    esp_err_t ultimo_erro = ESP_FAIL;
+    servico_supervisao_informar_atividade(ModuloSupervisionado::UploadGoogle,
+        "upload_csv", "preparacao CSV Google", 180000);
+    esp_err_t ultimo_erro = preparar_exportacao_google(caminho);
+    if (ultimo_erro != ESP_OK) {
+        ESP_LOGE(ETIQUETA, "Falha ao preparar %s para o Google: %s",
+                 nome, esp_err_to_name(ultimo_erro));
+        (void)std::remove(configuracao::ARQUIVO_EXPORTACAO_GOOGLE);
+        return ultimo_erro;
+    }
     uint32_t espera_ms = configuracao::ESPERA_INICIAL_NOVA_TENTATIVA_MS;
     for (uint8_t tentativa = 0;
          tentativa < configuracao::MAXIMO_TENTATIVAS_UPLOAD; ++tentativa) {
@@ -350,14 +404,15 @@ esp_err_t upload_google_enviar(const char* caminho, const char* nome,
                          configuracao::MAXIMO_TENTATIVAS_UPLOAD),
                      nome);
         }
-        ultimo_erro = enviar_arquivo(caminho, nome, indice, quantidade,
-                                      tamanho_enviado, observador);
-        if (ultimo_erro == ESP_OK) return ESP_OK;
+        ultimo_erro = enviar_arquivo(configuracao::ARQUIVO_EXPORTACAO_GOOGLE,
+                                     nome, indice, quantidade, tamanho_enviado, observador);
+        if (ultimo_erro == ESP_OK) break;
         observador.aguardar_confirmacao(false);
         if (tentativa + 1 < configuracao::MAXIMO_TENTATIVAS_UPLOAD) {
             vTaskDelay(pdMS_TO_TICKS(espera_ms));
             espera_ms = std::min<uint32_t>(espera_ms * 2U, 8000U);
         }
     }
+    (void)std::remove(configuracao::ARQUIVO_EXPORTACAO_GOOGLE);
     return ultimo_erro;
 }

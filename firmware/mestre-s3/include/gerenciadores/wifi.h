@@ -33,6 +33,8 @@ esp_err_t gerenciador_wifi_conectar(const char* ssid, const char* senha,
 esp_err_t gerenciador_wifi_procurar_redes(const char* const* ssids,
                                           size_t quantidade, bool* encontradas,
                                           TickType_t tempo_limite);
+// Retoma o perfil já configurado na sessão, sem buscar outra rede.
+esp_err_t gerenciador_wifi_reconectar(TickType_t tempo_limite);
 esp_err_t gerenciador_wifi_desativar(TickType_t tempo_limite);
 bool gerenciador_wifi_esta_conectado();
 // Getter puro: não consulta o driver nem aguarda mutexes de operação.

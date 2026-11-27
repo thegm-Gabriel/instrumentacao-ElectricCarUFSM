@@ -42,6 +42,10 @@ constexpr uint8_t CANAL_WIFI_PREFERENCIAL = WIFI_CANAL_PREFERENCIAL;
 constexpr uint8_t LARGURA_CANAL_WIFI_MHZ = WIFI_LARGURA_CANAL_MHZ;
 constexpr int8_t POTENCIA_MAXIMA_WIFI_DBM = WIFI_POTENCIA_MAXIMA_DBM;
 
+// Recepção da estação. Cada buffer fixo ocupa aproximadamente 1,6 KiB internos.
+constexpr int QUANTIDADE_BUFFERS_RX_WIFI_ESTATICOS = 6;
+constexpr int QUANTIDADE_BUFFERS_RX_WIFI_DINAMICOS = 16;
+
 static_assert(CANAL_WIFI_PREFERENCIAL <= 13,
               "O canal Wi-Fi preferencial deve estar entre 0 e 13");
 static_assert(LARGURA_CANAL_WIFI_MHZ == 20 ||

@@ -33,6 +33,7 @@ struct EstadoMpu6050 {
     bool configuracao_verificada = false;
     uint8_t identificacao = 0;
     uint16_t frequencia_amostragem_hz = 0;
+    uint8_t frequencia_filtro_acelerometro_hz = 0;
     uint32_t leituras_ok = 0;
     uint32_t erros_leitura = 0;
     esp_err_t ultimo_erro = ESP_OK;

@@ -8,16 +8,16 @@
 #include "esp_heap_caps.h"
 #include "esp_system.h"
 #include "esp_timer.h"
-#include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "gerenciadores/gerenciador_wifi.h"
 
 #define MAXIMO_TAREFAS 32
 
 static temperature_sensor_handle_t sensor;
 static esp_err_t erro_temperatura = ESP_ERR_INVALID_STATE;
 static bool sensor_consultado;
-static uint64_t tempo_idle_anterior[2];
+static uint64_t tempo_idle_anterior;
 static int64_t instante_anterior_us;
 
 static uint16_t limitar_uso(uint64_t valor)
@@ -33,12 +33,8 @@ esp_err_t diagnostico_visitantes_obter(resposta_diagnostico_satelite_t *saida)
     saida->tempo_ativo_ms = (uint32_t)(esp_timer_get_time() / 1000);
     saida->heap_interno_livre = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     saida->heap_interno_minimo = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    saida->psram_total = heap_caps_get_total_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    saida->psram_livre = heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     saida->motivo_reinicio = (uint8_t)esp_reset_reason();
-    wifi_sta_list_t estacoes = {0};
-    if (esp_wifi_ap_get_sta_list(&estacoes) == ESP_OK)
-        saida->clientes_wifi = estacoes.num;
+    (void)gerenciador_wifi_obter_total_clientes(&saida->clientes_wifi);
 
     if (!sensor_consultado) {
         sensor_consultado = true;
@@ -70,34 +66,31 @@ esp_err_t diagnostico_visitantes_obter(resposta_diagnostico_satelite_t *saida)
                                     (quantidade == 0 && total_tarefas != 0);
     if (tarefas_truncadas) saida->indicadores |= 4U;
     const int64_t agora_us = esp_timer_get_time();
-    uint64_t idle_atual[2] = {0, 0};
+    const TaskHandle_t tarefa_idle = xTaskGetIdleTaskHandle();
+    uint64_t idle_atual = 0;
+    bool idle_encontrado = false;
     saida->menor_pilha_livre_bytes = UINT32_MAX;
     saida->tarefas_ativas = total_tarefas > UINT8_MAX ? UINT8_MAX : (uint8_t)total_tarefas;
     for (UBaseType_t i = 0; i < quantidade; ++i) {
-        if (strcmp(tarefas[i].pcTaskName, "IDLE0") == 0)
-            idle_atual[0] = tarefas[i].ulRunTimeCounter;
-        else if (strcmp(tarefas[i].pcTaskName, "IDLE1") == 0)
-            idle_atual[1] = tarefas[i].ulRunTimeCounter;
+        if (tarefas[i].xHandle == tarefa_idle) {
+            idle_atual = tarefas[i].ulRunTimeCounter;
+            idle_encontrado = true;
+        }
         if (tarefas[i].usStackHighWaterMark < saida->menor_pilha_livre_bytes)
             saida->menor_pilha_livre_bytes = tarefas[i].usStackHighWaterMark;
     }
     if (quantidade == 0) saida->menor_pilha_livre_bytes = 0;
-    if (!tarefas_truncadas && instante_anterior_us > 0 && agora_us > instante_anterior_us &&
-        idle_atual[0] >= tempo_idle_anterior[0] &&
-        idle_atual[1] >= tempo_idle_anterior[1]) {
+    if (!tarefas_truncadas && idle_encontrado && instante_anterior_us > 0 &&
+        agora_us > instante_anterior_us && idle_atual >= tempo_idle_anterior) {
         const uint64_t janela = (uint64_t)(agora_us - instante_anterior_us);
         saida->cpu_nucleo_0_decimos_percentual = 1000U - limitar_uso(
-            (idle_atual[0] - tempo_idle_anterior[0]) * 1000U / janela);
-        saida->cpu_nucleo_1_decimos_percentual = 1000U - limitar_uso(
-            (idle_atual[1] - tempo_idle_anterior[1]) * 1000U / janela);
-        saida->cpu_total_decimos_percentual = (uint16_t)(
-            (saida->cpu_nucleo_0_decimos_percentual +
-             saida->cpu_nucleo_1_decimos_percentual) / 2U);
+            (idle_atual - tempo_idle_anterior) * 1000U / janela);
+        // O quadro mantém o campo do núcleo 1 em zero por compatibilidade.
+        saida->cpu_total_decimos_percentual = saida->cpu_nucleo_0_decimos_percentual;
         saida->indicadores |= 1U;
     }
-    tempo_idle_anterior[0] = idle_atual[0];
-    tempo_idle_anterior[1] = idle_atual[1];
-    instante_anterior_us = tarefas_truncadas ? 0 : agora_us;
+    tempo_idle_anterior = idle_atual;
+    instante_anterior_us = tarefas_truncadas || !idle_encontrado ? 0 : agora_us;
 #endif
     return ESP_OK;
 }

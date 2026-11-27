@@ -11,8 +11,9 @@ namespace {
 SemaphoreHandle_t mutex_saidas = nullptr;
 bool bloqueio_ota = false;
 bool bloqueio_falha = false;
-bool reversao_permitida = false;
+bool reversao_permitida = configuracao::PERMITIR_REVERSAO_PADRAO;
 uint32_t revisao_permissao_reversao = 0;
+uint32_t revisao_minima_atuacao = 0;
 bool rele_ligado = false;
 uint8_t ultima_marcha = FAIXA_MARCHA_INDEFINIDA;
 uint8_t ultima_reversao = 0;
@@ -21,18 +22,19 @@ constexpr int64_t TEMPO_ACOMODACAO_US = 100000;
 
 esp_err_t desligar() {
     // Desligar a bobina primeiro abre o contato NA antes de mudar marcha/ré.
-    esp_err_t erro = gpio_set_level(configuracao::PINO_RELE_HABILITADOR, 0);
-    if (erro != ESP_OK) return erro;
+    const esp_err_t erro_rele = gpio_set_level(configuracao::PINO_RELE_HABILITADOR, 0);
+    if (erro_rele != ESP_OK) return erro_rele;
     if (rele_ligado)
         liberar_rele_em_us = esp_timer_get_time() + TEMPO_ACOMODACAO_US;
     rele_ligado = false;
     ultima_marcha = FAIXA_MARCHA_INDEFINIDA;
     ultima_reversao = 0;
-    erro = gpio_set_level(configuracao::PINO_MARCHA_A, 0);
-    if (erro != ESP_OK) return erro;
-    erro = gpio_set_level(configuracao::PINO_MARCHA_B, 0);
-    if (erro != ESP_OK) return erro;
-    return gpio_set_level(configuracao::PINO_REVERSAO, 0);
+    const esp_err_t erro_a = gpio_set_level(configuracao::PINO_MARCHA_A, 0);
+    const esp_err_t erro_b = gpio_set_level(configuracao::PINO_MARCHA_B, 0);
+    const esp_err_t erro_re = gpio_set_level(configuracao::PINO_REVERSAO, 0);
+    if (erro_a != ESP_OK) return erro_a;
+    if (erro_b != ESP_OK) return erro_b;
+    return erro_re;
 }
 }
 
@@ -44,6 +46,10 @@ esp_err_t saidas_veiculo_iniciar() {
     uint64_t mascara = 0;
     for (const auto pino : pinos) {
         if (!GPIO_IS_VALID_OUTPUT_GPIO(pino) || (mascara & (1ULL << pino)))
+            return ESP_ERR_INVALID_ARG;
+        if (configuracao::HABILITAR_LEITURA_CHAVE_MARCHA &&
+            (pino == configuracao::PINO_CHAVE_MARCHA_L || pino == configuracao::PINO_CHAVE_MARCHA_H ||
+             pino == configuracao::PINO_CHAVE_REVERSAO))
             return ESP_ERR_INVALID_ARG;
         mascara |= 1ULL << pino;
     }
@@ -63,33 +69,35 @@ esp_err_t saidas_veiculo_iniciar() {
     return gpio_config(&config);
 }
 
-esp_err_t saidas_veiculo_aplicar(const estado_controle_remoto_t& estado) {
+esp_err_t saidas_veiculo_aplicar(const estado_controle_remoto_t& estado, bool& rele_habilitado) {
+    rele_habilitado = false;
     if (!configuracao::HABILITAR_SAIDAS_VEICULO) return ESP_OK;
     if (mutex_saidas == nullptr) return ESP_ERR_INVALID_STATE;
     xSemaphoreTake(mutex_saidas, portMAX_DELAY);
-    if (static_cast<int32_t>(estado.revisao - revisao_permissao_reversao) < 0) {
+    if (static_cast<int32_t>(estado.revisao - revisao_permissao_reversao) < 0 ||
+        static_cast<int32_t>(estado.revisao - revisao_minima_atuacao) < 0) {
         xSemaphoreGive(mutex_saidas);
         return ESP_OK;
     }
+    const auto marcha = saidas_veiculo_marcha(estado.faixa_marcha_solicitada);
     const bool habilitar = !bloqueio_ota && !bloqueio_falha &&
-        estado.partida_concluida &&
+        estado.atuacao_habilitada && estado.partida_concluida &&
         !estado.ota_em_andamento && !estado.parada_solicitada &&
+        !estado.armamento_inicial_pendente &&
         !estado.corte_por_rele_solicitado && estado.bloqueios == 0 &&
         estado.dac_disponivel &&
         (!estado.reversao_acionar_solicitado ||
          (estado.reversao_permitida && reversao_permitida)) &&
-        configuracao::HABILITAR_SAIDA_ACELERADOR_DAC &&
-        !(estado.modo_a_aterrar_solicitado && estado.modo_b_aterrar_solicitado);
+        configuracao::HABILITAR_SAIDA_ACELERADOR_DAC && marcha.valida;
     const bool mudou = !habilitar || !rele_ligado ||
         ultima_marcha != estado.faixa_marcha_solicitada ||
         ultima_reversao != estado.reversao_acionar_solicitado;
     esp_err_t erro = mudou ? desligar() : ESP_OK;
-    if (erro == ESP_OK && habilitar && mudou &&
+    if (erro == ESP_OK && habilitar && mudou && estado.dac_zero_confirmado &&
+        estado.acelerador_lido_decimos_percentual == 0 &&
         esp_timer_get_time() >= liberar_rele_em_us) {
-        erro = gpio_set_level(configuracao::PINO_MARCHA_A,
-                             estado.modo_a_aterrar_solicitado);
-        if (erro == ESP_OK) erro = gpio_set_level(configuracao::PINO_MARCHA_B,
-                             estado.modo_b_aterrar_solicitado);
+        erro = gpio_set_level(configuracao::PINO_MARCHA_A, marcha.modo_a);
+        if (erro == ESP_OK) erro = gpio_set_level(configuracao::PINO_MARCHA_B, marcha.modo_b);
         if (erro == ESP_OK) erro = gpio_set_level(configuracao::PINO_REVERSAO,
                              estado.reversao_acionar_solicitado);
         if (erro == ESP_OK) erro = gpio_set_level(
@@ -101,6 +109,18 @@ esp_err_t saidas_veiculo_aplicar(const estado_controle_remoto_t& estado) {
             ultima_reversao = estado.reversao_acionar_solicitado;
         }
     }
+    rele_habilitado = erro == ESP_OK && rele_ligado;
+    xSemaphoreGive(mutex_saidas);
+    return erro;
+}
+
+esp_err_t saidas_veiculo_cortar_por_parada(uint32_t revisao) {
+    if (!configuracao::HABILITAR_SAIDAS_VEICULO) return ESP_OK;
+    if (mutex_saidas == nullptr) return ESP_ERR_INVALID_STATE;
+    xSemaphoreTake(mutex_saidas, portMAX_DELAY);
+    if (static_cast<int32_t>(revisao - revisao_minima_atuacao) >= 0)
+        revisao_minima_atuacao = revisao;
+    const esp_err_t erro = desligar();
     xSemaphoreGive(mutex_saidas);
     return erro;
 }

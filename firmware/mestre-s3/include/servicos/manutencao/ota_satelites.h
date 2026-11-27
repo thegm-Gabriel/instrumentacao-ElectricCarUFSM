@@ -24,10 +24,11 @@ using ObservadorProgressoOtaSatelite = void (*)(uint32_t bytes_enviados,
 
 esp_err_t transporte_ota_satelites_iniciar();
 esp_err_t transporte_ota_satelites_encerrar();
-esp_err_t transporte_ota_satelites_solicitar_cancelamento();
 esp_err_t transporte_ota_satelites_executar(
     const ConfiguracaoTransferenciaOtaSatelite& configuracao,
-    ObservadorProgressoOtaSatelite observador);
+    ObservadorProgressoOtaSatelite observador,
+    bool (*cancelamento_solicitado)(), bool (*autorizar_finalizacao)(),
+    bool& finalizacao_incerta);
 void transporte_ota_satelites_registrar_resposta(DestinoUart origem,
                                                   const uint8_t* quadro,
                                                   size_t tamanho);

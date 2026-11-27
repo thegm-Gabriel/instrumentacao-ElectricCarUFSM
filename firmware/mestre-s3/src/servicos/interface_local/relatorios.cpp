@@ -3,8 +3,6 @@
 #include "nucleo/configuracao/interface.h"
 #include "servicos/interface_local/relatorios.h"
 
-#include "servicos/veiculo/aquisicao.h"
-
 #include <algorithm>
 #include <array>
 #include <cstdio>
@@ -95,23 +93,49 @@ void exibir_link(const char* nome, const EstatisticasLinkTelemetria& link) {
              static_cast<unsigned>(link.versao_menor),
              static_cast<unsigned>(link.versao_correcao));
 }
+bool deve_exibir(GrupoRelatorio grupo) {
+    const size_t indice = static_cast<size_t>(grupo);
+    if (indice >= configuracoes.size()) return false;
+
+    const int64_t agora_us = esp_timer_get_time();
+    bool exibir = false;
+    portENTER_CRITICAL(&trava_configuracao);
+    const uint8_t mascara = 1U << static_cast<uint8_t>(grupo);
+    if ((relatorios_forcados & mascara) != 0) {
+        relatorios_forcados &= static_cast<uint8_t>(~mascara);
+        exibir = true;
+    } else if (!relatorios_pausados && configuracoes[indice].intervalo_ms > 0) {
+        const int64_t intervalo_us =
+            static_cast<int64_t>(configuracoes[indice].intervalo_ms) * 1000;
+        if (configuracoes[indice].ultima_exibicao_us == 0 ||
+            agora_us - configuracoes[indice].ultima_exibicao_us >= intervalo_us) {
+            exibir = true;
+        }
+    }
+    if (exibir) configuracoes[indice].ultima_exibicao_us = agora_us;
+    portEXIT_CRITICAL(&trava_configuracao);
+    return exibir;
+}
+
 void exibir_relatorios(const DadosTelemetriaVeiculo& dados) {
     const bool resumo_completo = consumir_resumo_completo();
     if (resumo_completo) {
         ESP_LOGI(ETIQUETA,
                  "===================== RESUMO COMPLETO DO MESTRE =====================");
     }
-    if (resumo_completo ||
-        servico_relatorios_deve_exibir(GrupoRelatorio::Telemetria)) {
+    if (resumo_completo || deve_exibir(GrupoRelatorio::Telemetria)) {
         if (resumo_completo) exibir_secao("TELEMETRIA E SENSORES");
         const EstatisticasTelemetria telemetria =
             servico_telemetria_obter_estatisticas();
+        char carga[16] = "n/d";
+        if (dados.simulado || dados.soc_estimado)
+            std::snprintf(carga, sizeof(carga), "%.1f%%", dados.carga_percentual);
         ESP_LOGI(ETIQUETA,
-                 "[TELEMETRIA] pacote=%u | %s | marcha=%u velocidade=%.1f km/h carga=%.1f%% | ADC=%u | acc=[%d, %d, %d] giro=[%d, %d, %d]",
+                 "[TELEMETRIA] pacote=%u | %s | marcha=%u velocidade=%.1f km/h carga=%s | ADC=%u | acc=[%d, %d, %d] giro=[%d, %d, %d]",
                  static_cast<unsigned>(telemetria.ultima_sequencia),
                  dados.simulado ? "SIMULADA" : "REAL",
                  static_cast<unsigned>(dados.marcha), dados.velocidade_kmh,
-                 dados.carga_percentual,
+                 carga,
                  static_cast<unsigned>(dados.tensao_adc_bruta),
                  dados.aceleracao_x, dados.aceleracao_y, dados.aceleracao_z,
                  dados.giroscopio_x, dados.giroscopio_y, dados.giroscopio_z);
@@ -125,7 +149,7 @@ void exibir_relatorios(const DadosTelemetriaVeiculo& dados) {
                  dados.aceleracao_z_g);
     }
 
-    if (resumo_completo || servico_relatorios_deve_exibir(GrupoRelatorio::Uart)) {
+    if (resumo_completo || deve_exibir(GrupoRelatorio::Uart)) {
         if (resumo_completo) exibir_secao("COMUNICACAO UART");
         const EstatisticasUart equipe =
             gerenciador_uart_obter_estatisticas(DestinoUart::Equipe);
@@ -160,8 +184,7 @@ void exibir_relatorios(const DadosTelemetriaVeiculo& dados) {
         exibir_link("VISITANTES", link_visitantes);
     }
 
-    if (resumo_completo ||
-        servico_relatorios_deve_exibir(GrupoRelatorio::Sistema)) {
+    if (resumo_completo || deve_exibir(GrupoRelatorio::Sistema)) {
         if (resumo_completo) exibir_secao("SISTEMA E RECURSOS");
         const RetratoDiagnosticoSistema retrato =
             servico_diagnostico_obter_retrato();
@@ -350,7 +373,7 @@ void exibir_relatorios(const DadosTelemetriaVeiculo& dados) {
                  esp_err_to_name(sinalizacao.ultimo_erro));
     }
 
-    if (resumo_completo || servico_relatorios_deve_exibir(GrupoRelatorio::Ota)) {
+    if (resumo_completo || deve_exibir(GrupoRelatorio::Ota)) {
         if (resumo_completo) exibir_secao("OTA E REDE");
         const SituacaoOta ota = servico_ota_obter_situacao();
         ESP_LOGI(ETIQUETA,
@@ -400,7 +423,7 @@ void exibir_relatorios(const DadosTelemetriaVeiculo& dados) {
 void tarefa_relatorios(void*) {
     while (true) {
         DadosTelemetriaVeiculo copia{};
-        if (servico_aquisicao_obter_ultima_amostra(copia) &&
+        if (servico_telemetria_obter_ultima_amostra_local(copia) &&
             servico_diagnostico_obter_resumo().valido) {
             exibir_relatorios(copia);
         }
@@ -504,28 +527,4 @@ esp_err_t servico_relatorios_solicitar_resumo_e_aguardar(uint32_t limite_ms) {
     return xSemaphoreTake(resumo_concluido, pdMS_TO_TICKS(limite_ms)) == pdTRUE
                ? ESP_OK
                : ESP_ERR_TIMEOUT;
-}
-
-bool servico_relatorios_deve_exibir(GrupoRelatorio grupo) {
-    const size_t indice = static_cast<size_t>(grupo);
-    if (indice >= configuracoes.size()) return false;
-
-    const int64_t agora_us = esp_timer_get_time();
-    bool exibir = false;
-    portENTER_CRITICAL(&trava_configuracao);
-    const uint8_t mascara = 1U << static_cast<uint8_t>(grupo);
-    if ((relatorios_forcados & mascara) != 0) {
-        relatorios_forcados &= static_cast<uint8_t>(~mascara);
-        exibir = true;
-    } else if (!relatorios_pausados && configuracoes[indice].intervalo_ms > 0) {
-        const int64_t intervalo_us =
-            static_cast<int64_t>(configuracoes[indice].intervalo_ms) * 1000;
-        if (configuracoes[indice].ultima_exibicao_us == 0 ||
-            agora_us - configuracoes[indice].ultima_exibicao_us >= intervalo_us) {
-            exibir = true;
-        }
-    }
-    if (exibir) configuracoes[indice].ultima_exibicao_us = agora_us;
-    portEXIT_CRITICAL(&trava_configuracao);
-    return exibir;
 }

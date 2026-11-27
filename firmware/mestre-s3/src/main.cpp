@@ -9,7 +9,7 @@
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "guarda_rollback_ota.h"
+#include "gerenciadores/guarda_rollback_ota.h"
 #include "nvs_flash.h"
 
 #include "nucleo/configuracao/comunicacao.h"
@@ -145,11 +145,11 @@ esp_err_t inicializar_aplicacao() {
 
 extern "C" void app_main(void) {
     // Registra o arranque antes do autoteste para acompanhar a imagem em uso.
-    guarda_ota_registrar_partida(ETIQUETA);
+    const bool ota_revertida = guarda_ota_registrar_partida(ETIQUETA);
     ESP_LOGI(ETIQUETA, "=== Mestre de telemetria UFSM-CS ===");
     ESP_LOGI(ETIQUETA, "Alvo: ESP32-S3-WROOM-1-N16R8");
     ESP_LOGI(ETIQUETA, "ADC GPIO %d | I2C SDA=%d SCL=%d | intervalo=%d ms",
-             configuracao::PINO_LEITURA_TENSAO, configuracao::PINO_I2C_SDA,
+             configuracao::PINO_ACELERADOR_ADC, configuracao::PINO_I2C_SDA,
              configuracao::PINO_I2C_SCL, configuracao::INTERVALO_TELEMETRIA_MS);
     ESP_LOGI(ETIQUETA,
              "Encoders: esquerdo A/B=GPIO%d/%d, direito A/B=GPIO%d/%d",
@@ -211,8 +211,8 @@ extern "C" void app_main(void) {
         return;
     }
 
-    // O histórico é opcional. O registrador recebe a amostra da aquisição e
-    // cuida do SD, inclusive da recuperação quando o cartão está indisponível.
+    // O histórico recebe uma amostra a cada 100 ms, em cadência própria.
+    // O registrador cuida da escrita e da recuperação do cartão.
     atualizar_partida("CARTAO E HISTORICO", 50);
     const esp_err_t erro_registro = servico_registro_telemetria_iniciar();
     if (erro_registro != ESP_OK && erro_registro != ESP_ERR_NOT_SUPPORTED) {
@@ -223,7 +223,8 @@ extern "C" void app_main(void) {
     }
 
     atualizar_partida("TELEMETRIA", 62);
-    erro = servico_aquisicao_iniciar(servico_registro_telemetria_processar_amostra);
+    erro = servico_telemetria_iniciar_publicacao(
+        servico_registro_telemetria_processar_amostra);
     if (erro != ESP_OK) {
         rejeitar_firmware_e_encerrar(
             erro, "Não foi possível iniciar a telemetria supervisionada");
@@ -241,6 +242,8 @@ extern "C" void app_main(void) {
 
     atualizar_partida("ATUALIZACAO OTA", 84);
     const esp_err_t erro_ota = servico_ota_iniciar();
+    if (erro_ota == ESP_OK && ota_revertida)
+        servico_ota_informar_validacao_mestre(EstadoValidacaoOta::Revertida);
     if (erro_ota != ESP_OK) {
         ESP_LOGW(ETIQUETA, "Telemetria ativa, mas OTA indisponível: %s",
                  esp_err_to_name(erro_ota));
@@ -286,29 +289,36 @@ extern "C" void app_main(void) {
             return;
         }
     }
+    const bool observando_ota = guarda_ota_monitorando();
+    if (observando_ota)
+        servico_ota_informar_validacao_mestre(EstadoValidacaoOta::Validando, GUARDA_OTA_TEMPO_CONFIRMACAO_MS);
+    servico_controle_remoto_concluir_partida(observando_ota);
     atualizar_partida("SISTEMA PRONTO", 100);
     (void)servico_painel_local_notificar(
         TipoMensagemPainelLocal::Sucesso, "INICIALIZACAO", "SISTEMA PRONTO",
         4000);
     (void)servico_sinalizacao_notificar(EventoSinalizacao::SistemaPronto);
-    if (guarda_ota_monitorando()) {
+    if (observando_ota) {
         // A guarda espera a janela inicial para confirmar a imagem e continua
         // observando o firmware pelo restante do prazo de estabilização.
         ESP_LOGI(ETIQUETA,
                  "Observando firmware OTA por %u ms antes da confirmação",
                  GUARDA_OTA_TEMPO_CONFIRMACAO_MS);
-        vTaskDelay(pdMS_TO_TICKS(GUARDA_OTA_TEMPO_CONFIRMACAO_MS));
+        TickType_t prazo = xTaskGetTickCount();
+        (void)xTaskDelayUntil(&prazo, pdMS_TO_TICKS(GUARDA_OTA_TEMPO_CONFIRMACAO_MS));
         erro = servico_ota_confirmar_firmware_em_execucao();
         if (erro != ESP_OK) {
+            servico_ota_informar_validacao_mestre(EstadoValidacaoOta::Falha);
             rejeitar_firmware_e_encerrar(
                 erro, "Não foi possível confirmar o firmware em execução");
             return;
         }
-        vTaskDelay(pdMS_TO_TICKS(GUARDA_OTA_TEMPO_ESTABILIZACAO_MS -
-                                GUARDA_OTA_TEMPO_CONFIRMACAO_MS));
+        constexpr uint32_t observacao_restante_ms =
+            GUARDA_OTA_TEMPO_ESTABILIZACAO_MS - GUARDA_OTA_TEMPO_CONFIRMACAO_MS;
+        servico_ota_informar_validacao_mestre(EstadoValidacaoOta::EmObservacao, observacao_restante_ms);
+        (void)xTaskDelayUntil(&prazo, pdMS_TO_TICKS(observacao_restante_ms));
         guarda_ota_encerrar_observacao(ETIQUETA);
+        servico_controle_remoto_concluir_partida();
+        servico_ota_informar_validacao_mestre(EstadoValidacaoOta::Concluida);
     }
-    // Nenhum comando pode rearmar o veículo antes de terminar a partida e
-    // a observação do firmware recém-instalado.
-    servico_controle_remoto_concluir_partida();
 }

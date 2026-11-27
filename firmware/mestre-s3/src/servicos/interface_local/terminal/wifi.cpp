@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "esp_log.h"
+#include "gerenciadores/wifi.h"
 #include "nucleo/configuracao/wifi.h"
 #include "servicos/comunicacao/wifi_sessoes.h"
 
@@ -633,10 +634,9 @@ void tratar_confirmacao_restaurar(unsigned long opcao) {
 }
 
 void tratar_texto_wifi(const char* texto) {
-    const size_t tamanho = std::strlen(texto);
     if (tela_atual == TelaWifi::NovaSsid ||
         tela_atual == TelaWifi::PrincipalSsid) {
-        if (tamanho < 1 || tamanho > 32) {
+        if (!gerenciador_wifi_credenciais_validas(texto, "")) {
             std::printf("\r\nO SSID deve ter entre 1 e 32 caracteres.\r\n> ");
             std::fflush(stdout);
             return;
@@ -654,7 +654,7 @@ void tratar_texto_wifi(const char* texto) {
 
     if (tela_atual == TelaWifi::NovaSenha ||
         tela_atual == TelaWifi::PrincipalSenha) {
-        if ((tamanho != 0 && tamanho < 8) || tamanho > 63) {
+        if (!gerenciador_wifi_credenciais_validas(contexto_wifi.ssid, texto)) {
             std::printf("\r\nUse senha vazia para rede aberta ou 8 a 63 caracteres.\r\n> ");
             std::fflush(stdout);
             return;

@@ -6,11 +6,11 @@
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "guarda_rollback_ota.h"
+#include "gerenciadores/guarda_rollback_ota.h"
 #include "servicos/receptor_uart.h"
 #include "gerenciadores/gerenciador_wifi.h"
 #include "servicos/servidor_web.h"
-#include "servico_ota_satelite.h"
+#include "servicos/ota_satelite.h"
 
 static const char *TAG = "main_visitantes";
 

@@ -2,12 +2,14 @@
 
 [Índice da documentação](README.md) · [Pinagem do microSD](pinagem.md#cartão-microsd-do-mestre) · [Firmware mestre](mestre.md#armazenamento-e-envio-ao-google)
 
-O mestre publica telemetria ao vivo aos satélites a **4 Hz** e guarda uma
-amostra por segundo em arquivos CSV no microSD. O envio ao Google é uma
+O Mestre publica telemetria ao vivo aos satélites normalmente a **4 Hz**. O
+registrador recebe uma amostra a cada 100 ms para gravar o CSV a **10 Hz** no
+microSD. O envio ao Google seleciona a primeira leitura de cada segundo da
+sessão e é uma
 operação **manual**, iniciada no terminal do mestre ou na página **Comandos**
 do ESP da Equipe. O painel de Visitantes não controla essa operação.
 
-O destino consiste em uma pasta no Drive, que recebe os CSVs originais, e uma
+O destino consiste em uma pasta no Drive, que recebe os CSVs exportados a 1 Hz, e uma
 planilha dentro dessa pasta, com uma aba por sessão do mestre. O arquivo local
 só deixa a lista de pendentes depois que o Web App confirma **aquele nome de
 arquivo**. A ligação elétrica do cartão, os GPIOs e os níveis de tensão estão
@@ -95,9 +97,13 @@ gráficos do navegador guardam apenas as amostras recebidas naquela página;
 não substituem o CSV do cartão. Logs e cópias de configuração do SD **não**
 são enviados por esta integração.
 
-Sem cartão montado, o histórico CSV e o envio ficam indisponíveis, mas a
-telemetria ao vivo continua. O mestre tenta recuperar o registro quando o
-cartão volta a estar disponível; consulte [diagnóstico e recuperação](mestre.md#armazenamento-e-envio-ao-google).
+Sem cartão montado, o Mestre continua publicando telemetria ao vivo. O
+registrador tenta montar ou remontar o cartão a cada **30 s** após uma falha de
+montagem. Três falhas consecutivas de gravação também programam uma remontagem.
+Se faltou memória para iniciar as tarefas do registro, a supervisão tenta
+iniciá-las separadamente da tarefa que publica a telemetria. O diagnóstico do
+Mestre indica a disponibilidade do cartão e os erros do registrador. Consulte
+[diagnóstico e recuperação](mestre.md#armazenamento-e-envio-ao-google).
 
 ## Solicitar e acompanhar a sincronização
 
@@ -119,21 +125,26 @@ cartão volta a estar disponível; consulte [diagnóstico e recuperação](mestr
    em `telemetria/enviados` e estão na pasta e na planilha Google. Uma resposta
    final de erro exige verificação dos arquivos que **ainda** estão pendentes.
 
-O mestre não inicia duas sincronizações simultâneas nem toma o Wi-Fi enquanto
-outra sessão de rede o ocupa. Durante uma execução, ele fecha o CSV ativo, abre
-uma sessão Wi-Fi temporária e percorre os `.csv` pendentes. Para cada arquivo,
-envia um `POST` HTTPS com o conteúdo CSV e os parâmetros `arquivo` e `token`.
+O Mestre usa uma sessão Wi-Fi exclusiva por vez. Se uma OTA ou outro teste
+estiver usando a rede, aguarde a sessão terminar e acompanhe o resultado do
+pedido no painel. Durante uma execução de upload, o registrador fecha o CSV
+ativo para compor o lote e o serviço percorre os `.csv` pendentes. Para cada arquivo,
+prepara uma cópia temporária com uma amostra por segundo e envia um `POST` HTTPS
+com esse CSV e os parâmetros `arquivo` e `token`.
 O Google pode redirecionar a leitura da resposta para
 `script.googleusercontent.com`; o firmware segue esse retorno e só aceita
 **HTTP 200 com o texto exato `OK:<nome-do-arquivo>`**. Em caso de falha, tenta
 o mesmo arquivo até quatro vezes, com esperas crescentes. Se ainda falhar,
 encerra o lote e deixa os não confirmados no cartão. Depois da confirmação,
-move o CSV para `enviados` e continua com o próximo. A sessão Wi-Fi é
+move o CSV completo para `enviados` e continua com o próximo. A sessão Wi-Fi é
 encerrada ao final.
+
+A página da Equipe inicia a operação com `POST /api/mestre?consulta=sincronizar_google`
+e acompanha o estado com `GET /api/mestre?consulta=sincronizacao`.
 
 ## O que o Google cria e como evita duplicatas
 
-O Apps Script grava cada CSV original na pasta escolhida e mantém **uma
+O Apps Script grava cada CSV enviado na pasta escolhida e mantém **uma
 planilha** chamada `telemetria_carro` nessa mesma pasta. Cada identificador de
 sessão recebe uma aba `sessao_XXXXXXXX`. A primeira coluna da aba,
 `arquivo_origem`, guarda o nome do CSV que originou cada linha; as outras
@@ -153,6 +164,8 @@ automaticamente.
 | Sinal observado | O que conferir |
 |---|---|
 | Botão indisponível ou pedido recusado | Estado do mestre, cartão e serviço de registro; sincronização ou outra sessão Wi-Fi já em andamento. |
+| Cartão indisponível após ligar | Confira o estado de montagem e aguarde a próxima tentativa. Examine a pinagem, a alimentação e o log de montagem se o erro persistir. |
+| Gravação interrompida | Verifique os contadores de erro e descarte da fila no diagnóstico. Confira novamente a gravação após a remontagem. |
 | Nenhum progresso e zero pendentes | A execução não encontrou CSVs com amostras para enviar. Consulte o resultado final e o contador de registro antes de tentar novamente. |
 | Falha de rede, DNS ou TLS | Credenciais da rede externa, acesso à internet, sinal Wi-Fi e estado da sessão no diagnóstico/serial do mestre. |
 | `ERRO:configuracao` | Falta `ID_PASTA_TELEMETRIA` ou `TOKEN_TELEMETRIA` nas propriedades do script. |

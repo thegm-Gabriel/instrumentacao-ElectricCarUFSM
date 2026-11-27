@@ -7,12 +7,18 @@
 
 #include "protocolo_crc32.h"
 #include "controle_remoto.h"
+#include "ajustes_desenvolvedor.h"
 
 #define COMANDO_INICIO_1 0xC7u
 #define COMANDO_INICIO_2 0x7Cu
 #define COMANDO_VERSAO_PROTOCOLO 1u
 #define COMANDO_TAMANHO_MAXIMO_CARGA 128u
 #define COMANDO_FORMATO_OTA_DETALHADO 2u
+#define COMANDO_OTA_MESTRE_VALIDANDO 10u
+#define COMANDO_OTA_MESTRE_EM_OBSERVACAO 11u
+#define COMANDO_OTA_MESTRE_VALIDADO 12u
+#define COMANDO_OTA_MESTRE_VALIDACAO_FALHOU 13u
+#define COMANDO_OTA_MESTRE_REVERTIDO 14u
 
 #define CAPACIDADE_COMANDO_PING (1u << 0)
 #define CAPACIDADE_COMANDO_VERSAO (1u << 1)
@@ -33,6 +39,8 @@
 #define CAPACIDADE_COMANDO_LOGS_TERMINAL (1u << 16)
 #define CAPACIDADE_COMANDO_TAREFAS_MESTRE (1u << 17)
 #define CAPACIDADE_COMANDO_PERMISSAO_REVERSAO (1u << 18)
+#define CAPACIDADE_COMANDO_DAC_ISOLADO (1u << 20)
+#define CAPACIDADE_COMANDO_AJUSTES_DESENVOLVEDOR (1u << 21)
 
 #define COMANDO_FORMATO_DIAGNOSTICO_MESTRE 1u
 #define COMANDO_FORMATO_SENSORES_MESTRE 1u
@@ -98,6 +106,9 @@ typedef enum {
     COMANDO_OBTER_SENSORES_MESTRE = 42,
     COMANDO_OBTER_LOGS_TERMINAL = 43,
     COMANDO_OBTER_TAREFAS_MESTRE = 44,
+    COMANDO_OBTER_AJUSTES_DESENVOLVEDOR = 45,
+    COMANDO_AJUSTAR_RADIO_SATELITE = 46,
+    COMANDO_OBTER_AJUSTES_DESENVOLVEDOR_EXTRAS = 47,
 } codigo_comando_t;
 
 // Uma única ação estruturada transporta as operações do menu serial sem
@@ -134,6 +145,7 @@ typedef enum {
     ACAO_MESTRE_RESTAURAR_POLITICA_WIFI = 29,
     ACAO_MESTRE_DEFINIR_LOGS_TERMINAL = 30,
     ACAO_MESTRE_PERMITIR_REVERSAO = 31,
+    ACAO_MESTRE_DEFINIR_AJUSTE_DESENVOLVEDOR = 32,
 } acao_mestre_t;
 
 typedef enum {
@@ -512,6 +524,29 @@ typedef struct __attribute__((packed)) {
     uint16_t limite_sessao_minutos;
     uint8_t aceito;
 } resposta_gestao_wifi_satelite_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t canal;
+    uint8_t largura_mhz;
+    uint8_t potencia_quartos_dbm; /* 0 usa o padrão do rádio. */
+    uint8_t maximo_clientes;
+} perfil_radio_satelite_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t alvo;
+    uint8_t alterar;
+    perfil_radio_satelite_t perfil;
+    char permissao[108];
+} solicitacao_radio_satelite_t;
+
+typedef struct __attribute__((packed)) {
+    perfil_radio_satelite_t salvo;
+    perfil_radio_satelite_t ativo;
+    uint8_t canal_minimo;
+    uint8_t canal_maximo;
+    uint8_t capacidade_clientes;
+    uint8_t reinicio_pendente;
+} resposta_radio_satelite_t;
 
 // Confirma que uma ação com efeito colateral foi aceita pelo mestre. O efeito
 // continua de forma assíncrona e deve ser acompanhado pela consulta de estado.

@@ -1,7 +1,6 @@
 <div align="center">
   <img src="firmware/compartilhado/web/logo_carro_eletrico.png" alt="Símbolo do Carro Elétrico UFSM-CS" width="210">
   <h1>Carro Elétrico UFSM-CS</h1>
-  <p><strong>Um laboratório em movimento.</strong></p>
   <p><strong>NEXUS</strong> · sistema de instrumentação, telemetria e controle experimental do veículo</p>
   <p>Universidade Federal de Santa Maria · Campus Cachoeira do Sul</p>
   <p>
@@ -31,13 +30,13 @@ interesse pela engenharia e pela mobilidade elétrica.
 
 ## O sistema
 
-No NEXUS, três ESP32-S3 dividem aquisição, operação e apresentação dos dados:
+No NEXUS, um ESP32-S3 Mestre e dois ESP32-C3 SuperMini Plus dividem a aquisição, a operação e a apresentação dos dados.
 
 ```mermaid
 flowchart LR
     S["Sensores e encoders"] --> M["ESP32-S3 Mestre"]
-    M <-->|UART| E["ESP32-S3 Equipe"]
-    M <-->|UART| V["ESP32-S3 Visitantes"]
+    M <-->|UART| E["ESP32-C3 Equipe"]
+    M <-->|UART| V["ESP32-C3 Visitantes"]
     M <-->|SPI2| SD["microSD · histórico e logs"]
     E <-->|Wi-Fi / HTTP| PE["Navegador · painel técnico"]
     V <-->|Wi-Fi / HTTP| PV["Navegador · painel público"]
@@ -45,7 +44,7 @@ flowchart LR
 
 | Componente | O que faz |
 |---|---|
-| **Mestre** | Lê sensores e encoders, calcula a telemetria, registra dados e diagnóstico no microSD e coordena comandos e atualizações OTA. |
+| **Mestre** | Lê sensores e encoders, executa o controle local, publica telemetria, registra dados e diagnóstico no microSD e coordena comandos e atualizações OTA. |
 | **Equipe** | Recebe a telemetria por UART, hospeda o painel técnico e encaminha consultas e ações ao mestre. |
 | **Visitantes** | Recebe a telemetria por UART e apresenta uma página pública de leitura. |
 | **Código compartilhado** | Define os formatos dos dados, o enlace UART e os serviços comuns aos firmwares. |
@@ -55,11 +54,16 @@ Os firmwares são projetos independentes **PlatformIO/ESP-IDF** em
 comandos, controle experimental e diagnóstico dos ESPs. O painel público mostra
 as leituras do veículo sem controles de operação.
 
+O Mestre executa o controle em ciclos nominais de **20 ms** e o odômetro em
+ciclos de **20 ms**. O MPU6050 e o INA228 amostram a **10 Hz**,
+e o mestre registra no microSD a **10 Hz**. A publicação UART consulta as últimas amostras a cada
+**250 ms** em operação normal. Cada painel consulta seu próprio ESP, e os
+comandos chegam como solicitações independentes dessas cadências.
+
 > **Estado atual do controle:** o mestre valida faixa L/M/H, sentido, limites
 > de velocidade e de pedal, zona morta, tensão mínima do DAC e parada remota.
-> O pedal é lido no GPIO3; o MCP4725 é zerado na inicialização. **A saída
-> diferente de zero e os GPIOs de marcha/relé seguem desabilitados** até
-> validação elétrica e dos intertravamentos.
+> O pedal é lido no GPIO5 e o MCP4725 inicia em 0 V. O armamento fecha o
+> relé normalmente aberto no GPIO21 após as verificações de segurança.
 > Ações pelo painel da equipe ficam disponíveis aos clientes do AP da Equipe. Veja
 > [controle remoto](documentacao/controle-remoto.md) e
 > [acesso aos satélites](documentacao/satelites.md).
@@ -75,6 +79,9 @@ as leituras do veículo sem controles de operação.
   [guia dos satélites](documentacao/satelites.md).
 - **Desenvolver e publicar:** [ferramentas](documentacao/ferramentas.md),
   [versionamento, releases e atualização OTA](documentacao/ota.md).
+- **Interpretar um ensaio:** [registro no SD e envio ao Google](documentacao/google.md),
+  [diagnóstico e recuperação no Mestre](documentacao/mestre.md#limites-e-verificações-em-bancada) e
+  [manual técnico editável](manual_overleaf/LEIA-ME.txt).
 
 ## Equipe
 

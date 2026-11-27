@@ -5,9 +5,19 @@
   \usepackage{lmodern}
 \else
   \usepackage{fontspec}
-  \setmainfont{Latin Modern Roman}
-  \setsansfont{Latin Modern Sans}
-  \setmonofont{Latin Modern Mono}
+  % Carrega os arquivos do TeX sem depender das fontes instaladas no sistema.
+  \setmainfont{lmroman10-regular.otf}[
+    BoldFont=lmroman10-bold.otf,
+    ItalicFont=lmroman10-italic.otf,
+    BoldItalicFont=lmroman10-bolditalic.otf]
+  \setsansfont{lmsans10-regular.otf}[
+    BoldFont=lmsans10-bold.otf,
+    ItalicFont=lmsans10-oblique.otf,
+    BoldItalicFont=lmsans10-boldoblique.otf]
+  \setmonofont{lmmono10-regular.otf}[
+    BoldFont=lmmonolt10-bold.otf,
+    ItalicFont=lmmono10-italic.otf,
+    BoldItalicFont=lmmonolt10-boldoblique.otf]
 \fi
 \usepackage[brazil]{babel}
 \usepackage{microtype}
@@ -28,6 +38,7 @@
 \definecolor{nexus}{HTML}{153650}
 \definecolor{accent}{HTML}{168B9A}
 \definecolor{pale}{HTML}{F0F5F8}
+\newcommand{\nexusRevision}{3.1}
 % Intensidade da marca d'agua: 0 desativa; 0.04 a 0.08 costuma ser discreto.
 \newcommand{\nexusWatermarkOpacity}{0.055}
 \newcommand{\nexusWatermarkWidth}{0.43\paperwidth}
@@ -44,7 +55,7 @@
 \titleformat{\subsection}{\large\bfseries\color{nexus}}{\thesubsection}{0.7em}{}
 \pagestyle{fancy}\fancyhf{}
 \fancyhead[L]{\small\textcolor{nexus}{NEXUS | Manual técnico}}
-\fancyhead[R]{\small Revisão 3.0}
+\fancyhead[R]{\small Revisão \nexusRevision}
 \fancyfoot[L]{\small UFSM | Cachoeira do Sul}\fancyfoot[R]{\thepage}
 \renewcommand{\headrulewidth}{0.4pt}
 \fancypagestyle{plain}{\fancyhf{}\fancyfoot[L]{\small NEXUS | UFSM}\fancyfoot[R]{\thepage}\renewcommand{\headrulewidth}{0pt}}

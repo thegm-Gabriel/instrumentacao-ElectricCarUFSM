@@ -22,7 +22,8 @@ struct EstatisticasServicoComandos {
 
 using DespachoComando = codigo_resposta_comando_t (*)(
     uint16_t comando, DestinoUart origem, const uint8_t* carga,
-    uint16_t tamanho_carga, uint8_t* resposta, uint16_t* tamanho_resposta);
+    uint16_t tamanho_carga, uint8_t* resposta, uint16_t* tamanho_resposta,
+    int64_t recebido_em_us);
 
 // Configurado durante a partida, antes de iniciar a recepção dos enlaces.
 void servico_comandos_definir_despacho(DespachoComando despacho);
@@ -30,7 +31,8 @@ void servico_comandos_definir_despacho(DespachoComando despacho);
 // Adaptador que a aplicação usa para ligar os comandos aos serviços do mestre.
 codigo_resposta_comando_t comandos_mestre_despachar(
     uint16_t comando, DestinoUart origem, const uint8_t* carga,
-    uint16_t tamanho_carga, uint8_t* resposta, uint16_t* tamanho_resposta);
+    uint16_t tamanho_carga, uint8_t* resposta, uint16_t* tamanho_resposta,
+    int64_t recebido_em_us);
 
 esp_err_t servico_comandos_iniciar();
 esp_err_t servico_comandos_encerrar();

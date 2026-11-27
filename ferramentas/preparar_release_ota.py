@@ -19,7 +19,7 @@ VERSAO_INICIAL = "0.1.0"
 ARQUIVOS_IGNORADOS = {"sdkconfig.old"}
 PASTAS_IGNORADAS = {".pio", ".git", "__pycache__"}
 EXTENSOES_FIRMWARE = {".c", ".cc", ".cpp", ".h", ".hpp", ".ini", ".csv", ".cmake"}
-EXTENSOES_WEB = {".html", ".css", ".js", ".py"}
+EXTENSOES_WEB = {".html", ".css", ".js", ".py", ".webp"}
 
 PROJETOS = {
     "mestre-s3": {
@@ -30,15 +30,15 @@ PROJETOS = {
     },
     "equipe-s3": {
         "pasta": "equipe-s3",
-        "ambiente": "esp32-s3-devkitm-1",
-        "projeto": "esp32s3_equipe",
-        "binario": "equipe-s3.bin",
+        "ambiente": "esp32-c3-supermini-plus",
+        "projeto": "esp32c3_equipe",
+        "binario": "equipe-c3.bin",
     },
     "visitantes-s3": {
         "pasta": "visitantes-s3",
-        "ambiente": "esp32-s3-devkitm-1",
-        "projeto": "esp32s3_visitantes",
-        "binario": "visitantes-s3.bin",
+        "ambiente": "esp32-c3-supermini-plus",
+        "projeto": "esp32c3_visitantes",
+        "binario": "visitantes-c3.bin",
     },
 }
 
@@ -165,6 +165,7 @@ def calcular_impressao_digital(raiz: Path, projeto: Path) -> str:
             arquivo for arquivo in (projeto / "web").rglob("*")
             if arquivo.is_file() and arquivo.suffix.lower() in EXTENSOES_WEB
         )
+    if projeto.name == "equipe-s3":
         arquivos.append(compartilhado / "web" / "logo_carro_eletrico.png")
     for arquivo in sorted(set(arquivos), key=lambda item: item.as_posix().lower()):
         relativo = arquivo.relative_to(raiz).as_posix().encode("utf-8")
@@ -363,9 +364,9 @@ def preparar_release(repositorio: str, forcar: set[str],
         [
             sys.executable,
             str(gerador),
-            "--firmware-mestre", str(diretorio_temporario / "mestre-s3.bin"),
-            "--firmware-equipe", str(diretorio_temporario / "equipe-s3.bin"),
-            "--firmware-visitantes", str(diretorio_temporario / "visitantes-s3.bin"),
+            "--firmware-mestre", str(diretorio_temporario / PROJETOS["mestre-s3"]["binario"]),
+            "--firmware-equipe", str(diretorio_temporario / PROJETOS["equipe-s3"]["binario"]),
+            "--firmware-visitantes", str(diretorio_temporario / PROJETOS["visitantes-s3"]["binario"]),
             "--versao-mestre", novas_versoes["mestre-s3"],
             "--versao-equipe", novas_versoes["equipe-s3"],
             "--versao-visitantes", novas_versoes["visitantes-s3"],

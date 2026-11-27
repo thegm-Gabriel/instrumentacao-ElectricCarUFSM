@@ -6,16 +6,54 @@ O mestre consulta periodicamente `manifesto-firmwares.json` no último GitHub
 Release. O arquivo descreve separadamente os firmwares `mestre-s3`, `equipe-s3` e
 `visitantes-s3`, cada um com sua própria versão, tamanho, URL e SHA-256.
 
-O Wi-Fi permanece desligado fora das verificações e instalações. Quando há uma
-atualização, o operador escolhe no terminal qual alvo autorizar. O mestre atualiza
-sua própria partição por HTTPS. Para um satélite, ele baixa a imagem por HTTPS e a
-retransmite pela UART em blocos confirmados individualmente.
+O Mestre usa o Wi-Fi externo em sessões temporárias de OTA, Google e teste de
+rede. Quando há uma atualização, o operador escolhe o alvo no terminal ou no
+painel da Equipe. O Mestre baixa sua própria imagem por HTTPS para a partição
+inativa. Para um satélite, retransmite a imagem pela UART em blocos confirmados
+individualmente.
 
 Uma atualização encontrada aguarda autorização por até 5 min. Se ninguém
 autorizar nesse prazo, o mestre descarta a oferta e retorna ao estado de
 cancelamento, sem alterar o firmware em execução. Uma nova consulta ao manifesto
 poderá encontrá-la outra vez. O cabeçalho HTTPS `Date` da consulta também permite
 acertar o relógio UTC dos logs no SD quando ele ainda não tem hora válida.
+
+## Autorização, Wi-Fi e cancelamento
+
+1. A consulta ao manifesto cria uma oferta. A tela **Aguardando autorização**
+   indica que o download da imagem ainda não começou.
+2. Após autorizar, o serviço tenta obter a sessão Wi-Fi. Uma sessão concorrente
+   de Google ou um teste de rede pode impedir a reserva. Nesse caso, a oferta
+   volta a **Aguardando autorização** até o prazo original. Aguarde a liberação
+   do Wi-Fi e autorize novamente ainda dentro do prazo. Se o prazo acabar, faça
+   outra verificação. Uma falha de conexão sem disputa aparece como **Falha**.
+3. Com a sessão Wi-Fi obtida e a autorização ainda válida, o Mestre desarma o
+   controle do veículo antes de iniciar qualquer download ou gravação de imagem.
+   Com a saída do MCP4725 habilitada, a tarefa de controle precisa confirmar
+   uma nova escrita de 0 mV no DAC dentro do prazo. Se a preparação falhar,
+   a instalação é interrompida. Quando a
+   operação termina com o mesmo firmware ainda em execução no Mestre, o
+   operador precisa rearmar manualmente depois de um desarme por OTA.
+
+**Cancelar** descarta a oferta pendente. Durante a preparação da rede ou a
+instalação, registra a solicitação para a tarefa de OTA interromper a operação.
+A resposta ao comando confirma o recebimento do pedido. Confira o estado
+**Cancelado** para confirmar o resultado. A tarefa pode precisar esperar a
+chamada de rede em curso terminar ou expirar.
+
+O serviço aceita pedidos até o início da finalização de cada alvo. No Mestre,
+isso acontece depois de conferir o tamanho e o SHA-256. Nos satélites, acontece
+antes do envio de **Finalizar** pela UART. Durante a finalização e o retorno do
+alvo, aguarde o resultado. No Mestre, **Aplicado** indica que a partição foi
+selecionada e será usada no próximo boot. No lote, o cancelamento fica
+disponível de novo durante a transferência do próximo alvo.
+
+Se o download do Mestre for interrompido, o gerenciador tenta restabelecer a
+mesma rede e continua na partição inativa a partir de um setor já gravado.
+A retomada exige o intervalo exato da imagem na resposta HTTPS e a validação
+final do SHA-256 do manifesto. O serviço pode recomeçar do zero quando o
+servidor não oferece o intervalo esperado. As tentativas são limitadas e
+pertencem à mesma instalação autorizada.
 
 Na operação **Atualizar todos**, a ordem é equipe, visitantes e, por último,
 mestre. Um alvo sem atualização pendente é ignorado. Se um satélite falhar, o
@@ -34,16 +72,28 @@ mais 2 min de observação. Se reiniciar antes da confirmação, o bootloader re
 à versão anterior. Depois da confirmação, o firmware ainda observa reinícios por
 panic ou watchdog até completar 5 min; três eventos desse tipo solicitam
 rollback. A contagem fica na memória RTC e é perdida em um corte total de energia.
-O mesmo mecanismo protege o mestre. O mestre considera a transferência de um
-satélite concluída quando a nova versão responde; a confirmação interna da
-imagem pelo satélite ocorre após a observação de 2 min.
+O mesmo mecanismo protege o Mestre. Quando o ACK final se perde, o Mestre
+consulta pela UART se a versão esperada voltou a responder. **Em observação**
+indica que ela já está em execução e o boot ainda está pendente. **Concluído**
+indica que o satélite confirmou a imagem. Para firmware que só informa a
+versão, o painel usa **Versão em execução**. O lote pode prosseguir assim que
+o satélite voltar com a versão esperada.
 
 No mestre, o download dos firmwares dos satélites usa três buffers fixos de 4 KiB
 na PSRAM. Enquanto uma tarefa transmite e confirma um bloco pela UART, o cliente
 HTTPS pode preencher o seguinte. Os buffers são criados uma vez ao iniciar o
-serviço e reutilizados, evitando fragmentação e mantendo o quadro entregue ao
-driver UART na RAM interna. Se a PSRAM não puder ser usada, o serviço tenta
-usar RAM interna.
+serviço e reutilizados junto com o quadro UART, também alocado na PSRAM. Se a
+PSRAM estiver indisponível, o serviço tenta usar RAM interna. A leitura UART
+entrega os bytes disponíveis assim que chegam.
+O cliente HTTP fecha a transferência quando detecta cancelamento ou falha.
+Se a tarefa de envio ainda estiver encerrando a sessão, uma nova tentativa
+fica disponível quando ela devolver os buffers.
+
+No Mestre, os buffers de dados HTTPS e o buffer de escrita da imagem usam a
+PSRAM quando disponível. A recepção Wi-Fi reserva seis buffers fixos de cerca
+de 1,6 KiB cada, ou mais se a janela de recepção do SDK exigir. O log `Heap
+interno OTA` registra o espaço livre, o maior bloco e o mínimo desde a partida
+antes da conexão, com a rede conectada e ao final de cada transferência.
 
 Durante a transferência, o terminal e a SSD1306 mostram o mesmo estado mantido
 pelo serviço OTA: alvo, versão, bytes confirmados, porcentagem, taxa em MB/s e tempo
@@ -55,18 +105,16 @@ intervalos regulares, permitindo visualizar as páginas normais entre os lembret
 
 ## Primeira gravação por cabo
 
-O mestre N16R8 e os dois ESP32-S3 SuperMini precisam receber uma gravação inicial
-por cabo. Essa instalação grava as tabelas com duas partições OTA. Nos SuperMini de
-4 MB, cada partição de aplicação possui 1.920 KiB.
+O Mestre N16R8 e os dois ESP32-C3 SuperMini Plus precisam receber a primeira gravação por cabo. No C3, use o USB-C nativo. A instalação grava o bootloader e a tabela de partições do chip. Cada slot de aplicação do C3 tem 1.920 KiB. A troca de ESP32-S3 para ESP32-C3 exige essa gravação inicial, pois a OTA atualiza somente uma aplicação do mesmo chip.
 
 ```powershell
 pio run -d firmware\mestre-s3 -e mestre-s3-n16r8 -t upload
-pio run -d firmware\equipe-s3 -e esp32-s3-devkitm-1 -t upload
-pio run -d firmware\visitantes-s3 -e esp32-s3-devkitm-1 -t upload
+pio run -d firmware\equipe-s3 -e esp32-c3-supermini-plus -t upload
+pio run -d firmware\visitantes-s3 -e esp32-c3-supermini-plus -t upload
 ```
 
 Depois dessa preparação, os satélites continuam usando os GPIO 5 (RX) e 6 (TX) dos
-SuperMini. O GND deve ser comum ao mestre.
+SuperMini Plus. O GND deve ser comum ao mestre. As pastas `equipe-s3` e `visitantes-s3` e as chaves correspondentes do manifesto foram mantidas para compatibilidade com as ferramentas e o Mestre. Os binários de release `equipe-c3.bin` e `visitantes-c3.bin` identificam o chip de destino.
 
 ## Menu do mestre
 
@@ -80,7 +128,7 @@ No terminal de 115200 baud, escolha `2 - Atualização OTA`. O submenu permite:
 | 4 | Autorizar atualização do satélite da Equipe. |
 | 5 | Autorizar atualização do satélite de Visitantes. |
 | 6 | Atualizar todos: satélites e depois mestre. |
-| 7 | Cancelar atualizações pendentes. |
+| 7 | Cancelar a oferta ou a instalação enquanto o serviço aceitar o cancelamento. |
 | 8 | Alterar o intervalo das verificações. |
 | 9 | Alterar o intervalo da telemetria durante OTA. |
 
@@ -93,6 +141,10 @@ módulo da equipe. A página exige
 confirmação para ações que alteram estado e acompanha o resultado pela UART.
 O envio HTTP fica disponível aos clientes conectados ao AP da Equipe; veja
 [satélites](satelites.md).
+
+A Equipe consulta o progresso com `GET /api/mestre?consulta=ota`. As ações
+usam `POST /api/mestre?consulta=...` com `verificar_ota`, `autorizar_mestre`,
+`autorizar_equipe`, `autorizar_visitantes`, `autorizar_todos` e `cancelar_ota`.
 
 ## Escolher a versão
 
@@ -155,7 +207,7 @@ Ela prepara arquivos **locais**; ainda não publica nada no GitHub.
    os caminhos dos quatro anexos. Se nenhuma fonte mudou e a saída anterior
    está completa, ele informa isso e não aumenta a versão.
 4. Confira `versoes/estado_versoes.json` e os quatro arquivos em
-   `versoes/saida/`: `mestre-s3.bin`, `equipe-s3.bin`, `visitantes-s3.bin` e
+   `versoes/saida/`: `mestre-s3.bin`, `equipe-c3.bin`, `visitantes-c3.bin` e
    `manifesto-firmwares.json`. No JSON, cada alvo deve apontar para a **mesma
    etiqueta** e para o anexo correto, com tamanho e SHA-256. O manifesto atual
    usa `versao_formato` 2. Não misture imagens de preparações diferentes.
@@ -234,8 +286,18 @@ oferta expirar após 5 min sem autorização, verifique novamente. Um satélite
 desligado ou sem resposta não é atualizado; restabeleça o enlace, consulte o
 diagnóstico e repita a verificação antes de tentar de novo.
 
+Em bancada, verifique também uma autorização disputando o Wi-Fi com uma
+sincronização e um cancelamento durante a preparação da rede ou o download.
+No primeiro caso, confira que a oferta ainda pode ser autorizada dentro do
+prazo original. No segundo, confira **Cancelado** e a versão ativa do Mestre.
+Após **Aplicado**, verifique o reinício e a versão informada pela nova imagem.
+
 Se o mestre não encontrar uma atualização, confira: se o release com quatro
 anexos está disponível como o mais recente; se o manifesto usa as URLs e a
 etiqueta corretas; se a versão interna do alvo é realmente maior; e se Wi-Fi
 externo, HTTPS e o enlace UART do satélite estão funcionando. A indicação de
 erro no terminal e no painel ajuda a localizar a etapa interrompida.
+
+Se o serial informar que o pipeline OTA dos satélites foi invalidado, uma
+falha interna interrompeu a operação. Preserve os logs, reinicie o Mestre em
+bancada e valide o enlace antes de tentar a transferência novamente.

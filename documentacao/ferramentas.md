@@ -14,7 +14,7 @@ upload explícito.
 | Ferramenta | Quando usar | Entrada | Saída |
 |---|---|---|---|
 | `firmware/equipe-s3/web/gerar_painel.py` | Após editar a página técnica. | `index.html`, `style.css`, `layout.css`, `app.js` e o logo compartilhado. | `firmware/equipe-s3/src/servicos/painel_web.c`. |
-| `firmware/visitantes-s3/web/gerar_painel.py` | Após editar a página pública. | `index.html`, `style.css`, `app.js` e o logo compartilhado. | `firmware/visitantes-s3/src/servicos/painel_web.c`. |
+| `firmware/visitantes-s3/web/gerar_painel.py` | Após editar a página pública. | `index.html`, `style.css`, `app.js` e dois WebP, o emblema e a arte do carro. | `firmware/visitantes-s3/src/servicos/painel_web.c`. |
 | `ferramentas/visualizar_painel_visitantes.py` | Ver a página pública no PC ou celular antes de gravar o ESP. | As mesmas fontes da página e telemetria simulada local. | Servidor HTTP local na porta 8765. |
 | `ferramentas/visualizar_painel_equipe.py` | Experimentar o painel técnico, os comandos e os estados de saúde no PC ou celular. | Fontes da Equipe e APIs simuladas em memória. | Servidor HTTP local na porta 8766. |
 | `ferramentas/gerar_segredos_ota.py` | Criar a configuração local inicial do Wi-Fi usado pelo mestre. | Variáveis `OTA_WIFI_SSID` e `OTA_WIFI_SENHA`. | `firmware/mestre-s3/include/nucleo/segredos_ota.h`. |
@@ -22,10 +22,12 @@ upload explícito.
 | `ferramentas/preparar_release_ota.py` | Preparar um conjunto OTA versionado. | Fontes, estado anterior, escolha de incremento e imagens anteriores quando reutilizadas. | Três `.bin`, manifesto, histórico e `estado_versoes.json`. |
 | `ferramentas/criar_manifesto_ota.py` | Gerar manualmente o manifesto de três imagens já compiladas. | Caminho e versão de cada `.bin`, etiqueta e repositório. | JSON com URL, SHA-256 e tamanho por alvo. |
 
-Os scripts de operação ficam em `ferramentas/`, cada gerador de painel junto
-das fontes `web/` correspondentes, e os testes de regressão em
-`ferramentas/testes/`. Nenhum script de prévia grava configurações ou firmware
-nos ESPs.
+Os comandos de operação ficam na raiz de `ferramentas/`. Em
+`ferramentas/previas/`, `servidor.py` carrega o gerador de cada painel e
+centraliza as opções de acesso e a inicialização HTTP. `telemetria.py`
+fornece o trajeto simulado aos dois visualizadores. Os geradores dos painéis
+ficam junto das fontes `web/` correspondentes, e os testes de regressão em
+`ferramentas/testes/`.
 
 ## Gerar os painéis incorporados
 
@@ -37,9 +39,10 @@ python firmware\visitantes-s3\web\gerar_painel.py
 As páginas são servidas como uma única resposta HTML com CSS, JavaScript e o
 símbolo do projeto incorporados; não há solicitação externa para esses arquivos.
 **Edite as fontes em `web/`, não o `.c` gerado.** Confira o diff dos dois lados
-e inclua ambos no commit. Se o símbolo mudar, substitua
-`firmware/compartilhado/web/logo_carro_eletrico.png` e execute os dois
-geradores. `node --check firmware/equipe-s3/web/app.js` e o comando equivalente
+e inclua ambos no commit. Se o símbolo mudar, atualize o PNG da Equipe em
+`firmware/compartilhado/web/logo_carro_eletrico.png` e exporte uma cópia WebP para
+`firmware/visitantes-s3/web/logo_carro_eletrico.webp` antes de executar os geradores.
+`node --check firmware/equipe-s3/web/app.js` e o comando equivalente
 de Visitantes verificam sintaxe de JavaScript; ainda é preciso testar a página
 em tela estreita, resposta ausente e dados reais/simulados.
 
@@ -64,6 +67,11 @@ Use `--local` ou `--rede` para escolher o modo direto pela linha de comando.
 Em execução sem terminal interativo, o padrão é acesso só no PC. `--porta
 8770`, por exemplo, escolhe outra porta. As duas prévias podem rodar ao mesmo
 tempo em terminais separados. `Ctrl+C` encerra a prévia.
+
+Para testar pelo celular, selecione o modo de rede, mantenha o script aberto
+e use o endereço IPv4 do computador que o terminal mostrar. O endereço
+`127.0.0.1` só abre no computador que executa a prévia. Para confirmar
+as opções disponíveis na sua revisão, execute o script com `--help`.
 
 Os visualizadores montam as páginas a partir das fontes HTML, CSS e JavaScript
 dos firmwares. Atualize o navegador depois de editar a interface e reinicie o
@@ -159,8 +167,8 @@ firmware: edite o cabeçalho, regenere os códigos e recompile o satélite.
 
 ```powershell
 pio run -d firmware\mestre-s3 -e mestre-s3-n16r8
-pio run -d firmware\equipe-s3 -e esp32-s3-devkitm-1
-pio run -d firmware\visitantes-s3 -e esp32-s3-devkitm-1
+pio run -d firmware\equipe-s3 -e esp32-c3-supermini-plus
+pio run -d firmware\visitantes-s3 -e esp32-c3-supermini-plus
 python -m unittest discover -s ferramentas/testes -p test_preparar_release_ota.py -v
 ```
 
@@ -168,7 +176,7 @@ Se `pio` não estiver no PATH no Windows, use o executável da instalação loca
 
 ```powershell
 $pioLocal = Join-Path $env:USERPROFILE '.platformio\penv\Scripts\pio.exe'
-& $pioLocal run -d firmware\visitantes-s3 -e esp32-s3-devkitm-1
+& $pioLocal run -d firmware\visitantes-s3 -e esp32-c3-supermini-plus
 ```
 
 O preparador de release procura esse caminho automaticamente.
@@ -212,6 +220,11 @@ Revise e inclua no commit o `painel_web.c` regenerado: o fluxo de publicação
 executa os geradores e recusa a tag se o resultado divergir do arquivo no Git.
 O fluxo também executa os testes Python e JavaScript disponíveis antes de
 compilar os três ESPs.
+Uma revisão apenas de documentação não altera a impressão digital dos
+firmwares. Uma mudança em cabeçalho de protocolo compartilhado pode exigir
+nova compilação dos três alvos. Confira as versões e os tamanhos de quadro
+antes de escolher o incremento. [Protocolos compartilhados](protocolos.md)
+
 O conjunto novo fica em `versoes/saida`. Não apague `versoes/estado_versoes.json`:
 ele informa o último conjunto preparado e pertence ao Git. Para escolher o
 incremento, criar a tag, acompanhar o workflow e instalar os três alvos,
@@ -225,8 +238,8 @@ precisa reconstruir o JSON sem executar o preparador:
 ```powershell
 python ferramentas\criar_manifesto_ota.py `
   --firmware-mestre versoes\saida\mestre-s3.bin `
-  --firmware-equipe versoes\saida\equipe-s3.bin `
-  --firmware-visitantes versoes\saida\visitantes-s3.bin `
+  --firmware-equipe versoes\saida\equipe-c3.bin `
+  --firmware-visitantes versoes\saida\visitantes-c3.bin `
   --versao-mestre 2.3.0 --versao-equipe 1.7.2 --versao-visitantes 1.7.2 `
   --etiqueta v2.4.6 --repositorio usuario/repositorio `
   --saida versoes\saida\manifesto-firmwares.json

@@ -1,4 +1,4 @@
-// Modela o conjunto de dados veiculares publicado pela telemetria.
+// Modelo interno de dados veiculares utilizado pelos serviços do Mestre.
 #pragma once
 
 #include <cstdint>
@@ -55,6 +55,7 @@ struct DadosTelemetriaVeiculo {
     bool ina_energia_valida = false;
     bool ina_carga_valida = false;
     float carga_percentual = 0.0f;
+    bool soc_estimado = false;
     float tensoes_celulas_v[4] = {};
     double latitude = 0.0;
     double longitude = 0.0;

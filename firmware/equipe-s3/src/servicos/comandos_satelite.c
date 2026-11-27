@@ -1,5 +1,6 @@
 // Implementa o atendimento de comandos binários recebidos pelo satélite.
-#include "servico_comandos_satelite.h"
+#include "servicos/comandos_satelite.h"
+#include "gerenciadores/gerenciador_wifi.h"
 
 #include <string.h>
 
@@ -88,6 +89,22 @@ static codigo_resposta_comando_t executar_consulta(
         memcpy(&solicitacao, carga_solicitacao, sizeof(solicitacao));
         if (solicitacao.alvo != configuracao_atual.no_satelite ||
             configuracao_atual.gerir_wifi(&solicitacao, &dados) != ESP_OK)
+            return RESPOSTA_COMANDO_ERRO_INTERNO;
+        memcpy(resposta, &dados, sizeof(dados));
+        *tamanho_resposta = sizeof(dados);
+        return RESPOSTA_COMANDO_OK;
+    }
+    if (cabecalho->comando == COMANDO_AJUSTAR_RADIO_SATELITE) {
+        if (cabecalho->tamanho_carga != 0) {
+            perfil_radio_satelite_t perfil;
+            if (cabecalho->tamanho_carga != sizeof(perfil)) return RESPOSTA_COMANDO_CARGA_INVALIDA;
+            memcpy(&perfil, carga_solicitacao, sizeof(perfil));
+            const esp_err_t erro = gerenciador_wifi_salvar_perfil(&perfil);
+            if (erro == ESP_ERR_INVALID_ARG) return RESPOSTA_COMANDO_CARGA_INVALIDA;
+            if (erro != ESP_OK) return RESPOSTA_COMANDO_ERRO_INTERNO;
+        }
+        resposta_radio_satelite_t dados;
+        if (gerenciador_wifi_consultar_perfil(&dados) != ESP_OK)
             return RESPOSTA_COMANDO_ERRO_INTERNO;
         memcpy(resposta, &dados, sizeof(dados));
         *tamanho_resposta = sizeof(dados);
@@ -358,16 +375,6 @@ esp_err_t servico_comandos_satelite_solicitar_detalhado(
              configuracao_atual.nome_satelite, (unsigned)comando,
              MAXIMO_TENTATIVAS);
     return erro;
-}
-
-esp_err_t servico_comandos_satelite_solicitar(
-    codigo_comando_t comando, const void *carga, uint16_t tamanho_carga,
-    void *resposta, size_t capacidade_resposta, uint16_t *tamanho_resposta,
-    codigo_resposta_comando_t *resultado, TickType_t tempo_limite)
-{
-    return servico_comandos_satelite_solicitar_detalhado(
-        comando, carga, tamanho_carga, resposta, capacidade_resposta,
-        tamanho_resposta, resultado, tempo_limite, NULL);
 }
 
 estatisticas_servico_comandos_satelite_t

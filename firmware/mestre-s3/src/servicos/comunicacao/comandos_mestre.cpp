@@ -10,6 +10,7 @@
 #include "esp_timer.h"
 #include "gerenciadores/i2c.h"
 #include "gerenciadores/uart.h"
+#include "gerenciadores/wifi.h"
 #include "nucleo/configuracao/placa.h"
 #include "nucleo/configuracao/veiculo.h"
 #include "servicos/manutencao/ota.h"
@@ -18,6 +19,7 @@
 #include "servicos/veiculo/simulador.h"
 #include "servicos/comunicacao/telemetria_uart.h"
 #include "servicos/veiculo/controle.h"
+#include "servicos/manutencao/ajustes.h"
 #include "servicos/veiculo/aquisicao.h"
 #include "servicos/manutencao/diagnostico.h"
 #include "servicos/historico/registro_sd.h"
@@ -38,7 +40,9 @@ constexpr uint32_t CAPACIDADES_MESTRE =
     CAPACIDADE_COMANDO_SIMULADOR | CAPACIDADE_COMANDO_CONTROLE_REMOTO |
     CAPACIDADE_COMANDO_SENSORES_MESTRE |
     CAPACIDADE_COMANDO_RESTAURAR_POLITICA_WIFI | CAPACIDADE_COMANDO_LOGS_TERMINAL |
-    CAPACIDADE_COMANDO_TAREFAS_MESTRE | CAPACIDADE_COMANDO_PERMISSAO_REVERSAO;
+    CAPACIDADE_COMANDO_TAREFAS_MESTRE | CAPACIDADE_COMANDO_PERMISSAO_REVERSAO |
+    CAPACIDADE_COMANDO_AJUSTES_DESENVOLVEDOR |
+    (configuracao::HABILITAR_DAC_ISOLADO ? CAPACIDADE_COMANDO_DAC_ISOLADO : 0u);
 
 static_assert(static_cast<uint8_t>(SensorControlado::Adc) == SENSOR_MESTRE_ADC &&
               static_cast<uint8_t>(SensorControlado::Mpu6050) == SENSOR_MESTRE_MPU6050 &&
@@ -150,11 +154,13 @@ codigo_resposta_comando_t responder_telemetria(
     uint16_t* tamanho_resposta) {
     const codigo_resposta_comando_t valido = validar_sem_carga(tamanho_carga);
     if (valido != RESPOSTA_COMANDO_OK) return valido;
-    const DadosTelemetriaVeiculo atual = servico_telemetria_obter_ultima_amostra_validada();
-    const EstatisticasTelemetria estat = servico_telemetria_obter_estatisticas();
+    pacote_telemetria_t atual{};
+    if (!servico_telemetria_obter_ultimo_pacote_validado(atual)) {
+        return RESPOSTA_COMANDO_OCUPADO;
+    }
     resposta_comando_telemetria_t dados{};
-    dados.sequencia = estat.ultima_sequencia;
-    dados.tempo_mestre_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+    dados.sequencia = atual.sequencia;
+    dados.tempo_mestre_ms = atual.tempo_mestre_ms;
     dados.tensao_adc_bruta = atual.tensao_adc_bruta;
     dados.aceleracao_x = atual.aceleracao_x;
     dados.aceleracao_y = atual.aceleracao_y;
@@ -162,10 +168,8 @@ codigo_resposta_comando_t responder_telemetria(
     dados.giroscopio_x = atual.giroscopio_x;
     dados.giroscopio_y = atual.giroscopio_y;
     dados.giroscopio_z = atual.giroscopio_z;
-    dados.velocidade_centesimos_kmh =
-        telemetria_escalar_uint16(atual.velocidade_kmh, 100.0f);
-    dados.carga_decimos_percentual =
-        telemetria_escalar_uint16(atual.carga_percentual, 10.0f);
+    dados.velocidade_centesimos_kmh = atual.velocidade_centesimos_kmh;
+    dados.carga_decimos_percentual = atual.carga_decimos_percentual;
     std::memcpy(resposta, &dados, sizeof(dados));
     *tamanho_resposta = sizeof(dados);
     return RESPOSTA_COMANDO_OK;
@@ -217,6 +221,32 @@ codigo_resposta_comando_t responder_ota(
     dados.estado_mestre = static_cast<uint8_t>(estado_mestre);
     dados.progresso_mestre_decimos = static_cast<uint16_t>(
         std::min<uint32_t>(ota.progresso.percentual_decimos, 1000u));
+    if (ota.validacao_mestre == EstadoValidacaoOta::Validando ||
+        ota.validacao_mestre == EstadoValidacaoOta::EmObservacao) {
+        dados.estado_mestre = ota.validacao_mestre == EstadoValidacaoOta::Validando
+            ? COMANDO_OTA_MESTRE_VALIDANDO : COMANDO_OTA_MESTRE_EM_OBSERVACAO;
+        const int64_t duracao = ota.periodo_validacao_fim_us - ota.periodo_validacao_inicio_us;
+        if (duracao > 0) {
+            const int64_t decorrido = esp_timer_get_time() - ota.periodo_validacao_inicio_us;
+            dados.progresso_mestre_decimos = static_cast<uint16_t>(
+                std::clamp<int64_t>(decorrido, 0, duracao) * 1000 / duracao);
+        }
+    } else if (ota.validacao_mestre == EstadoValidacaoOta::Falha) {
+        dados.estado_mestre = COMANDO_OTA_MESTRE_VALIDACAO_FALHOU;
+        dados.progresso_mestre_decimos = 0;
+    } else if (ota.validacao_mestre == EstadoValidacaoOta::Revertida &&
+               estado_mestre != EstadoServicoOta::Baixando &&
+               estado_mestre != EstadoServicoOta::Aplicado) {
+        dados.estado_mestre = COMANDO_OTA_MESTRE_REVERTIDO;
+        dados.progresso_mestre_decimos = 0;
+    } else if (ota.validacao_mestre == EstadoValidacaoOta::Concluida &&
+               estado_mestre != EstadoServicoOta::AguardandoAutorizacao &&
+               estado_mestre != EstadoServicoOta::Baixando &&
+               estado_mestre != EstadoServicoOta::Aplicado &&
+               estado_mestre != EstadoServicoOta::Falha) {
+        dados.estado_mestre = COMANDO_OTA_MESTRE_VALIDADO;
+        dados.progresso_mestre_decimos = 1000;
+    }
     dados.progresso_equipe_decimos = static_cast<uint16_t>(
         std::min<uint32_t>(ota.equipe.progresso.percentual_decimos, 1000u));
     dados.progresso_visitantes_decimos = static_cast<uint16_t>(
@@ -302,7 +332,7 @@ const char* segundo_texto(const solicitacao_acao_mestre_t& solicitacao) {
 
 codigo_resposta_comando_t executar_acao_mestre(
     DestinoUart origem, const uint8_t* carga, uint16_t tamanho_carga,
-    uint8_t* resposta, uint16_t* tamanho_resposta) {
+    uint8_t* resposta, uint16_t* tamanho_resposta, int64_t recebido_em_us) {
     *tamanho_resposta = 0;
     if (origem != DestinoUart::Equipe) return RESPOSTA_COMANDO_NEGADO;
     if (tamanho_carga != sizeof(solicitacao_acao_mestre_t)) {
@@ -311,7 +341,7 @@ codigo_resposta_comando_t executar_acao_mestre(
     solicitacao_acao_mestre_t solicitacao{};
     std::memcpy(&solicitacao, carga, sizeof(solicitacao));
     if (solicitacao.acao < ACAO_MESTRE_ALTERNAR_RELATORIOS ||
-        solicitacao.acao > ACAO_MESTRE_DEFINIR_LOGS_TERMINAL) {
+        solicitacao.acao > ACAO_MESTRE_DEFINIR_AJUSTE_DESENVOLVEDOR) {
         return RESPOSTA_COMANDO_CARGA_INVALIDA;
     }
     if (solicitacao.reservado != 0 &&
@@ -365,11 +395,8 @@ codigo_resposta_comando_t executar_acao_mestre(
             break;
         case ACAO_MESTRE_PREPARAR_REDE_WIFI: {
             const char* senha = segundo_texto(solicitacao);
-            const size_t tamanho_ssid = strnlen(
-                solicitacao.texto, sizeof(solicitacao.texto));
-            const size_t tamanho_senha = senha == nullptr ? 0 : std::strlen(senha);
-            if (tamanho_ssid < 1 || tamanho_ssid > 32 ||
-                (tamanho_senha != 0 && tamanho_senha < 8) || tamanho_senha > 63) {
+            if (senha == nullptr) senha = "";
+            if (!gerenciador_wifi_credenciais_validas(solicitacao.texto, senha)) {
                 return RESPOSTA_COMANDO_CARGA_INVALIDA;
             }
             rede_wifi_preparada = {};
@@ -437,6 +464,14 @@ codigo_resposta_comando_t executar_acao_mestre(
             }
             erro = servico_wifi_definir_politica(PoliticaConexaoWifi{}, solicitacao.texto);
             break;
+        case ACAO_MESTRE_DEFINIR_AJUSTE_DESENVOLVEDOR:
+            if (solicitacao.alvo >= AJUSTES_DESENVOLVEDOR_TOTAL || solicitacao.valor > INT32_MAX ||
+                solicitacao.valor_2 || solicitacao.valor_3 || solicitacao.valor_4) {
+                return RESPOSTA_COMANDO_CARGA_INVALIDA;
+            }
+            if (!servico_wifi_validar_permissao(solicitacao.texto)) return RESPOSTA_COMANDO_NEGADO;
+            erro = ajustes_desenvolvedor_definir(solicitacao.alvo, static_cast<int32_t>(solicitacao.valor));
+            break;
         case ACAO_MESTRE_DEFINIR_LOGS_TERMINAL:
             if (solicitacao.valor > ESP_LOG_INFO || solicitacao.valor_2 > AJUSTE_LOG_TERMINAL_FONTE ||
                 solicitacao.valor_3 || solicitacao.valor_4) {
@@ -483,7 +518,7 @@ codigo_resposta_comando_t executar_acao_mestre(
                 acao == ACAO_MESTRE_DEFINIR_REVERSAO ? AjusteControleRemoto::Reversao :
                 acao == ACAO_MESTRE_PERMITIR_REVERSAO ? AjusteControleRemoto::PermissaoReversao :
                 acao == ACAO_MESTRE_DEFINIR_VELOCIDADE_MAXIMA ? AjusteControleRemoto::VelocidadeMaxima : AjusteControleRemoto::Parada;
-            erro = servico_controle_remoto_definir(ajuste, solicitacao.valor);
+            erro = servico_controle_remoto_definir(ajuste, solicitacao.valor, recebido_em_us);
             break;
         }
         case ACAO_MESTRE_DEFINIR_SIMULADOR:
@@ -700,7 +735,7 @@ codigo_resposta_comando_t responder_sensores_mestre(
 
     // Usa os estados publicados. A consulta nunca acessa o barramento físico.
     DadosTelemetriaVeiculo amostra{};
-    const bool real = servico_aquisicao_obter_ultima_amostra(amostra) && !amostra.simulado;
+    const bool real = servico_telemetria_obter_ultima_amostra_local(amostra) && !amostra.simulado;
     if (real && (dados.ativos & (1u << SENSOR_MESTRE_ADC))) {
         const auto sensores = servico_diagnostico_obter_sensores();
         if (sensores.adc.ultimo_erro == ESP_OK) {
@@ -729,8 +764,7 @@ codigo_resposta_comando_t responder_sensores_mestre(
         dados.diagnostico_ina = amostra.ina_diagnostico;
     }
     const auto odometro = servico_odometro_obter_estado();
-    if (real && odometro.iniciado && odometro.atualizacoes &&
-        odometro.ultimo_erro_leitura == ESP_OK && odometro.ultimo_erro_validacao == ESP_OK &&
+    if (real && servico_odometro_amostra_recente(odometro, esp_timer_get_time()) &&
         std::isfinite(odometro.roda_esquerda.velocidade_kmh) &&
         std::isfinite(odometro.roda_direita.velocidade_kmh)) {
         dados.validos |= dados.ativos & (1u << SENSOR_MESTRE_ENCODERS);
@@ -911,6 +945,37 @@ codigo_resposta_comando_t consultar_satelite_remoto(
     return RESPOSTA_COMANDO_OK;
 }
 
+codigo_resposta_comando_t ajustar_radio_satelite(
+    DestinoUart origem, const uint8_t* carga, uint16_t tamanho_carga,
+    uint8_t* resposta, uint16_t* tamanho_resposta) {
+    static_assert(sizeof(solicitacao_radio_satelite_t) <= COMANDO_TAMANHO_MAXIMO_CARGA);
+    static_assert(sizeof(resposta_radio_satelite_t) <= COMANDO_TAMANHO_MAXIMO_CARGA);
+    *tamanho_resposta = 0;
+    if (origem != DestinoUart::Equipe) return RESPOSTA_COMANDO_NEGADO;
+    if (tamanho_carga != sizeof(solicitacao_radio_satelite_t))
+        return RESPOSTA_COMANDO_CARGA_INVALIDA;
+    solicitacao_radio_satelite_t pedido{};
+    std::memcpy(&pedido, carga, sizeof(pedido));
+    if ((pedido.alvo != NO_COMANDO_EQUIPE && pedido.alvo != NO_COMANDO_VISITANTES) ||
+        pedido.alterar > 1 || pedido.permissao[sizeof(pedido.permissao) - 1] != '\0')
+        return RESPOSTA_COMANDO_CARGA_INVALIDA;
+    if (pedido.alterar && !servico_wifi_validar_permissao(pedido.permissao))
+        return RESPOSTA_COMANDO_NEGADO;
+    const auto destino = pedido.alvo == NO_COMANDO_EQUIPE ? DestinoUart::Equipe : DestinoUart::Visitantes;
+    codigo_resposta_comando_t resultado = RESPOSTA_COMANDO_TIMEOUT;
+    uint16_t tamanho = 0;
+    const esp_err_t erro = servico_comandos_solicitar(
+        destino, COMANDO_AJUSTAR_RADIO_SATELITE,
+        pedido.alterar ? &pedido.perfil : nullptr, pedido.alterar ? sizeof(pedido.perfil) : 0,
+        resposta, COMANDO_TAMANHO_MAXIMO_CARGA, &tamanho, &resultado, pdMS_TO_TICKS(1000));
+    if (erro != ESP_OK) return erro == ESP_ERR_TIMEOUT ? RESPOSTA_COMANDO_TIMEOUT
+                                                       : RESPOSTA_COMANDO_ERRO_INTERNO;
+    if (resultado != RESPOSTA_COMANDO_OK) return resultado;
+    if (tamanho != sizeof(resposta_radio_satelite_t)) return RESPOSTA_COMANDO_ERRO_INTERNO;
+    *tamanho_resposta = tamanho;
+    return RESPOSTA_COMANDO_OK;
+}
+
 codigo_resposta_comando_t gerir_wifi_satelite_remoto(
     DestinoUart origem, const uint8_t* carga, uint16_t tamanho_carga,
     uint8_t* resposta, uint16_t* tamanho_resposta) {
@@ -1026,19 +1091,48 @@ codigo_resposta_comando_t responder_controle_remoto(
     DestinoUart origem, const uint8_t* carga, uint16_t tamanho_carga,
     uint8_t* resposta, uint16_t* tamanho_resposta) {
     if (origem != DestinoUart::Equipe) return RESPOSTA_COMANDO_NEGADO;
-    if (tamanho_carga != 0 && (tamanho_carga != 1 || carga[0] != CONTROLE_REMOTO_FORMATO))
+    if (tamanho_carga != 0 && (tamanho_carga != 1 ||
+        (carga[0] != CONTROLE_REMOTO_FORMATO && carga[0] != CONTROLE_REMOTO_FORMATO_REARME)))
         return RESPOSTA_COMANDO_CARGA_INVALIDA;
     auto dados = servico_controle_remoto_obter_estado();
     static_assert(sizeof(dados) <= COMANDO_TAMANHO_MAXIMO_CARGA, "Estado remoto excede quadro");
     if (tamanho_carga == 0) {
         dados.formato = CONTROLE_REMOTO_FORMATO_LEGADO;
         *tamanho_resposta = CONTROLE_REMOTO_TAMANHO_LEGADO;
+    } else if (carga[0] == CONTROLE_REMOTO_FORMATO_REARME) {
+        dados.formato = CONTROLE_REMOTO_FORMATO_REARME;
+        *tamanho_resposta = CONTROLE_REMOTO_TAMANHO_REARME;
     } else *tamanho_resposta = sizeof(dados);
     std::memcpy(resposta, &dados, *tamanho_resposta);
     return RESPOSTA_COMANDO_OK;
 }
 
+codigo_resposta_comando_t responder_ajustes_desenvolvedor(
+    DestinoUart origem, const uint8_t*, uint16_t tamanho_carga,
+    uint8_t* resposta, uint16_t* tamanho_resposta) {
+    if (origem != DestinoUart::Equipe) return RESPOSTA_COMANDO_NEGADO;
+    if (tamanho_carga != 0) return RESPOSTA_COMANDO_CARGA_INVALIDA;
+    const auto dados = ajustes_desenvolvedor_consultar();
+    static_assert(sizeof(dados) <= COMANDO_TAMANHO_MAXIMO_CARGA);
+    std::memcpy(resposta, &dados, sizeof(dados));
+    *tamanho_resposta = sizeof(dados);
+    return RESPOSTA_COMANDO_OK;
+}
+
 constexpr RegistroComando COMANDOS[] = {
+    {COMANDO_OBTER_AJUSTES_DESENVOLVEDOR_EXTRAS, [](DestinoUart origem,
+        const uint8_t* carga, uint16_t tamanho_carga, uint8_t* resposta, uint16_t* tamanho_resposta) {
+        if (origem != DestinoUart::Equipe) return RESPOSTA_COMANDO_NEGADO;
+        if (tamanho_carga != 0 &&
+            (tamanho_carga != 1 || carga[0] != AJUSTES_EXTRAS_FORMATO_COM_LED))
+            return RESPOSTA_COMANDO_CARGA_INVALIDA;
+        const auto dados = ajustes_desenvolvedor_consultar_extras();
+        static_assert(sizeof(dados) <= COMANDO_TAMANHO_MAXIMO_CARGA);
+        *tamanho_resposta = tamanho_carga == 0 ? AJUSTES_EXTRAS_TAMANHO_LEGADO : sizeof(dados);
+        std::memcpy(resposta, &dados, *tamanho_resposta);
+        return RESPOSTA_COMANDO_OK;
+    }},
+    {COMANDO_OBTER_AJUSTES_DESENVOLVEDOR, responder_ajustes_desenvolvedor},
     {COMANDO_OBTER_CONTROLE_REMOTO, responder_controle_remoto},
     {COMANDO_PING, responder_ping},
     {COMANDO_OBTER_VERSAO, responder_versao},
@@ -1055,11 +1149,11 @@ constexpr RegistroComando COMANDOS[] = {
     {COMANDO_AUTORIZAR_OTA_TODOS, autorizar_ota_todos},
     {COMANDO_CANCELAR_OTA, cancelar_ota},
     {COMANDO_SOLICITAR_RESUMO_TERMINAL, solicitar_resumo_terminal},
-    {COMANDO_EXECUTAR_ACAO_MESTRE, executar_acao_mestre},
     {COMANDO_OBTER_CONFIGURACAO_MESTRE, responder_configuracao_mestre},
     {COMANDO_OBTER_REDE_WIFI_SALVA, responder_rede_wifi_salva},
     {COMANDO_CONSULTAR_SATELITE, consultar_satelite_remoto},
     {COMANDO_GERIR_WIFI_SATELITE, gerir_wifi_satelite_remoto},
+    {COMANDO_AJUSTAR_RADIO_SATELITE, ajustar_radio_satelite},
     {COMANDO_OBTER_DIAGNOSTICO_MESTRE, responder_diagnostico_mestre},
     {COMANDO_OBTER_SENSORES_MESTRE, responder_sensores_mestre},
     {COMANDO_OBTER_LOGS_TERMINAL, responder_logs_terminal},
@@ -1079,7 +1173,12 @@ const RegistroComando* localizar_comando(uint16_t codigo) {
 
 codigo_resposta_comando_t comandos_mestre_despachar(
     uint16_t comando, DestinoUart origem, const uint8_t* carga,
-    uint16_t tamanho_carga, uint8_t* resposta, uint16_t* tamanho_resposta) {
+    uint16_t tamanho_carga, uint8_t* resposta, uint16_t* tamanho_resposta,
+    int64_t recebido_em_us) {
+    if (comando == COMANDO_EXECUTAR_ACAO_MESTRE) {
+        return executar_acao_mestre(origem, carga, tamanho_carga, resposta,
+                                    tamanho_resposta, recebido_em_us);
+    }
     const RegistroComando* registro = localizar_comando(comando);
     if (registro == nullptr) return RESPOSTA_COMANDO_NAO_SUPORTADO;
     return registro->executar(origem, carga, tamanho_carga, resposta,

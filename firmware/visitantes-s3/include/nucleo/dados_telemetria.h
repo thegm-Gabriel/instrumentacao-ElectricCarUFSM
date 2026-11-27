@@ -1,5 +1,4 @@
 // Declara o estado de telemetria compartilhado no satélite dos visitantes.
-// Declara o estado de telemetria compartilhado no satélite dos visitantes.
 #pragma once
 
 #include <stdbool.h>
@@ -45,6 +44,7 @@ typedef struct {
     int16_t aceleracao_longitudinal_milesimos_g;
     int16_t temperatura_mpu_centesimos_c;
     uint8_t estado_mpu;
+    uint8_t estado_ina;
     uint32_t pacotes_validos;
     uint32_t pacotes_invalidos;
     uint32_t falhas_crc;

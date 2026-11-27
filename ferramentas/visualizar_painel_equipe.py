@@ -1,28 +1,42 @@
 """Prévia do painel da equipe no PC ou na rede local, com APIs simuladas."""
 
 import argparse
-import importlib.util
 import json
 import math
+import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from previa_painel import adicionar_opcoes_acesso, selecionar_endereco, servir_previa
-from visualizar_painel_visitantes import telemetria_simulada
+if __package__:
+    from .previas.servidor import (
+        adicionar_opcoes_acesso, carregar_gerador, selecionar_endereco, servir_previa,
+    )
+    from .previas.telemetria import telemetria_simulada
+else:
+    from previas.servidor import (
+        adicionar_opcoes_acesso, carregar_gerador, selecionar_endereco, servir_previa,
+    )
+    from previas.telemetria import telemetria_simulada
 
-ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location(
-    "gerador_equipe", ROOT / "firmware/equipe-s3/web/gerar_painel.py")
-GERADOR = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(GERADOR)
+GERADOR = carregar_gerador("equipe-s3")
 
-CAPACIDADES_MESTRE = 16383 | (1 << 14) | (1 << 15) | (1 << 16) | (1 << 17) | (1 << 18)
+CAPACIDADES_MESTRE = 16383 | (1 << 14) | (1 << 15) | (1 << 16) | (1 << 17) | (1 << 18) | (1 << 21)
+AJUSTES_INICIAIS = (500, 2500, 650, 200, 50, 1000, 5000, 500, 250, 300, 30, 2, 50, 5000, 20, 5000,
+                   1200, 1200, 5000, 5000, 1000, 1000, 600, 600, 1000, 1000, 1000, 1000, 1000, 3000, 3,
+                   4, 11200, 13000, 1000, 65, 1)
+LIMITES_AJUSTES = [
+    (int(minimo), int(maximo)) for minimo, maximo in re.findall(
+        r"CAMPO\(\w+, \w+, \d+, (\d+), (\d+)\)",
+        (GERADOR.ROOT.parent.parent / "compartilhado" / "protocolos" /
+         "ajustes_desenvolvedor.h").read_text(encoding="utf-8"))
+]
+AJUSTES_CONTROLE = {4: "zona_morta_decimos_percentual", 5: "tensao_minima_saida_mv",
+                   28: "acelerador_maximo_decimos_percentual", 29: "velocidade_maxima_centesimos_kmh",
+                   30: "faixa_marcha_maxima"}
 TODOS_SENSORES = 0b11111
 QUANTIDADE_FONTES_LOG = 18
-PARADA_AUTOMATICA_S = 30
 PARADA_MINIMA_S = 5
 ERROS_I2C_PREVIA = 4
 TAREFAS_POR_PAGINA = 3
@@ -57,6 +71,16 @@ PREVIA = """
 .preview-toolbar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px 20px;padding:12px max(16px,calc((100% - 1240px)/2));background:#3a3224;color:#f7dfaa;border-bottom:1px solid #836c42;font:13px/1.4 system-ui}
 .preview-toolbar strong,.preview-toolbar div span{display:block}.preview-toolbar div span{font-size:12px;margin-top:3px}
 .preview-toolbar label{display:flex;align-items:center;gap:8px}.preview-toolbar select{max-width:100%;padding:8px;border:1px solid #947c51;border-radius:8px;background:#28271f;color:#fff;font:inherit}
+:root[data-theme="light"] .preview-toolbar {
+  background: var(--warning-bg);
+  color: var(--amber);
+  border-bottom-color: var(--warning-edge);
+}
+:root[data-theme="light"] .preview-toolbar select {
+  background: var(--card);
+  color: var(--text);
+  border-color: var(--warning-edge);
+}
 </style>
 <script>
 addEventListener('DOMContentLoaded',()=>{
@@ -86,29 +110,30 @@ class SimuladorEquipe:
         self.fontes_logs = [self.nivel_global_logs] * QUANTIDADE_FONTES_LOG
         self.tarefas_coletadas_em_ms = 0
         self.controle = dict(formato=7, atuacao_habilitada=False,
-                            partida_concluida=True, armamento_inicial_pendente=False,
+                            partida_concluida=True, armamento_inicial_pendente=True,
                             ota_em_andamento=False,
                             dac_zero_confirmado=True,
                             faixa_marcha_solicitada=0, faixa_marcha_fisica=2,
-                            faixa_marcha_maxima=1,
+                            faixa_marcha_maxima=3,
                             reversao_solicitada=False, reversao_acionar_solicitado=False,
-                            reversao_permitida=False, rearme_restante_ms=0,
-                            parada_solicitada=True, corte_por_rele_solicitado=True,
+                            reversao_permitida=True, rearme_restante_ms=0,
+                            parada_solicitada=False, corte_por_rele_solicitado=True,
                             modo_a_aterrar_solicitado=False, modo_b_aterrar_solicitado=False,
-                            estado_operacao=0, bloqueios=0,
-                            velocidade_maxima_centesimos_kmh=0,
-                            acelerador_maximo_decimos_percentual=0,
+                            estado_operacao=1, bloqueios=0,
+                            velocidade_maxima_centesimos_kmh=3000,
+                            acelerador_maximo_decimos_percentual=1000,
                             acelerador_lido_decimos_percentual=0,
                             acelerador_permitido_decimos_percentual=0,
                             velocidade_medida_centesimos_kmh=0,
                             aceleracao_medida_milesimos_ms2=0,
                             parada_restante_ms=0, amostra_pedal_restante_ms=0,
                             zona_morta_decimos_percentual=50,
-                            tensao_minima_saida_mv=0, tensao_pedal_mv=0,
+                            tensao_minima_saida_mv=1000, tensao_pedal_mv=0,
                             tensao_dac_mv=0, dac_disponivel=False,
                             pedal_disponivel=False,
                             revisao=0, alterado_em_ms=0)
-        self.parada_expira_em = None
+        self.rearme_disponivel_em = None
+        self.ajustes_desenvolvedor = list(AJUSTES_INICIAIS)
         self.solicitacao = 0
         self.percurso_base = 0
         self.redes = ["Rede de testes", "Rede auxiliar"]
@@ -122,11 +147,15 @@ class SimuladorEquipe:
         self.clientes = {g: [f"02:00:00:00:{i:02X}:01", f"02:00:00:00:{i:02X}:02"]
                          for i, g in enumerate(("equipe", "visitantes"), 1)}
         self.limites = dict(equipe=15, visitantes=15)
+        self.radio_ativo = {"equipe": (11, 20, 80, 5), "visitantes": (1, 20, 60, 10)}
+        self.radio_salvo = {**self.radio_ativo, "equipe": (11, 20, 0, 5), "visitantes": (1, 20, 64, 10)}
+        self.radio_partida = self.radio_salvo.copy()
         self.sync_inicio = None
         self.sync_id = 0
         self.ota_inicio = None
         self.ota_oferta_inicio = None
         self.ota_fase = "atual"
+        self.ota_mestre_reinicio_em = None
         self.ota_alvos = set()
         self.ota_atualizados = set()
 
@@ -220,6 +249,8 @@ class SimuladorEquipe:
         if self.ota_fase == "transferindo" and elapsed >= 10:
             self.ota_fase = "concluido"
             self.ota_atualizados.update(self.ota_alvos)
+            if "mestre" in self.ota_alvos:
+                self.ota_mestre_reinicio_em = self.ota_inicio + 10
         master = dict(atual=4, verificando=3, aguardando=5, transferindo=6, concluido=7, cancelado=8)
         satellite = dict(atual=3, verificando=3, aguardando=4, transferindo=5, concluido=7, cancelado=8)
         targets = {}
@@ -234,7 +265,19 @@ class SimuladorEquipe:
                                  versao_atual="0.0.1-previa" if name in self.ota_atualizados else "0.0.0-previa",
                                  versao_disponivel="0.0.1-previa" if phase != "atual" or name in self.ota_atualizados else "0.0.0-previa")
         target = 1 if len(self.ota_alvos)>1 else next((i for i,n in enumerate(("mestre","equipe","visitantes"),2) if n in self.ota_alvos),0)
+        if self.ota_mestre_reinicio_em is not None and targets["mestre"]["estado"] != 6:
+            pos_ota = time.monotonic() - self.ota_mestre_reinicio_em
+            if pos_ota < 4:
+                targets["mestre"].update(estado=10, progresso_percentual=pos_ota * 25)
+            elif pos_ota < 10:
+                targets["mestre"].update(estado=11, progresso_percentual=(pos_ota - 4) * 100 / 6)
+            elif targets["mestre"]["estado"] in (4, 7):
+                targets["mestre"].update(estado=12, progresso_percentual=100)
         return dict(estado=master[self.ota_fase], alvo=target, falhas=0, **targets)
+
+    def ota_bloqueia_armamento(self):
+        ota = self.ota()
+        return ota["estado"] == 6 or ota["mestre"]["estado"] in (10, 11)
 
     def consulta(self, nome, parametros):
         if self.cenario == "sem-mestre":
@@ -243,29 +286,41 @@ class SimuladorEquipe:
             return dict(tempo_ativo_ms=int(self.tempo()*1000), rtt_ms=18 if nome == "ping" else 42)
         if nome == "versao":
             return dict(firmware="0.0.0-previa", capacidades=CAPACIDADES_MESTRE)
+        if nome in ("satelite_equipe_radio", "satelite_visitantes_radio"):
+            grupo = nome.split("_")[1]
+            return dict(salvo=self.radio_salvo[grupo], ativo=self.radio_ativo[grupo],
+                        canal_minimo=1, canal_maximo=11, capacidade_clientes=self.radio_ativo[grupo][3],
+                        reinicio_pendente=self.radio_salvo[grupo] != self.radio_partida[grupo])
         if nome in ("satelite_equipe_versao", "satelite_visitantes_versao"):
             return dict(firmware="0.0.0-previa", capacidades=16383)
         if nome == "controle_remoto":
             agora = time.monotonic()
-            if self.parada_expira_em and agora >= self.parada_expira_em:
-                self.controle.update(parada_solicitada=False,
-                                     faixa_marcha_solicitada=min(self.controle["faixa_marcha_fisica"],self.controle["faixa_marcha_maxima"]),
-                                     reversao_solicitada=False, parada_restante_ms=0)
-                self.parada_expira_em = None
             data = self.telemetria()
             self.controle["velocidade_medida_centesimos_kmh"] = data["velocidade_centesimos_kmh"]
             self.controle["aceleracao_medida_milesimos_ms2"] = data["aceleracao_milesimos_ms2"]
-            if self.parada_expira_em:
-                self.controle["parada_restante_ms"] = max(0, math.ceil((self.parada_expira_em - agora) * 1000))
             c = self.controle
+            c["ota_em_andamento"] = self.ota_bloqueia_armamento()
+            c["pedal_disponivel"] = bool(self.sensores_ativos & 1)
+            posicao = data["acelerador_decimos_percentual"] if c["pedal_disponivel"] else 0
+            c["acelerador_lido_decimos_percentual"] = posicao
+            c["tensao_pedal_mv"] = 500 + 2 * posicao if c["pedal_disponivel"] else 0
+            c["dac_disponivel"] = self.cenario == "normal"
             c["rearme_restante_ms"] = max(0, math.ceil(self._espera_rearme(agora) * 1000))
-            c["corte_por_rele_solicitado"] = bool(c["parada_solicitada"] or not c["faixa_marcha_solicitada"] or
+            c["corte_por_rele_solicitado"] = bool(c["armamento_inicial_pendente"] or not c["faixa_marcha_solicitada"] or
                 not c["velocidade_maxima_centesimos_kmh"] or not c["acelerador_maximo_decimos_percentual"])
+            c["tensao_dac_mv"] = c["tensao_minima_saida_mv"] if c["dac_disponivel"] and not c["corte_por_rele_solicitado"] else 0
+            c["dac_zero_confirmado"] = c["dac_disponivel"] and c["tensao_dac_mv"] == 0
             c["modo_a_aterrar_solicitado"] = bool(not c["corte_por_rele_solicitado"] and c["faixa_marcha_solicitada"] == 1)
             c["modo_b_aterrar_solicitado"] = bool(not c["corte_por_rele_solicitado"] and c["faixa_marcha_solicitada"] == 3)
             c["reversao_acionar_solicitado"] = bool(c["reversao_permitida"] and
                 not c["corte_por_rele_solicitado"] and c["reversao_solicitada"])
             return dict(self.controle)
+        if nome == "ajustes_desenvolvedor":
+            valores = self.ajustes_desenvolvedor.copy()
+            for indice, campo in AJUSTES_CONTROLE.items():
+                valores[indice] = self.controle[campo]
+            return dict(valores=valores, revisao=self.controle["revisao"] % 256,
+                        edicao_permitida=self.controle["armamento_inicial_pendente"] and not self.ota_bloqueia_armamento())
         if nome == "telemetria":
             return self.telemetria()
         if nome == "uart":
@@ -276,7 +331,7 @@ class SimuladorEquipe:
         if nome == "saude":
             diagnostico = self.diagnostico("mestre")
             return dict(estado=2 if self.cenario == "degradado" else 0,
-                        causas_ativas=8 if self.cenario == "degradado" else 0,
+                        causas_ativas=(8 | 1 << 12) if self.cenario == "degradado" else 0,
                         heap_livre=diagnostico["heap_livre"], tempo_ativo_ms=diagnostico["tempo_ativo_ms"],
                         erros_historicos=diagnostico["erros_sensores"] + diagnostico["erros_i2c"])
         if nome == "wifi":
@@ -390,22 +445,61 @@ class SimuladorEquipe:
         return {}
 
     def _espera_rearme(self, agora):
-        if self.parada_expira_em is None:
+        if self.rearme_disponivel_em is None:
             return 0
-        return self.parada_expira_em - PARADA_AUTOMATICA_S + PARADA_MINIMA_S - agora
+        return self.rearme_disponivel_em - agora
 
-    def _ativar_parada(self, agora):
-        self.parada_expira_em = agora + PARADA_AUTOMATICA_S
-        self.controle.update(parada_solicitada=True, faixa_marcha_solicitada=0,
+    def _desarmar(self, agora, emergencia=False):
+        self.rearme_disponivel_em = agora + PARADA_MINIMA_S
+        self.controle.update(parada_solicitada=self.controle["parada_solicitada"] or emergencia,
+                             armamento_inicial_pendente=True, faixa_marcha_solicitada=0,
                              reversao_solicitada=False, reversao_acionar_solicitado=False,
                              corte_por_rele_solicitado=True, acelerador_permitido_decimos_percentual=0,
-                             parada_restante_ms=PARADA_AUTOMATICA_S * 1000,
                              rearme_restante_ms=PARADA_MINIMA_S * 1000)
 
     def comando(self, nome, corpo):
         if self.cenario == "sem-mestre":
             raise ConnectionError("Cenário de prévia: mestre sem resposta.")
         lines = corpo.split("\n")
+        if nome in ("satelite_equipe_radio", "satelite_visitantes_radio"):
+            if len(lines) != 5 or not lines[4].strip() or not all(
+                    valor.isascii() and valor.isdecimal() for valor in lines[:4]):
+                raise ValueError("Informe o perfil Wi-Fi e uma permissão fictícia.")
+            grupo = nome.split("_")[1]
+            canal, largura, potencia, clientes = map(int, lines[:4])
+            if not (1 <= canal <= 11 and largura in (20, 40) and
+                    (potencia == 0 or 8 <= potencia <= 80) and
+                    1 <= clientes <= self.radio_ativo[grupo][3]):
+                raise ValueError("Perfil Wi-Fi fora da faixa permitida.")
+            self.radio_salvo[grupo] = (canal, largura, potencia, clientes)
+            return self.consulta(nome, {})
+        if nome == "parada_emergencia":
+            if corpo != "1":
+                raise ValueError("Valor inválido para parada de emergência.")
+            nome = "parada_remota"
+        if nome == "ajuste_desenvolvedor":
+            estado = self.consulta("ajustes_desenvolvedor", {})
+            if not estado["edicao_permitida"]:
+                raise ValueError("Desarme o veículo para editar ajustes.")
+            if len(lines) != 3 or not lines[2].strip() or not all(
+                    item.isascii() and item.isdecimal() for item in lines[:2]):
+                raise ValueError("Informe um ajuste e uma permissão fictícia.")
+            indice, valor = map(int, lines[:2])
+            if indice >= len(LIMITES_AJUSTES) or not LIMITES_AJUSTES[indice][0] <= valor <= LIMITES_AJUSTES[indice][1]:
+                raise ValueError("Valor fora da faixa permitida.")
+            valores = estado["valores"]
+            valores[indice] = valor
+            inicio, fim, solto, margem, _, dac_minimo, dac_maximo = valores[:7]
+            if margem > inicio or not inicio < fim or not inicio - margem < solto <= fim or dac_minimo >= dac_maximo:
+                raise ValueError("Confira a faixa do pedal e os limites do DAC.")
+            baterias, vazio, cheio = valores[31:34]
+            if vazio >= cheio or baterias * cheio > 65535:
+                raise ValueError("Confira os limites de tensão do banco.")
+            self.ajustes_desenvolvedor = valores
+            if indice in AJUSTES_CONTROLE:
+                self.controle[AJUSTES_CONTROLE[indice]] = valor
+            self.controle["revisao"] += 1
+            return {}
         if nome in ("definir_marcha", "aceleracao_maxima", "definir_acelerador"):
             raise ValueError("Comando antigo não disponível.")
         fields = {"limite_marcha": ("faixa_marcha_maxima", 3),
@@ -429,26 +523,30 @@ class SimuladorEquipe:
             if nome == "definir_reversao":
                 if value and not c["reversao_permitida"]:
                     raise ValueError("Ré bloqueada.")
-                if c["parada_solicitada"]:
+                if c["armamento_inicial_pendente"]:
                     raise ValueError("Rearme antes de trocar o sentido.")
-            if nome in ("zona_morta_pedal", "tensao_minima_dac") and c["acelerador_lido_decimos_percentual"]:
+            if (nome in ("zona_morta_pedal", "tensao_minima_dac") and
+                    not c["armamento_inicial_pendente"] and c["acelerador_lido_decimos_percentual"]):
                 raise ValueError("Solte o pedal antes de alterar a calibração.")
             if nome == "parada_remota":
                 agora = time.monotonic()
+                if value == 0 and self.ota_bloqueia_armamento():
+                    raise ValueError("Aguarde o fim da validação OTA para armar.")
                 if value == 0 and self._espera_rearme(agora) > 0:
                     raise ValueError("Aguarde 5 s após a parada para rearmar.")
             c[field] = bool(value) if nome in ("parada_remota", "definir_reversao", "permitir_re") else value
             if nome == "parada_remota":
                 if value:
-                    self._ativar_parada(agora)
+                    self._desarmar(agora, emergencia=True)
                 else:
-                    self.parada_expira_em = None
-                    c.update(faixa_marcha_solicitada=min(c["faixa_marcha_fisica"], c["faixa_marcha_maxima"]),
+                    self.rearme_disponivel_em = None
+                    c.update(armamento_inicial_pendente=False,
+                             faixa_marcha_solicitada=min(c["faixa_marcha_fisica"], c["faixa_marcha_maxima"]),
                              reversao_solicitada=False, acelerador_permitido_decimos_percentual=0,
                              parada_restante_ms=0, rearme_restante_ms=0)
             if nome == "permitir_re" and not value and (c["reversao_solicitada"] or c["reversao_acionar_solicitado"]):
-                self._ativar_parada(time.monotonic())
-            if nome == "limite_marcha" and not c["parada_solicitada"]:
+                self._desarmar(time.monotonic())
+            if nome == "limite_marcha" and not c["armamento_inicial_pendente"]:
                 c["faixa_marcha_solicitada"] = min(c["faixa_marcha_fisica"],value)
             c["revisao"] += 1
             c["alterado_em_ms"] = int(self.tempo()*1000)
@@ -473,10 +571,11 @@ class SimuladorEquipe:
             requested = {"mestre","equipe","visitantes"} if target == "todos" else {target}
             pending = {name for name in ("mestre","equipe","visitantes")
                        if status[name]["estado"] == (5 if name == "mestre" else 4)}
-            if self.ota_fase not in ("aguardando", "concluido") or not requested & pending:
+            if self.ota_bloqueia_armamento() or self.ota_fase not in ("aguardando", "concluido") or not requested & pending:
                 raise ValueError("Verifique as atualizações antes de autorizar.")
             self.ota_alvos = requested & pending
             self.ota_fase, self.ota_inicio = "transferindo", time.monotonic()
+            self._desarmar(self.ota_inicio, emergencia=True)
         elif nome == "cancelar_ota":
             self.ota_fase = "cancelado"
         elif nome == "simulador_telemetria":

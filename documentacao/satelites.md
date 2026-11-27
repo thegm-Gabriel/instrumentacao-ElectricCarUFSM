@@ -3,18 +3,20 @@
 [Índice da documentação](README.md)
 
 Este guia descreve os dois satélites do NEXUS, em `firmware/equipe-s3` e
-`firmware/visitantes-s3`. Ambos são projetos PlatformIO/ESP-IDF independentes,
-com partições OTA em flash de 4 MB. Os contratos de telemetria, comandos e OTA
-ficam em `firmware/compartilhado`.
+`firmware/visitantes-s3`. Ambos usam ESP32-C3 SuperMini Plus com 4 MiB de
+flash, um núcleo RISC-V e dois slots OTA. Os projetos PlatformIO/ESP-IDF usam
+o ambiente `esp32-c3-supermini-plus`. Consulte o [guia de primeira gravação](ota.md#primeira-gravação-por-cabo). Os contratos de telemetria, comandos e OTA
+ficam em `firmware/compartilhado/protocolos`. O logotipo comum fica em
+`firmware/compartilhado/web`.
 
-Em ambos, `src/main.c` inicializa os módulos; `gerenciadores/gerenciador_wifi.c`
-cuida do AP, `servicos/receptor_uart.c` recebe os três tipos de quadro e
-`servicos/servidor_web.c` publica HTTP. A equipe tem ainda
-`gerenciadores/gerenciador_uart.c` para serialização e estatísticas do enlace e
-`servicos/diagnostico_sistema.c` para CPU, memória e temperatura. Os serviços
-`firmware/compartilhado/comandos/servico_comandos_satelite.c` e
-`firmware/compartilhado/ota/servico_ota_satelite.c` implementam respostas de
-comandos e gravação OTA para os dois satélites.
+Cada satélite inicializa os próprios módulos em `src/main.c`. O gerenciador
+Wi-Fi cuida do AP e das sessões dos clientes. O gerenciador UART instala e
+opera o driver com os buffers e prazos do projeto. O receptor separa os
+quadros e os encaminha aos serviços locais de telemetria, comandos e OTA.
+A Equipe serializa pedidos da página web ao Mestre e registra métricas do
+driver UART. Visitantes responde aos pedidos recebidos pelo enlace e publica
+a telemetria na sua página. Os arquivos `src/CMakeLists.txt` listam as fontes
+de cada projeto.
 
 ## Fluxo comum
 
@@ -43,7 +45,7 @@ retorna à imagem anterior. Três reinícios por panic ou watchdog na janela de
 é perdida após corte total de energia. A equipe inicializa diagnóstico local
 como recurso complementar.
 
-## ESP32-S3 da equipe
+## ESP32-C3 da Equipe
 
 `include/nucleo/configuracao.h` define o AP `NEXUS-Equipe`, canal 11,
 até cinco clientes e a UART1 em GPIO 5 (RX) e 6 (TX). A rede padrão do ESP-IDF
@@ -59,22 +61,23 @@ para alterar a rede principal e a política Wi-Fi.
 `web/index.html`, `web/style.css`, `web/layout.css` e `web/app.js` são as fontes
 do painel NEXUS. `web/gerar_painel.py` gera `src/servicos/painel_web.c`,
 incorporado ao binário. As rotas `/`, `/painel`, `/diagnostico` e `/mestre`
-entregam o mesmo painel com sete páginas: telemetria, comandos, controle,
-mestre, equipe, visitantes e sobre.
+entregam o mesmo painel com sete abas.
 
 | Página da Equipe | O que apresenta ou permite fazer |
 |---|---|
-| Telemetria | Velocidade, movimento, energia disponível, histórico desta sessão, qualidade do enlace e contagem de clientes dos APs. |
+| Telemetria | Velocidade, pedais, energia disponível, leituras do MPU6050/INA228, histórico e exportação da sessão. |
+| Controle | Marcha máxima, permissão de ré, limites de velocidade e de pedal, zona morta, parada e rearme. Mostra o estado lógico informado pelo Mestre. |
 | Comandos | Diagnóstico de sensores, simulação, Wi-Fi do mestre, clientes dos APs, Google, OTA, logs e histórico das ações. |
-| Controle | Telemetria essencial, faixa L/M/H, sentido, limites de velocidade e pedal, e parada de envio direto. O mestre valida os comandos, mas ainda não aciona motor ou relé. |
-| ESP32 — Mestre | Saúde, causas de degradação, memória, CPU, tarefas e estado obtido por consultas UART. |
-| ESP32 — Equipe | Diagnóstico local, recepção UART e estado do ponto de acesso técnico. |
-| ESP32 — Visitantes | Diagnóstico remoto, disponibilidade, memória, CPU e clientes quando o satélite responde. |
+| Mestre | Saúde, causas de degradação, memória, CPU, tarefas e estado obtido por consultas UART. |
+| Equipe | Diagnóstico local, recepção UART e estado do ponto de acesso técnico. |
+| Visitantes | Diagnóstico remoto, disponibilidade, memória, CPU e clientes quando o satélite responde. |
 | Sobre | Intenção do projeto, símbolo, orientação e equipe discente. |
 
 As páginas dos ESPs mostram o estado do enlace, CPU, memória interna e
 temperatura. Os detalhes técnicos e o histórico podem ser expandidos. A aba
 Mestre também mostra as causas de degradação e a idade do diagnóstico.
+No celular, **Dispositivos** reúne Mestre, Equipe, Visitantes e Sobre.
+Os contadores das duas redes ficam em **Comunicação e sessão**, na telemetria.
 Em **Comandos**, os atalhos levam aos grupos **Diagnóstico**, **Rede**,
 **Operação** e **Atividade**. Em **Sensores**, é possível consultar leituras e
 pausar ou retomar a aquisição, por sensor ou em conjunto. Com a atuação física
@@ -85,6 +88,15 @@ Cada sensor mostra se está lendo, pausado ou sem leitura válida. Os detalhes
 reúnem os valores por grandeza e os contadores do barramento I²C. A recuperação
 do MPU6050 e do INA228 ocorre no serviço de aquisição, em condições específicas
 de falha. A supervisão trata a recuperação de tarefas por módulo.
+
+Em **Sensores**, o cartão **Acelerador** mostra a tensão do pedal no GPIO5,
+a posição lida, o acelerador permitido e a última referência aceita pelo
+MCP4725. A confirmação de zero é a resposta do DAC à escrita por I²C.
+O quadro de seletores mostra a marcha física, o sentido selecionado e se o
+Mestre ativou o comando de ré.
+Enquanto **Sensores** estiver aberto, essas leituras acompanham a taxa de
+1, 2, 3 ou 4 Hz selecionada em **Telemetria**.
+
 **Tarefas do mestre** mostra CPU, pilha, prioridade e estado. Cada página reúne
 até cinco tarefas da mesma coleta. **Logs do terminal** permite ajustar o nível
 global ou por fonte, o perfil NEXUS e as cores do serial.
@@ -96,9 +108,13 @@ testar e salvar redes abertas ou protegidas, conectar ou excluir perfis,
 restaurar a principal do firmware, configurar conexão automática e ajustar
 tentativas e tempos ou restaurar a política padrão. A consulta de estado e a lista de redes podem ser
 atualizadas pelo botão do próprio cartão.
-O indicador de saúde no cabeçalho abre o diagnóstico do Mestre. Uma falha
-ativa também aparece em um aviso flutuante com a causa e o atalho para o
-diagnóstico. A aba **Mestre** reúne o estado e os detalhes de saúde.
+**Consultas** mostra os campos principais da resposta com rótulos e unidades.
+O detalhe **Resposta completa (JSON)** reúne todos os campos recebidos.
+O indicador de saúde no cabeçalho mostra a causa ativa e abre o diagnóstico
+do Mestre. As causas conhecidas têm atalhos para o detalhe correspondente.
+Uma falha ativa também gera um aviso flutuante com o mesmo atalho.
+Em **Controle**, a mensagem distingue consulta em andamento, falta de
+resposta do Mestre e firmware que informa que o recurso é indisponível.
 A telemetria pode ser consultada a 1, 2, 3 ou 4 Hz
 (padrão de 4 Hz, compatível com os 250 ms da publicação do mestre). As consultas
 de estado OTA, Google e simulador continuam automáticas a cada 2 s,
@@ -106,12 +122,15 @@ independentemente dessa escolha. O cartão Google também permite iniciar a
 sincronização dos arquivos pendentes e acompanhar o progresso informado pelo
 mestre. Uma requisição lenta ou falha pode reduzir a taxa efetiva no navegador.
 Gráficos e CSV do navegador acumulam dados apenas enquanto a página está aberta.
+O CSV usa o horário local do navegador com o deslocamento de fuso em cada amostra.
 Os gráficos combinam séries no mesmo intervalo de tempo, com duas escalas e
 unidades nas laterais. Movimento mostra velocidade (escala inicial de 0 a 30 km/h,
 expandida quando uma amostra excede esse valor e restaurada depois)
 e aceleração; o gráfico elétrico permite escolher duas grandezas com eixos
 laterais e uma terceira curva opcional, tracejada, com escala própria indicada
-na legenda. Passar o mouse ou tocar no gráfico mostra os valores da amostra. Os
+no gráfico. As curvas mantêm cores distintas por eixo. A velocidade e a
+grandeza à esquerda no gráfico elétrico têm área preenchida entre leituras
+válidas. Passar o mouse ou tocar no gráfico mostra os valores da amostra. Os
 diagnósticos do mestre e da equipe começam com CPU e memória livre, enquanto
 Visitantes mostra latência e disponibilidade das consultas; seu diagnóstico
 também oferece CPU, temperatura e memória quando a consulta ao satélite responde.
@@ -129,8 +148,8 @@ velocidade configurado nem um detector de frenagem.
 O arco usa um gradiente espacial de verde para âmbar e coral: cada posição tem
 uma cor fixa, de modo que o trecho já preenchido não muda de cor quando a
 velocidade sobe. Marcas menores indicam passos de 5 km/h e marcas maiores,
-10 km/h. O pico também aparece brevemente no título do cartão. O número ganha
-tom âmbar durante uma queda perceptível de velocidade; isso representa apenas
+10 km/h. O pico também aparece brevemente no canto superior do velocímetro.
+O número ganha tom âmbar durante uma queda perceptível de velocidade; isso representa apenas
 a tendência entre leituras. O segmento de pico fica estático quando o navegador
 pede movimento reduzido.
 
@@ -151,15 +170,9 @@ movimento reduzido, o valor é aplicado diretamente. A escala do arco e a
 detecção de pico usam a leitura recebida, enquanto desenho e número acompanham
 o valor interpolado. Isso evita que a animação invente eventos de pico.
 
-Os cartões de aceleração e potência distinguem desaceleração e regeneração com
-cor e texto. Quando há potência, uma faixa bipolar põe zero no centro, consumo
-à direita e regeneração à esquerda; começa em ±500 W e cresce em passos de
-250 W se necessário. Um risco discreto marca por 1,6 s um pico de magnitude
-de pelo menos 120 W seguido de redução de pelo menos 55 W ou 25%, com 3,5 s
-entre marcas. O cartão mantém “Medição indisponível” quando o modo real não
-fornece potência. Os cartões e o fundo usam cores suaves para separar movimento,
-energia e diagnósticos. A navegação usa uma linha de seleção e permanece
-rolável horizontalmente em telas estreitas.
+A barra de potência usa uma escala visual de 0 a 1000 W e preenche da
+esquerda para a direita conforme a magnitude. O sinal e a cor distinguem consumo
+de regeneração. Um traço indica que a leitura está indisponível.
 
 A página Sobre explica o projeto Carro Elétrico UFSM-CS, identifica orientação e equipe discente
 e apresenta o símbolo do carro. O painel público de Visitantes também traz essa
@@ -167,10 +180,12 @@ identidade e os créditos. A imagem fonte fica em
 `firmware/compartilhado/web/logo_carro_eletrico.png` e é incorporada ao HTML
 pelos dois geradores, sem requisição adicional no navegador.
 
-Para experimentar a interface no PC ou celular sem gravar o ESP, use
-`python ferramentas/visualizar_painel_equipe.py --rede`. A prévia possui
-telemetria, comandos e cenários de saúde simulados; veja o procedimento e as
-limitações em [ferramentas](ferramentas.md#prévia-local-da-página-da-equipe).
+Os scripts `visualizar_painel_equipe.py` e `visualizar_painel_visitantes.py`
+oferecem um menu com acesso só no computador ou também em dispositivos na
+mesma rede. Pela linha de comando, `--local` restringe o acesso ao PC e
+`--rede` mostra no terminal os endereços para celular e outros computadores.
+A prévia da Equipe usa telemetria, comandos e cenários de saúde simulados.
+Veja [Prévias da Equipe e de Visitantes](ferramentas.md#prévias-da-equipe-e-de-visitantes).
 
 O painel da Equipe exibe a quantidade de dispositivos conectados aos pontos de
 acesso Equipe e Visitantes. As listas de endereço MAC, tempo conectado e ações de
@@ -248,12 +263,15 @@ antes do envio pertence ao JavaScript do painel. `ok:true` indica que a
 resposta de comando foi aceita;
 para OTA, upload e outras ações assíncronas, consulte o estado depois.
 
+O botão de sol ou lua no cabeçalho alterna entre os temas claro e escuro.
+O painel abre no tema escuro por padrão e guarda a escolha no navegador.
+
 O painel não recupera sessões passadas do SD nem confirma sozinho o efeito final
 de uma operação assíncrona. Tensão do barramento, corrente e potência usam
 leituras do INA228 quando o mestre marca a medição elétrica como válida. Nos
 indicadores principais, a Equipe mostra estado de carga, potência e corrente
 nessa ordem; a aceleração fica com as leituras do MPU6050 em **Operação e
-sensores**. O cartão de carga simulada mostra **Atenção** abaixo de 50%,
+sensores**. O cartão de carga mostra **Atenção** abaixo de 50%,
 **Bateria baixa** abaixo de 30% e **Crítico** abaixo de 10%. O cartão de
 corrente usa uma escala visual até 35 A e começa a ganhar
 tons vermelhos acima de 7,5 A; a cor é apenas um destaque do painel, não um
@@ -263,16 +281,16 @@ valor e distingue consumo de regeneração. As barras de corrente e potência
 mostram por cerca de um segundo uma marca discreta quando a leitura cai após
 um pico, com o valor no canto do cartão; ambos desaparecem gradualmente e não
 representam um limite de segurança.
-O grupo do INA228 mostra também potência
-instantânea, queda no shunt, temperatura do chip, energia e carga acumuladas
-desde o reset do sensor e diagnóstico quando disponíveis. A potência enviada
-ao painel conserva o sinal da corrente, conforme explicado em [Mestre](mestre.md).
-Não há um cartão separado para o sensor; carga percentual, autonomia e pedais
-ainda só são apresentados no modo simulado. A estimativa de energia permanece
-interna ao navegador para calcular o consumo médio e não ocupa uma linha própria.
+O grupo INA228 em **Operação e sensores** mostra **Tensão no shunt**,
+potência instantânea, temperatura do chip, energia e carga acumuladas desde o
+reset. O diagnóstico do componente fica nas consultas de sensores. A potência
+conserva o sinal da corrente. Carga percentual, autonomia e pedais da
+telemetria geral são simulados na versão atual. O estado do controle do Mestre
+informa separadamente a leitura física local do pedal. O navegador integra
+a energia para calcular o consumo médio.
 `tensao_adc_bruta` é apenas a contagem não calibrada do ADC.
 
-## ESP32-S3 de visitantes
+## ESP32-C3 de Visitantes
 
 `include/nucleo/configuracao.h` define o AP `NEXUS-Visitantes`, canal 1,
 até dez clientes, largura solicitada de 20 MHz e potência máxima solicitada de
@@ -300,38 +318,37 @@ para recriar os quatro arquivos. O gerador requer `qrcode[pil]`
 `firmware/visitantes-s3/include/nucleo/configuracao.h`. O QR da rede contém
 a senha Wi-Fi; distribua-o somente ao público autorizado a conectar-se.
 
-`web/index.html`, `web/style.css` e `web/app.js` são compilados em
+`web/index.html`, `web/style.css`, `web/app.js`, `web/logo_carro_eletrico.webp` e `web/carro_eletrico.webp` são incorporados em
 `src/servicos/painel_web.c` por `web/gerar_painel.py`. Há duas rotas:
 `GET /` para a página pública e `GET /api/telemetria` para o JSON. Não há API
 de diagnósticos ou de comandos nessa rede. O endpoint publica validade, idade,
 sequência, origem simulada, velocidade, aceleração, percentuais de acelerador e
 freio, potência e percurso, com
 unidades codificadas nos nomes dos campos. Aceleração indisponível ou grandezas
-elétricas não adquiridas são `null`, não zero. Os gráficos e cálculos de energia,
-distância e tempo começam quando a página é aberta.
+elétricas não adquiridas são `null`, não zero. O histórico dos gráficos e
+o cálculo do consumo médio começam quando a página é aberta.
 
 ### Leitura e apresentação pública
 
-O cabeçalho identifica **NEXUS** como sistema de telemetria e controle e
-aponta para o Sobre no fim da página. O painel público só lê dados: não expõe
-os comandos do sistema. A página destaca velocidade, carga da bateria e
-odômetro, com a aceleração no gráfico de movimento. No modo real, os campos ainda
-sem aquisição aparecem como “Sem leitura” ou com uma nota de indisponibilidade;
-zero permanece uma leitura válida. Os botões “i” nos cartões de acompanhamento
-abrem descrições curtas por toque, clique ou teclado.
+O cabeçalho usa o símbolo do NEXUS da Equipe e mostra o estado das leituras.
+O botão de tema alterna entre claro e escuro, inclusive nos gráficos. O tema
+inicial é escuro e a escolha fica salva no navegador.
+O painel público destaca velocidade, carga da bateria e odômetro. A
+aceleração permanece no gráfico de movimento. Campos com disponibilidade
+explícita aparecem como **Sem leitura** quando a medição está ausente. Uma
+velocidade inválida ainda pode chegar como zero no protocolo atual. Confira
+a idade da amostra e o odômetro ao investigar. Os botões **i** dos cartões
+abrem descrições por toque, clique ou teclado.
 
-O velocímetro usa **escala fixa de 0 a 35 km/h** e marcações de 5 em 5 km/h;
-10, 20 e 30 têm maior destaque. O preenchimento percorre o mesmo arco de verde
-para amarelo, laranja e vermelho conforme a posição, sem recolorir toda a
-parte já preenchida. Se a leitura nova cair pelo menos 0,18 km/h, o número
-recebe um tom âmbar temporário; ele volta ao branco ao estabilizar, acelerar ou
-parar. Essa cor descreve uma tendência entre amostras, não uma condição de
-segurança. “Sem leitura” usa fonte menor para caber dentro do arco.
+O velocímetro destaca o valor numérico e acompanha a leitura em uma barra
+com **escala visual de 0 a 35 km/h**. Acima dessa faixa, a barra permanece
+cheia e o número continua mostrando a leitura. Uma queda de pelo menos
+0,18 km/h muda temporariamente o tom do número.
 
 Após um pico recente de pelo menos 5 km/h, uma queda de 1,4 km/h ou mais a
-uma taxa de pelo menos 2,3 km/h por segundo mostra um risco discreto **dentro**
-do arco, na posição do pico, e o texto “Pico”. O texto começa a desaparecer
-após cerca de 1,05 s e o risco termina após 1,6 s, ambos com saída gradual.
+uma taxa de pelo menos 2,3 km/h por segundo marca a posição do pico na barra.
+A marca aparece brevemente e desaparece em 1,6 s. O velocímetro continua
+mostrando a velocidade atual.
 Há intervalo de 3,8 s entre eventos, e o marcador só é rearmado depois de
 nova subida de pelo menos 2 km/h acima do vale. Amostras antigas ou inválidas
 reiniciam o rastreamento. O marcador representa uma redução observada no
@@ -341,8 +358,8 @@ As barras de acelerador e freio crescem da extremidade externa para o centro,
 respectivamente da esquerda para a direita e da direita para a esquerda.
 `acelerador_decimos_percentual` e `freio_decimos_percentual` usam décimos de
 por cento. Como o firmware atual só obtém esses valores na simulação, no modo
-real são `null`. O cartão de carga usa uma barra verde e mostra a estimativa
-simulada, sem avisos por faixa de carga.
+real são `null`. O cartão de carga usa uma barra em degradê verde e mostra
+a estimativa simulada, sem avisos por faixa de carga.
 
 Quando há potência, a barra usa escala de 0 a 1000 W e cresce com a magnitude.
 O valor e o rótulo distinguem consumo de regeneração, que tem cor própria.
@@ -352,38 +369,45 @@ O cartão aparece quando há leitura elétrica.
 
 O mestre publica telemetria aos satélites nominalmente a cada 250 ms (4 Hz);
 o navegador de Visitantes consulta `/api/telemetria` a cada 500 ms (2 Hz), sem
-ajuste de taxa. Ele aceita apenas sequências novas e estima o período de chegada
-dessas leituras. Números e barras se aproximam do alvo com desaceleração no fim:
+ajuste de taxa. Ele aceita sequências novas ou mudança da origem dos dados e
+estima o período de chegada das leituras. Números e barras se aproximam do alvo
+com desaceleração no fim:
 a transição usa cerca de 1,15 vez esse período, limitada a 450–850 ms. Uma
 leitura nova interrompe a transição a partir do valor exibido. Movimento
 reduzido solicitado pelo navegador ou aba oculta aplica o valor imediatamente.
-O tempo de acompanhamento continua avançando como relógio. Mais de 2,5 s sem
-leitura nova abre uma lacuna nos gráficos.
+Mais de 2,5 s sem leitura nova abre uma lacuna nos gráficos.
 
 O gráfico **Movimento** une velocidade e aceleração na mesma linha de tempo,
-com escala e unidade próprias nas bordas esquerda e direita. A velocidade
+com velocidade em azul e aceleração em coral. Cada grandeza tem escala e
+unidade próprias nas bordas esquerda e direita. A velocidade
 começa em 0–30 km/h e expande o eixo quando as leituras visíveis exigem; isso
-não altera a escala fixa do velocímetro. O gráfico **Sistema elétrico** permite
-selecionar potência, corrente, tensão, estado de carga e autonomia simulados ou,
-quando disponíveis, queda de tensão no shunt, temperatura, energia e carga
-acumuladas do INA228. As duas primeiras curvas usam os eixos laterais; a
-terceira é opcional, tracejada e usa escala própria indicada na legenda. O toque
-ou ponteiro mostra o valor de cada grandeza na amostra. Ambos usam janelas de
-30 segundos, 2 ou 10 minutos e preservam
-lacunas em vez de ligar pontos através de falhas. O histórico existe apenas
-enquanto a página está aberta.
+não altera a escala fixa da barra do velocímetro. No gráfico **Sistema elétrico**,
+cada eixo permite escolher tensão, corrente, potência, carga da bateria,
+autonomia restante ou consumo médio. O par inicial é potência e corrente.
+Selecionar a grandeza que já está no outro eixo troca as duas de posição.
+O eixo esquerdo usa azul-ciano e área preenchida. O direito usa âmbar.
+O gráfico indica as séries sem leitura. O toque ou ponteiro mostra o valor da amostra.
+Os dois gráficos preservam lacunas quando faltam leituras e usam janelas de
+**1, 5 ou 10 minutos**. O eixo horizontal indica o tempo em relação ao momento
+atual. O histórico existe enquanto a página está aberta.
 
-O Sobre traz o símbolo do carro, a intenção do projeto, orientação e equipe
-discente. A tipografia dos cartões largos cresce no computador sem ampliar os
+O Sobre apresenta o projeto, a orientação e a equipe discente.
+A tipografia dos cartões largos cresce no computador sem ampliar os
 cartões estreitos do celular; não há fontes ou bibliotecas carregadas da rede.
 
 A seção **Energia** reúne tensão da bateria e corrente elétrica, exibidas com
 duas casas decimais, **autonomia restante** em km e **consumo médio** em Wh/km.
-A potência instantânea aparece no destaque da página. O bloco **Seu acompanhamento**
-reúne energia consumida, distância e tempo da sessão. A autonomia, recebida no
-campo `autonomia_decimos_km`, é uma
-estimativa do mestre; atualmente só existe no modo simulado e é `null` no modo
-real. A prévia local fornece esse campo para experimentar a interface.
+A abertura apresenta o nome e uma arte do protótipo do Carro Elétrico UFSM-CS.
+A arte recortada e o emblema em **Sobre** são incorporados em WebP.
+A faixa de pista se move em proporção à velocidade recebida. Ela pausa
+com o carro parado, quando os dados ficam desatualizados, com a aba oculta
+ou quando o navegador solicita movimento reduzido.
+O indicador no cabeçalho, ao lado do NEXUS, distingue
+leitura atual, dados simulados, dados desatualizados e reconexão.
+O velocímetro tem destaque. Potência instantânea, carga e odômetro aparecem
+em uma faixa no computador e em linhas no celular. A autonomia, recebida no campo `autonomia_decimos_km`,
+é uma estimativa do mestre. Atualmente só existe no modo simulado e é `null`
+no modo real. A prévia local fornece esse campo para experimentar a interface.
 O consumo médio é calculado pelo navegador, dividindo a energia positiva
 integrada pela distância dos mesmos intervalos válidos. Inclui energia gasta
 parado e não desconta regeneração. Só aparece após 20 m de distância acumulada
@@ -407,26 +431,21 @@ do veículo nem uma previsão de autonomia calculada pelo navegador.
 
 ## Controle de marcha e acelerador
 
-A página **Controle** reúne telemetria recente, faixa L/M/H, sentido, limites de
-velocidade e pedal, e parada. A parada é enviada imediatamente. O painel informa
-o estado da atuação física e pede que a parada seja confirmada no veículo.
+A aba mostra marcha física, marcha permitida e sentido atual. O operador
+pode limitar a marcha máxima a L/M/H, permitir ou bloquear a ré, ajustar
+velocidade máxima, teto do acelerador e zona morta. Velocidade máxima e teto
+do pedal são persistidos na NVS. A tensão mínima do DAC tem padrão na
+configuração do Mestre. O pedal físico é lido no GPIO5, e a aba identifica
+quando o limite de velocidade está modulando a referência.
 
-A página **Controle** permite definir faixa L/M/H, faixa máxima, sentido,
-velocidade máxima e teto percentual do pedal. A aceleração aparece como medição,
-sem limite configurável. O teto fica no mestre até novo ajuste ou reinício e
-não constitui comando para acelerar. O pedal é lido no GPIO3; sem leitura
-local recente, o acelerador permitido permanece zero. A página também ajusta
-a zona morta. O padrão da tensão mínima do DAC está na configuração de
-veículo do Mestre. O
-botão de parada é enviado sem confirmação e zera a referência no mestre. O
-botão **Rearmar** só fica disponível após a espera mínima de 5 s. O Mestre
-também aplica essa espera à API e permite o rearme automático após 30 s se as
-condições de segurança permitirem. Após OTA, o rearme é manual. Uma nova
-leitura local do pedal em zero é necessária antes de voltar a acelerar. O painel mostra o estado consultado;
-os bits de bloqueio também estão na resposta da API, sem
-representar atuação do controlador. Consulte
-[Controle de marcha e acelerador](controle-remoto.md) para contrato UART/HTTP,
-intertravamentos e pendências de hardware.
+**Parada de emergência** envia o pedido ao pressionar. O Mestre prioriza o
+quadro recebido, e a vaga de ações HTTP compartilhada pela Equipe pode
+devolver 503 quando já estiver ocupada. **Rearmar** exige confirmação no
+painel após 3 s. O Mestre valida separadamente a espera de 5 s da parada
+atual e a validade de 2 s a partir da primeira recepção UART. A aba mostra
+o estado lógico e a situação da atuação física. Consulte [Controle de marcha
+e acelerador](controle-remoto.md) para os intertravamentos, os caminhos de
+rearme e o contrato.
 
 Em **Controle**, a ré começa bloqueada. **Permitir ré** libera pedidos de ré
 que passem pelo Mestre, e **Bloquear ré** provoca uma parada se houver uma ré

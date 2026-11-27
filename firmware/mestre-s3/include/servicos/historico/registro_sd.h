@@ -1,9 +1,9 @@
-// Registra telemetria a 1 Hz no SD e envia os CSVs pendentes ao Google sob demanda.
+// Registra telemetria no SD a 10 Hz e exporta uma amostra por segundo ao Google.
 #pragma once
 
 #include <cstdint>
 
-#include "dados_telemetria_veiculo.h"
+#include "nucleo/dados_telemetria_veiculo.h"
 #include "esp_err.h"
 
 struct EstadoRegistroTelemetria {
@@ -33,7 +33,7 @@ struct EstadoRegistroTelemetria {
 };
 
 esp_err_t servico_registro_telemetria_iniciar();
-// Chamado pelo ciclo de aquisição. Retenta a montagem e limita o registro a 1 Hz.
+// Enfileira a amostra do ciclo de registro local. A tarefa do SD cuida da montagem.
 void servico_registro_telemetria_processar_amostra(
     const DadosTelemetriaVeiculo& dados);
 esp_err_t servico_registro_telemetria_solicitar_sincronizacao();

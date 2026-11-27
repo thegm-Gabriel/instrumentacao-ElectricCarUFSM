@@ -10,7 +10,6 @@
 
 namespace {
 constexpr char ETIQUETA[] = "encoder_incremental";
-constexpr uint32_t CONTAGENS_POR_PULSO = 4;
 constexpr size_t QUANTIDADE_ENCODERS =
     static_cast<size_t>(EncoderIncrementalId::Quantidade);
 
@@ -23,6 +22,15 @@ size_t indice_encoder(EncoderIncrementalId id) {
 
 bool id_valido(EncoderIncrementalId id) {
     return indice_encoder(id) < QUANTIDADE_ENCODERS;
+}
+
+const char* nome_encoder(EncoderIncrementalId id) {
+    switch (id) {
+        case EncoderIncrementalId::RodaEsquerda: return "encoder esquerdo";
+        case EncoderIncrementalId::RodaDireita: return "encoder direito";
+        case EncoderIncrementalId::Quantidade: break;
+    }
+    return "encoder desconhecido";
 }
 
 ContadorPulsosId contador_do_encoder(EncoderIncrementalId id) {
@@ -68,7 +76,7 @@ esp_err_t encoder_incremental_iniciar(
         !GPIO_IS_VALID_GPIO(configuracao.pino_b) ||
         configuracao.pino_a == configuracao.pino_b ||
         configuracao.pulsos_por_giro == 0 ||
-        configuracao.pulsos_por_giro > UINT32_MAX / CONTAGENS_POR_PULSO) {
+        configuracao.pulsos_por_giro > UINT32_MAX / CONTAGENS_POR_PULSO_ENCODER) {
         return ESP_ERR_INVALID_ARG;
     }
     if (estados[indice_encoder(id)].inicializado) return ESP_OK;
@@ -93,17 +101,17 @@ esp_err_t encoder_incremental_iniciar(
     estado.pino_b = configuracao.pino_b;
     estado.pulsos_por_giro = configuracao.pulsos_por_giro;
     estado.contagens_por_giro =
-        configuracao.pulsos_por_giro * CONTAGENS_POR_PULSO;
+        configuracao.pulsos_por_giro * CONTAGENS_POR_PULSO_ENCODER;
     portEXIT_CRITICAL(&trava_estados);
     atualizar_estatisticas(id);
 
     ESP_LOGI(ETIQUETA,
              "%s pronto: A=GPIO%d B=GPIO%d, %lu P/R, %lu contagens/giro",
-             encoder_incremental_nome(id), configuracao.pino_a,
+             nome_encoder(id), configuracao.pino_a,
              configuracao.pino_b,
              static_cast<unsigned long>(configuracao.pulsos_por_giro),
              static_cast<unsigned long>(configuracao.pulsos_por_giro *
-                                        CONTAGENS_POR_PULSO));
+                                        CONTAGENS_POR_PULSO_ENCODER));
     return ESP_OK;
 }
 
@@ -117,6 +125,19 @@ esp_err_t encoder_incremental_ler(EncoderIncrementalId id,
     return erro;
 }
 
+void encoder_incremental_definir_resolucao(EncoderIncrementalId id,
+                                            uint32_t pulsos_por_giro) {
+    if (!id_valido(id) || pulsos_por_giro == 0 ||
+        pulsos_por_giro > UINT32_MAX / CONTAGENS_POR_PULSO_ENCODER) return;
+    portENTER_CRITICAL(&trava_estados);
+    auto& estado = estados[indice_encoder(id)];
+    if (estado.inicializado) {
+        estado.pulsos_por_giro = pulsos_por_giro;
+        estado.contagens_por_giro = pulsos_por_giro * CONTAGENS_POR_PULSO_ENCODER;
+    }
+    portEXIT_CRITICAL(&trava_estados);
+}
+
 EstadoEncoderIncremental encoder_incremental_obter_estado(
     EncoderIncrementalId id) {
     if (!id_valido(id)) return {};
@@ -125,13 +146,4 @@ EstadoEncoderIncremental encoder_incremental_obter_estado(
     const EstadoEncoderIncremental copia = estados[indice_encoder(id)];
     portEXIT_CRITICAL(&trava_estados);
     return copia;
-}
-
-const char* encoder_incremental_nome(EncoderIncrementalId id) {
-    switch (id) {
-        case EncoderIncrementalId::RodaEsquerda: return "encoder esquerdo";
-        case EncoderIncrementalId::RodaDireita: return "encoder direito";
-        case EncoderIncrementalId::Quantidade: break;
-    }
-    return "encoder desconhecido";
 }

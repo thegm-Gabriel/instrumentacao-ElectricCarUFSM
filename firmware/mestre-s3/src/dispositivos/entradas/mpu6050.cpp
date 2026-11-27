@@ -19,6 +19,7 @@ constexpr uint8_t REGISTRO_IDENTIFICACAO = 0x75;
 constexpr uint8_t IDENTIFICACAO_PADRAO_MPU6050 = 0x68;
 constexpr uint16_t FREQUENCIA_BASE_COM_DLPF_HZ = 1000;
 constexpr uint8_t CONFIGURACAO_DLPF_44_HZ = 0x03;
+constexpr uint8_t CONFIGURACAO_DLPF_5_HZ = 0x06;
 constexpr float GRAVIDADE_PADRAO_MS2 = 9.80665f;
 constexpr float SENSIBILIDADE_ACELEROMETRO_LSB_G = 16384.0f;
 constexpr float SENSIBILIDADE_GIROSCOPIO_LSB_GRAUS_S = 131.0f;
@@ -139,16 +140,17 @@ static esp_err_t configurar_mpu6050(uint32_t frequencia_amostragem_hz, bool reco
                  identificacao, IDENTIFICACAO_PADRAO_MPU6050);
     }
 
-    // Com o DLPF habilitado, a taxa de saída é 1 kHz e SMPLRT_DIV aplica
-    // 1 kHz / (1 + divisor). DLPF_CFG=3 fornece aproximadamente 44 Hz no
-    // acelerômetro e 42 Hz no giroscópio; as faixas escolhidas são ±2 g e
-    // ±250 °/s, com sensibilidades de 16384 LSB/g e 131 LSB/(°/s).
+    // Com DLPF, SMPLRT_DIV aplica 1 kHz / (1 + divisor). Nas taxas baixas,
+    // use a menor banda do MPU para reduzir a influência de vibrações rápidas.
+    const bool amostragem_lenta = frequencia_efetiva_hz <= 20;
+    const uint8_t filtro = amostragem_lenta ? CONFIGURACAO_DLPF_5_HZ
+                                            : CONFIGURACAO_DLPF_44_HZ;
     if (erro == ESP_OK) erro = escrever_registro(REGISTRO_GERENCIAMENTO_ENERGIA, 0x01);
     if (erro == ESP_OK) vTaskDelay(pdMS_TO_TICKS(30));
     if (erro == ESP_OK) erro = escrever_registro(
         REGISTRO_DIVISOR_AMOSTRAGEM, divisor_amostragem);
     if (erro == ESP_OK) erro = escrever_registro(
-        REGISTRO_CONFIGURACAO, CONFIGURACAO_DLPF_44_HZ);
+        REGISTRO_CONFIGURACAO, filtro);
     if (erro == ESP_OK) erro = escrever_registro(REGISTRO_CONFIGURACAO_GIROSCOPIO, 0x00);
     if (erro == ESP_OK) erro = escrever_registro(REGISTRO_CONFIGURACAO_ACELEROMETRO, 0x00);
     // A confirmação por leitura detecta endereço errado, clone incompatível ou
@@ -159,7 +161,7 @@ static esp_err_t configurar_mpu6050(uint32_t frequencia_amostragem_hz, bool reco
     if (erro == ESP_OK) erro = verificar_registro(
         REGISTRO_DIVISOR_AMOSTRAGEM, divisor_amostragem);
     if (erro == ESP_OK) erro = verificar_registro(
-        REGISTRO_CONFIGURACAO, CONFIGURACAO_DLPF_44_HZ, 0x07);
+        REGISTRO_CONFIGURACAO, filtro, 0x07);
     if (erro == ESP_OK) erro = verificar_registro(REGISTRO_CONFIGURACAO_GIROSCOPIO, 0x00, 0x18);
     if (erro == ESP_OK) erro = verificar_registro(REGISTRO_CONFIGURACAO_ACELEROMETRO, 0x00, 0x18);
     if (erro != ESP_OK) {
@@ -173,12 +175,14 @@ static esp_err_t configurar_mpu6050(uint32_t frequencia_amostragem_hz, bool reco
     estado.configuracao_verificada = true;
     estado.identificacao = identificacao;
     estado.frequencia_amostragem_hz = frequencia_efetiva_hz;
+    estado.frequencia_filtro_acelerometro_hz = amostragem_lenta ? 5 : 44;
     estado.ultimo_erro = ESP_OK;
     portEXIT_CRITICAL(&trava_estado);
     ESP_LOGI(ETIQUETA,
-             "MPU6050 pronto em 0x%02X: WHO_AM_I=0x%02X, %u Hz, DLPF acel=44 Hz/giro=42 Hz, ±2 g, ±250 graus/s",
+             "MPU6050 pronto em 0x%02X: WHO_AM_I=0x%02X, %u Hz, DLPF acel=%u Hz/giro=%u Hz, ±2 g, ±250 graus/s",
              configuracao::ENDERECO_MPU6050, identificacao,
-             static_cast<unsigned>(frequencia_efetiva_hz));
+             static_cast<unsigned>(frequencia_efetiva_hz),
+             amostragem_lenta ? 5u : 44u, amostragem_lenta ? 5u : 42u);
     return ESP_OK;
 }
 

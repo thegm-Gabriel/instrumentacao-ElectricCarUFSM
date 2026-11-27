@@ -8,11 +8,11 @@
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "guarda_rollback_ota.h"
+#include "gerenciadores/guarda_rollback_ota.h"
 #include "servicos/receptor_uart.h"
 #include "gerenciadores/gerenciador_wifi.h"
 #include "servicos/servidor_web.h"
-#include "servico_ota_satelite.h"
+#include "servicos/ota_satelite.h"
 
 static const char *TAG = "main_equipe";
 
@@ -28,7 +28,7 @@ static void tratar_falha_de_inicializacao(const char *servico, esp_err_t erro)
 void app_main(void)
 {
     guarda_ota_registrar_partida(TAG);
-    ESP_LOGI(TAG, "Inicializando ESP da equipe; motivo do reset=%d",
+    ESP_LOGI(TAG, "Inicializando Equipe no ESP32-C3 SuperMini Plus; motivo do reset=%d",
              (int)esp_reset_reason());
     // Diagnóstico é complementar: temperatura indisponível não impede o painel.
     (void)diagnostico_sistema_iniciar();

@@ -3,7 +3,7 @@
 
 #include <cstdint>
 
-#include "dados_telemetria_veiculo.h"
+#include "nucleo/dados_telemetria_veiculo.h"
 #include "nucleo/configuracao/veiculo.h"
 #include "esp_err.h"
 

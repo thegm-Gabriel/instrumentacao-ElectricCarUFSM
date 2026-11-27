@@ -5,7 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, '..', '..', 'firmware', 'visitantes-s3', 'web', 'app.js'), 'utf8');
-const start = source.indexOf('  const powerPeak=');
+const start = source.indexOf('  function hidePeak(');
 const end = source.indexOf('\n  function setStatus(', start);
 assert(start >= 0 && end > start);
 
@@ -21,7 +21,7 @@ const marker = {
   getBoundingClientRect:()=>({width:2}),
 };
 const context = vm.createContext({
-  state:{powerRailLimit:500},
+  powerVisualMaxW:1000,
   $:()=>marker,
   finite:value=>typeof value==='number'&&Number.isFinite(value),
   performance:{now:()=>now},
@@ -38,7 +38,8 @@ sample(1600,270);
 assert.equal(visible,false);
 sample(2100,180);
 assert.equal(visible,true);
-assert.equal(styles['--power-peak-position'],'80%');
+assert.equal(styles['--peak-position'],'30%');
+assert.equal(styles['--peak-duration'],'1000ms');
 assert.equal(regen,false);
 [...timers.values()][0]();
 assert.equal(visible,false);
@@ -46,6 +47,6 @@ sample(6000,-160);
 sample(6500,-220);
 sample(7000,-120);
 assert.equal(visible,true);
-assert(Math.abs(parseFloat(styles['--power-peak-position'])-28)<.01);
+assert.equal(styles['--peak-position'],'22%');
 assert.equal(regen,true);
 console.log('Picos de consumo e regeneração: OK');

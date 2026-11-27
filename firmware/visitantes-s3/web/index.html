@@ -1,11 +1,19 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="pt-BR" data-theme="dark" data-theme-storage="nexus-visitantes-tema">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#102533">
-  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#121c31">
+  <meta name="color-scheme" content="dark light">
   <title>NEXUS — Telemetria do carro elétrico</title>
+  <script>
+    try {
+      const root = document.documentElement;
+      if (localStorage.getItem(root.dataset.themeStorage) === 'light') root.dataset.theme = 'light';
+    } catch {
+      // Navegadores com armazenamento bloqueado começam no tema escuro.
+    }
+  </script>
   <style>/* VISITANTES_CSS */</style>
 </head>
 <body>
@@ -13,37 +21,95 @@
     <header class="site-header">
       <div class="identity">
         <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 40 40" focusable="false"><path class="nexus-trace" d="M9 30V10l22 20V10"/><path class="nexus-underline" d="M14 30h4m4-20h4"/><circle cx="9" cy="10" r="2.8"/><circle cx="31" cy="10" r="2.8"/><circle cx="20" cy="20" r="2.8"/><circle cx="9" cy="30" r="2.8"/><circle cx="31" cy="30" r="2.8"/></svg></span>
-        <div><h1>NEXUS</h1><p>Sistema de telemetria e controle</p></div>
+        <div><strong>NEXUS</strong><span>Telemetria</span></div>
       </div>
-      <a class="project-link" href="#sobre" aria-label="Sobre o projeto">Sobre <span aria-hidden="true">↗</span></a>
-      <div class="live-status"><span id="status-dot" class="status-dot"></span><span><strong id="status-label" role="status" aria-live="polite">Aguardando dados</strong><small id="last-update">Sem leitura</small></span></div>
+      <div class="live-status">
+        <span class="status-dot" aria-hidden="true"></span>
+        <div><strong id="status-label" role="status">Aguardando dados</strong><small id="last-update" hidden></small></div>
+      </div>
+      <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Tema claro" aria-pressed="false" title="Ativar tema claro">
+        <span class="theme-icon theme-sun" aria-hidden="true">☀&#xfe0e;</span>
+        <span class="theme-icon theme-moon" aria-hidden="true">☾</span>
+      </button>
     </header>
 
     <main>
-      <div id="data-note" class="data-note" hidden></div>
-      <section class="hero-grid" aria-label="O carro neste momento">
-        <article id="speed-card" class="card speed-card">
-          <div class="card-heading"><div><h2>Velocidade agora</h2></div><span id="speed-peak-label" class="peak-label"></span></div>
-          <div class="speed-display"><svg viewBox="0 0 320 205" preserveAspectRatio="xMidYMid meet" aria-hidden="true"><defs><linearGradient id="speed-color" gradientUnits="userSpaceOnUse" x1="44" y1="165" x2="276" y2="165"><stop offset="0" stop-color="#46dfba"/><stop offset=".38" stop-color="#b6df78"/><stop offset=".68" stop-color="#ffd075"/><stop offset="1" stop-color="#ff7881"/></linearGradient></defs><line class="dial-tick" x1="44.68" y1="109.46" x2="40.17" y2="107.29"/><line class="dial-tick major" x1="80.19" y1="64.93" x2="73.96" y2="57.11"/><line class="dial-tick" x1="131.52" y1="40.21" x2="130.40" y2="35.33"/><line class="dial-tick major" x1="188.48" y1="40.21" x2="190.71" y2="30.46"/><line class="dial-tick" x1="239.81" y1="64.93" x2="242.92" y2="61.02"/><line class="dial-tick major" x1="275.32" y1="109.46" x2="284.33" y2="105.12"/><text class="gauge-tick intermediate" x="65.85" y="46.94" text-anchor="middle">10</text><text class="gauge-tick intermediate" x="193.60" y="17.79" text-anchor="middle">20</text><text class="gauge-tick intermediate" x="296.05" y="99.48" text-anchor="middle">30</text><text class="gauge-tick minor" x="28.46" y="101.65" text-anchor="middle">5</text><text class="gauge-tick minor" x="127.51" y="22.66" text-anchor="middle">15</text><text class="gauge-tick minor" x="251.03" y="50.85" text-anchor="middle">25</text><path class="gauge-track" d="M44 165 A116 116 0 0 1 276 165" pathLength="100"/><path id="speed-arc" class="gauge-fill" d="M44 165 A116 116 0 0 1 276 165" pathLength="100"/><g id="speed-peak-marker" aria-hidden="true"><line class="peak-halo"/><line class="peak-notch"/></g><text class="gauge-tick endpoint" x="44" y="191" text-anchor="middle">0</text><text class="gauge-tick endpoint" x="276" y="191" text-anchor="middle">35</text></svg><div class="speed-number no-reading"><strong id="speed-value" class="empty">Sem leitura</strong><span>km/h</span></div><span class="sr-only">O arco vai de 0 a 35 km/h.</span></div>
-          <div class="pedal-pair" aria-label="Posição dos pedais">
-            <div class="pedal throttle"><div class="pedal-label"><span>Acelerador</span><strong id="throttle-value" class="empty">Sem leitura</strong></div><div class="pedal-track" aria-hidden="true"><span id="throttle-fill"></span></div></div>
-            <div class="pedal brake"><div class="pedal-label"><span>Freio</span><strong id="brake-value" class="empty">Sem leitura</strong></div><div class="pedal-track" aria-hidden="true"><span id="brake-fill"></span></div></div>
+      <section class="hero" aria-labelledby="project-title">
+        <h1 id="project-title">Carro Elétrico <span>UFSM-CS</span></h1>
+        <div id="speed-card" class="hero-grid">
+          <div class="speed-readout">
+            <h2 class="sr-only">Velocidade</h2>
+            <div class="speed-number no-reading"><strong id="speed-value" class="reading empty">Sem leitura</strong><span>km/h</span></div>
+            <div class="speed-scale" aria-hidden="true">
+              <div class="speed-track">
+                <span id="speed-fill" class="scale-fill"></span>
+                <i id="speed-peak-marker" class="peak-marker"></i>
+              </div>
+              <div class="speed-ticks"><span>0</span><span>35 km/h</span></div>
+            </div>
           </div>
-          <div class="speed-footer"><strong id="motion-state">Aguardando dados</strong><span id="speed-source">Nenhuma leitura recebida</span></div>
-        </article>
+          <div class="pedal-pair" aria-label="Posição dos pedais">
+            <div class="pedal throttle">
+              <div class="pedal-label"><span>Acelerador</span><strong id="throttle-value" class="reading empty">Sem leitura</strong></div>
+              <div class="pedal-track" aria-hidden="true"><span id="throttle-fill" class="scale-fill"></span></div>
+            </div>
+            <div class="pedal brake">
+              <div class="pedal-label"><span>Freio</span><strong id="brake-value" class="reading empty">Sem leitura</strong></div>
+              <div class="pedal-track" aria-hidden="true"><span id="brake-fill" class="scale-fill"></span></div>
+            </div>
+          </div>
+          <div class="speed-footer"><strong id="motion-state">Sem leitura</strong></div>
+          <figure class="project-vehicle">
+            <div class="vehicle-track-scene" aria-hidden="true">
+              <div class="vehicle-track"><div id="vehicle-track-lines"></div></div>
+            </div>
+            <img src="/* PROJECT_CAR */" alt="Ilustração em azul ultramarino do Carro Elétrico UFSM-CS" width="768" height="512" fetchpriority="high">
+          </figure>
+        </div>
         <div class="primary-stack">
-          <article class="card metric-card battery-card"><div class="metric-copy"><h2>Carga da bateria</h2></div><div class="metric-reading"><strong id="battery-value">Sem leitura</strong><span id="battery-unit"></span></div><div class="meter" aria-hidden="true"><span id="battery-fill"></span></div><small id="battery-hint"></small></article>
           <article id="power-motion-card" class="card metric-card power-motion-card" hidden>
             <div class="metric-copy"><h2>Potência elétrica</h2></div>
-            <div class="metric-reading"><strong id="power-rail-value">Sem leitura</strong><span id="power-rail-unit"></span></div>
+            <div class="metric-reading"><strong id="power-rail-value" class="reading empty">Sem leitura</strong><span id="power-rail-unit"></span></div>
             <div id="power-rail" class="power-rail" role="img" aria-label="Potência elétrica sem leitura">
               <div class="power-rail-track" aria-hidden="true">
-                <span id="power-rail-fill" class="power-rail-fill"></span><i id="power-peak-marker" class="power-peak-marker"></i>
+                <span id="power-rail-fill" class="scale-fill"></span>
+                <i id="power-peak-marker" class="peak-marker"></i>
               </div>
             </div>
             <small id="power-flow">Aguardando medição.</small>
           </article>
-          <article class="card metric-card trip-card"><div class="metric-copy"><h2>Odômetro</h2></div><div class="metric-reading"><strong id="trip-value">Sem leitura</strong><span id="trip-unit"></span></div><small id="trip-hint"></small></article>
+          <article class="card metric-card battery-card">
+            <div class="metric-copy"><h2>Carga da bateria</h2></div>
+            <div class="metric-reading"><strong id="battery-value" class="reading empty">Sem leitura</strong><span id="battery-unit"></span></div>
+            <div class="meter" aria-hidden="true"><span id="battery-fill" class="scale-fill"></span></div>
+            <small id="battery-hint"></small>
+          </article>
+          <article class="card metric-card trip-card">
+            <div class="metric-copy"><h2>Odômetro</h2></div>
+            <div class="metric-reading"><strong id="trip-value" class="reading empty">Sem leitura</strong><span id="trip-unit"></span></div>
+          </article>
+        </div>
+      </section>
+
+      <section id="graficos" class="section" aria-labelledby="history-title">
+        <div class="section-heading"><h2 id="history-title">Gráficos da sessão</h2><div class="range-control" role="group" aria-label="Janela dos gráficos"><button type="button" class="range active" data-minutes="1" aria-pressed="true">1 min</button><button type="button" class="range" data-minutes="5" aria-pressed="false">5 min</button><button type="button" class="range" data-minutes="10" aria-pressed="false">10 min</button></div></div>
+        <div id="visitor-chart-grid" class="chart-grid">
+          <article class="card chart-card"><div class="chart-heading"><h3>Movimento</h3></div><div id="speed-chart-legend" class="chart-legend" aria-hidden="true"></div><div class="chart-wrap"><canvas id="speed-chart" role="img" aria-label="Gráfico da velocidade e da aceleração ao longo do tempo"></canvas><span id="speed-empty" class="chart-empty">Aguardando leituras de movimento.</span><div id="speed-tip" class="chart-tip" hidden></div></div></article>
+          <article id="electric-chart-card" class="card chart-card">
+            <div class="chart-heading chart-heading-electric">
+              <h3>Sistema elétrico</h3>
+              <div class="chart-signals" role="group" aria-label="Grandezas do sistema elétrico">
+                <label class="chart-select-label">Eixo esquerdo<select id="visitor-chart-left"></select></label>
+                <label class="chart-select-label">Eixo direito<select id="visitor-chart-right"></select></label>
+              </div>
+            </div>
+            <div id="electric-chart-legend" class="chart-legend"></div>
+            <div class="chart-wrap">
+              <canvas id="power-chart" role="img" aria-label="Gráfico de dados ao longo do tempo"></canvas>
+              <span id="power-empty" class="chart-empty">Sem leituras para a seleção.</span>
+              <div id="power-tip" class="chart-tip" hidden></div>
+            </div>
+          </article>
         </div>
       </section>
 
@@ -56,69 +122,52 @@
               <h3>Tensão da bateria</h3>
               <details class="info-disclosure"><summary class="info" aria-label="Sobre tensão da bateria">i</summary><span class="info-tip">Tensão atual do conjunto de baterias.</span></details>
             </div>
-            <strong id="voltage-value">Sem leitura</strong>
+            <strong id="voltage-value" class="reading empty">Sem leitura</strong>
           </article>
           <article class="card detail-card">
             <div class="detail-top">
               <h3>Corrente elétrica</h3>
               <details class="info-disclosure"><summary class="info" aria-label="Sobre corrente elétrica">i</summary><span class="info-tip">Corrente negativa indica devolução de energia.</span></details>
             </div>
-            <strong id="current-value">Sem leitura</strong>
+            <strong id="current-value" class="reading empty">Sem leitura</strong>
           </article>
           <article class="card detail-card">
             <div class="detail-top"><h3>Autonomia restante</h3></div>
-            <strong id="range-value">Sem leitura</strong>
+            <strong id="range-value" class="reading empty">Sem leitura</strong>
             <small id="range-hint"></small>
           </article>
           <article class="card detail-card">
             <div class="detail-top"><h3>Consumo médio</h3></div>
-            <strong id="consumption-value">Sem leitura</strong>
+            <strong id="consumption-value" class="reading empty">Sem leitura</strong>
             <small id="consumption-hint"></small>
           </article>
         </div>
       </section>
 
-      <section class="section" aria-labelledby="history-title">
-        <div class="section-heading"><div><h2 id="history-title">Ao longo do tempo</h2><p>As leituras recebidas nesta página, ao longo do tempo.</p></div><div class="range-control" role="group" aria-label="Janela dos gráficos"><button type="button" class="range active" data-minutes="1" aria-pressed="true">1 min</button><button type="button" class="range" data-minutes="5" aria-pressed="false">5 min</button><button type="button" class="range" data-minutes="10" aria-pressed="false">10 min</button></div></div>
-        <div id="visitor-chart-grid" class="chart-grid">
-          <article class="card chart-card"><div class="chart-heading"><div><h3>Movimento</h3><p>Velocidade e aceleração na mesma linha do tempo</p></div></div><div class="chart-legend" aria-hidden="true"><span style="--series-color:#63d9f2">Velocidade · km/h</span><span style="--series-color:#f4bf70">Aceleração · m/s²</span></div><div class="chart-wrap"><canvas id="speed-chart" role="img" aria-label="Gráfico da velocidade e da aceleração ao longo do tempo"></canvas><span id="speed-empty" class="chart-empty">Aguardando leituras de movimento.</span><div id="speed-tip" class="chart-tip" hidden></div></div></article>
-          <article id="electric-chart-card" class="card chart-card" hidden><div class="chart-heading"><div><h3>Sistema elétrico</h3><p>Dois sinais na mesma linha do tempo</p></div><label class="chart-select-label">Comparar<select id="visitor-chart-signal" aria-label="Sinais do gráfico elétrico"><option value="power-current" selected>Potência e corrente</option><option value="voltage-current">Tensão e corrente</option><option value="power-voltage">Potência e tensão</option><option value="battery-power">Carga e potência</option></select></label></div><div id="electric-chart-legend" class="chart-legend" aria-hidden="true"></div><div class="chart-wrap"><canvas id="power-chart" role="img" aria-label="Gráfico de dados elétricos ao longo do tempo"></canvas><span id="power-empty" class="chart-empty">Aguardando leituras elétricas.</span><div id="power-tip" class="chart-tip" hidden></div></div></article>
+      <section id="sobre" class="section about-panel" aria-labelledby="about-title">
+        <div class="about-content">
+          <div class="about-emblem">
+            <img src="/* PROJECT_LOGO */" alt="Emblema do Carro Elétrico UFSM-CS" width="556" height="474" loading="lazy">
+          </div>
+          <div>
+            <h2 id="about-title">Sobre o projeto</h2>
+            <p>Telemetria dos testes do Carro Elétrico UFSM-CS.</p>
+          </div>
         </div>
-      </section>
-
-      <section class="section" aria-labelledby="details-title">
-        <div class="section-heading"><div><h2 id="details-title">Seu acompanhamento</h2><p>Desde a primeira leitura nesta página.</p></div></div>
-        <div id="session-grid" class="detail-grid compact">
-          <article id="session-energy-card" class="card detail-card" hidden>
-            <div class="detail-top">
-              <h3>Energia consumida</h3>
-              <details class="info-disclosure"><summary class="info" aria-label="Sobre energia consumida">i</summary><span class="info-tip">Energia usada na sessão, sem descontar a regeneração.</span></details>
-            </div>
-            <strong id="energy-value">Sem leitura</strong>
-          </article>
-          <article class="card detail-card">
-            <div class="detail-top">
-              <h3>Distância acompanhada</h3>
-              <details class="info-disclosure"><summary class="info" aria-label="Sobre distância acompanhada">i</summary><span class="info-tip">Diferença entre o odômetro atual e a primeira leitura.</span></details>
-            </div>
-            <strong id="distance-value">Sem leitura</strong>
-          </article>
-          <article class="card detail-card">
-            <div class="detail-top">
-              <h3>Tempo de acompanhamento</h3>
-              <details class="info-disclosure"><summary class="info" aria-label="Sobre tempo de acompanhamento">i</summary><span class="info-tip">Tempo decorrido desde a primeira leitura da sessão.</span></details>
-            </div>
-            <strong id="session-value">Sem leitura</strong>
-          </article>
-        </div>
-      </section>
-      <section id="sobre" class="section about-section" aria-labelledby="about-title">
-        <div class="about-panel">
-          <div class="about-emblem"><img src="/* PROJECT_LOGO */" alt="Símbolo do Carro Elétrico UFSM-CS"/></div>
-          <div class="about-content">
-            <h2 id="about-title">Carro Elétrico UFSM-CS</h2>
-            <p>Instrumentação do carro elétrico para acompanhar movimento, distância e dados elétricos durante os testes.</p>
-            <div class="about-credits"><div><span>Orientação</span><strong>Prof. Dr. Paulo César Vargas Luz</strong></div><div><span>Equipe discente</span><ul><li>Adylson Hahn</li><li>Érick Ramon Biscaglia</li><li>Gabriel Muttoni</li><li>Gustavo Reckziegel Machado</li><li>Théos Schultz Tompsen</li></ul></div></div>
+        <div class="about-credits">
+          <div>
+            <h3>Orientação</h3>
+            <p>Prof. Dr. Paulo César Vargas Luz</p>
+          </div>
+          <div>
+            <h3>Equipe discente</h3>
+            <ul>
+              <li>Adylson Hahn</li>
+              <li>Érick Ramon Biscaglia</li>
+              <li>Gabriel Muttoni</li>
+              <li>Gustavo Reckziegel Machado</li>
+              <li>Théos Schultz Tompsen</li>
+            </ul>
           </div>
         </div>
       </section>

@@ -1,5 +1,4 @@
 // Centraliza pinagem, rede e limites do satélite dos visitantes.
-// Centraliza pinagem, rede e limites do satélite dos visitantes.
 #pragma once
 
 #include "driver/gpio.h"
@@ -29,11 +28,13 @@
 #error "WIFI_POTENCIA_MAXIMA_DBM deve estar entre 2 e 20 dBm"
 #endif
 
+// O C3 mantém o chicote do satélite. O USB nativo usa GPIO18 e GPIO19.
 #define UART_TELEMETRIA UART_NUM_1
 #define UART_BAUD_RATE ENLACE_UART_BAUD_RATE
 #define PINO_UART_TX GPIO_NUM_6
 #define PINO_UART_RX GPIO_NUM_5
 #define UART_TAMANHO_BUFFER 8192
+#define UART_TEMPO_LIMITE_TX_MS 100
 
 #define IP_PAINEL "192.168.4.1"
 #define PORTA_HTTP 80

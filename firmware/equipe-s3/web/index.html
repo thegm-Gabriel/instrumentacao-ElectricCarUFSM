@@ -1,32 +1,49 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="pt-BR" data-theme="dark" data-theme-storage="nexus-equipe-tema">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#111E2C">
-  <meta name="color-scheme" content="dark">
+  <meta name="color-scheme" content="dark light">
   <title>NEXUS — Telemetria e Controle</title>
+  <script>
+    const root = document.documentElement;
+    try {
+      if (localStorage.getItem(root.dataset.themeStorage) === 'light') root.dataset.theme = 'light';
+    } catch (_) {
+      // O painel também funciona com o armazenamento local bloqueado.
+    }
+  </script>
   <style>/* NEXUS_CSS */</style>
 </head>
 <body>
   <header class="topbar">
     <div class="topbar-inner">
       <a class="brand" href="#telemetria" aria-label="NEXUS, abrir telemetria"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 40 40" focusable="false"><path class="nexus-trace" d="M9 30V10l22 20V10"/><path class="nexus-underline" d="M14 30h4m4-20h4"/><circle cx="9" cy="10" r="2.8"/><circle cx="31" cy="10" r="2.8"/><circle cx="20" cy="20" r="2.8"/><circle cx="9" cy="30" r="2.8"/><circle cx="31" cy="30" r="2.8"/></svg></span><span><strong>NEXUS</strong><small>Telemetria e Controle</small></span></a>
-      <nav class="tabs" role="tablist" aria-label="Páginas do painel">
-        <button id="tab-telemetria" class="tab active" role="tab" data-tab="telemetria" aria-controls="telemetria" aria-selected="true">Telemetria</button>
-        <button id="tab-controle" class="tab" role="tab" data-tab="controle" aria-controls="controle" aria-selected="false">Controle</button>
-        <button id="tab-comandos" class="tab" role="tab" data-tab="comandos" aria-controls="comandos" aria-selected="false">Comandos</button>
-        <button id="tab-mestre" class="tab" role="tab" data-tab="mestre" aria-controls="mestre" aria-selected="false">Mestre</button>
-        <button id="tab-equipe" class="tab" role="tab" data-tab="equipe" aria-controls="equipe" aria-selected="false">Equipe</button>
-        <button id="tab-visitantes" class="tab" role="tab" data-tab="visitantes" aria-controls="visitantes" aria-selected="false">Visitantes</button>
-        <button id="tab-sobre" class="tab" role="tab" data-tab="sobre" aria-controls="sobre" aria-selected="false">Sobre</button>
-      </nav>
+      <div class="tabs">
+        <nav class="panel-tab-list" role="tablist" aria-label="Páginas do painel">
+          <button id="tab-telemetria" class="tab active" role="tab" data-tab="telemetria" aria-controls="telemetria" aria-selected="true">Telemetria</button>
+          <button id="tab-controle" class="tab" role="tab" data-tab="controle" aria-controls="controle" aria-selected="false">Controle</button>
+          <button id="tab-comandos" class="tab" role="tab" data-tab="comandos" aria-controls="comandos" aria-selected="false">Comandos</button>
+          <div id="device-tab-list" class="device-tab-list" role="presentation">
+            <button id="tab-mestre" class="tab" role="tab" data-tab="mestre" aria-controls="mestre" aria-selected="false">Mestre</button>
+            <button id="tab-equipe" class="tab" role="tab" data-tab="equipe" aria-controls="equipe" aria-selected="false">Equipe</button>
+            <button id="tab-visitantes" class="tab" role="tab" data-tab="visitantes" aria-controls="visitantes" aria-selected="false">Visitantes</button>
+            <button id="tab-sobre" class="tab" role="tab" data-tab="sobre" aria-controls="sobre" aria-selected="false">Sobre</button>
+          </div>
+        </nav>
+        <button id="device-tabs-toggle" class="device-tabs-toggle" type="button" aria-expanded="false" aria-controls="device-tab-list">Dispositivos</button>
+      </div>
       <div class="header-status">
         <button id="health-shortcut" class="system-health message-state" type="button" title="Abrir diagnóstico do Mestre" data-tone="info">
           <span class="health-indicator" aria-hidden="true"></span>
           <span><small>Saúde do sistema</small><strong id="health-status">Aguardando</strong></span>
         </button>
         <a class="header-project" href="#sobre">Carro Elétrico <span>UFSM-CS</span></a>
+        <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Tema claro" aria-pressed="false" title="Ativar tema claro">
+          <span class="theme-icon theme-sun" aria-hidden="true">☀&#xfe0e;</span>
+          <span class="theme-icon theme-moon" aria-hidden="true">☾</span>
+        </button>
       </div>
     </div>
   </header>
@@ -37,7 +54,7 @@
         <div class="command-heading-controls">
           <div class="telemetry-refresh">
             <label for="command-refresh-rate">Atualizar dados</label>
-            <select id="command-refresh-rate" aria-label="Taxa de atualização da telemetria">
+            <select id="command-refresh-rate" aria-label="Taxa de atualização do painel">
               <option value="1000">1 Hz</option><option value="500">2 Hz</option><option value="333">3 Hz</option><option value="250" selected>4 Hz</option>
             </select>
           </div>
@@ -47,8 +64,8 @@
       </div>
       <div class="section-heading"><h2>Indicadores principais</h2></div>
       <div class="metrics">
-        <article id="speed-card" class="card speed-card">
-          <div class="card-label"><span>Movimento agora</span><span id="speed-peak-label" class="speed-peak-label" aria-live="off"></span></div>
+        <article id="speed-card" class="card speed-card" aria-label="Velocidade e pedais">
+          <span id="speed-peak-label" class="speed-peak-label" aria-live="off"></span>
           <div class="speed-card-body">
           <div class="speed-instrument">
             <svg class="speed-arc" viewBox="0 0 320 176" aria-label="Velocidade em escala de 0 a 30 km/h" role="img"><defs><linearGradient id="speed-gradient" gradientUnits="userSpaceOnUse" x1="39" y1="158" x2="281" y2="158"><stop offset="0%" stop-color="#46dfba"/><stop offset="38%" stop-color="#a9de83"/><stop offset="70%" stop-color="#ffd078"/><stop offset="100%" stop-color="#ff9b72"/></linearGradient></defs><g id="speed-ticks" aria-hidden="true"></g><path class="arc-track" d="M39 158 A121 121 0 0 1 281 158" pathLength="100"/><path id="speed-fill" class="arc-fill" d="M39 158 A121 121 0 0 1 281 158" pathLength="100"/><g id="speed-peak-marker" aria-hidden="true"><line class="peak-mark-halo"/><line class="peak-mark"/></g></svg>
@@ -58,12 +75,11 @@
           <div class="pedal-meters" aria-label="Acelerador e freio"><div class="pedal-meter"><div class="pedal-title"><span><i class="legend-key throttle-key"></i>Acelerador</span><strong id="throttle-arc-value">—</strong></div><div class="pedal-track"><span id="throttle-fill"></span></div></div><div class="pedal-meter"><div class="pedal-title"><span><i class="legend-key brake-key"></i>Freio</span><strong id="brake-arc-value">—</strong></div><div class="pedal-track"><span id="brake-fill"></span></div></div></div>
           </div>
         </article>
-        <article id="soc-card" class="card metric-card metric-soc" data-charge-level="unavailable"><div class="card-label"><span>Estado de carga</span><span id="soc-notice" class="soc-notice" role="status" hidden><span id="soc-notice-icon" aria-hidden="true"></span><span id="soc-notice-label"></span></span></div><div class="metric-value"><strong id="soc">—</strong><span>%</span></div><div class="progress"><span id="soc-bar"></span></div><small id="soc-context" class="metric-context">Aguardando leitura</small></article>
-        <article id="power-card" class="card metric-card metric-power"><div class="card-label">Potência elétrica</div><span id="power-peak-label" class="meter-peak-label" aria-live="off"></span><div class="metric-value"><strong id="power">—</strong><span id="power-unit">W</span></div><small id="power-context" class="metric-context">Aguardando leitura</small><div id="power-rail" class="power-rail" role="img" aria-label="Potência elétrica sem leitura" hidden><div class="power-rail-track" aria-hidden="true"><span id="power-rail-fill" class="power-rail-fill"></span><i id="power-peak-marker" class="power-peak-marker"></i></div></div></article>
-        <article id="current-card" class="card metric-card metric-current"><div class="card-label">Corrente elétrica</div><span id="current-peak-label" class="meter-peak-label" aria-live="off"></span><div class="metric-value"><strong id="current-primary">—</strong></div><div class="current-meter" aria-hidden="true"><span id="current-meter-fill"></span><i id="current-peak-marker" class="meter-peak-marker"></i></div><small id="current-context" class="metric-context">Aguardando leitura</small></article>
+        <article id="soc-card" class="card metric-card metric-soc" data-charge-level="unavailable"><div class="card-label"><span>Estado de carga</span><span id="soc-notice" class="soc-notice" role="status" hidden><span id="soc-notice-icon" aria-hidden="true"></span><span id="soc-notice-label"></span></span></div><div class="metric-value"><strong id="soc">—</strong><span>%</span></div><div class="progress"><span id="soc-bar"></span></div></article>
+        <article id="power-card" class="card metric-card metric-power"><div class="card-label">Potência elétrica</div><span id="power-peak-label" class="meter-peak-label" aria-live="off"></span><div class="metric-value"><strong id="power">—</strong><span id="power-unit">W</span></div><div id="power-rail" class="power-rail" role="img" aria-label="Potência elétrica sem leitura" hidden><div class="power-rail-track" aria-hidden="true"><span id="power-rail-fill" class="power-rail-fill"></span><i id="power-peak-marker" class="power-peak-marker"></i></div></div></article>
+        <article id="current-card" class="card metric-card metric-current"><div class="card-label">Corrente elétrica</div><span id="current-peak-label" class="meter-peak-label" aria-live="off"></span><div class="metric-value"><strong id="current-primary">—</strong></div><div class="current-meter" aria-hidden="true"><span id="current-meter-fill"></span><i id="current-peak-marker" class="meter-peak-marker"></i></div></article>
       </div>
       <div class="quick-strip card"><div><span>Marcha / sentido</span><strong id="gear">Não disponível</strong></div><div><span>Odômetro</span><strong id="distance">Não disponível</strong></div><div><span>Tempo do mestre</span><strong id="master-time">Não disponível</strong></div><div><span>Fonte</span><strong id="source">Não disponível</strong></div></div>
-      <div class="connection-strip"><article class="card connection-count equipo-count"><div><span>Dispositivos na rede da Equipe</span><strong id="equipe-client-count">—</strong></div><button type="button" class="connection-link" data-open-clients="equipe">Gerenciar conexões</button></article><article class="card connection-count visitor-count"><div><span>Dispositivos na rede de Visitantes</span><strong id="visitantes-client-count">—</strong></div><button type="button" class="connection-link" data-open-clients="visitantes">Gerenciar conexões</button></article></div>
       <div class="section-heading with-controls"><div><h2>Movimento e energia</h2><span>Histórico coletado neste navegador enquanto a página estiver aberta</span></div><div class="range-picker" aria-label="Intervalo do gráfico"><button class="range active" data-range="30">30 s</button><button class="range" data-range="120">2 min</button><button class="range" data-range="600">10 min</button></div></div>
       <div class="chart-grid">
         <article class="card chart-card motion-chart-card"><div class="card-top"><div><span class="chart-eyebrow">DINÂMICA</span><h3>Movimento</h3></div></div><div class="chart-legend chart-legend-row"><span><i class="legend-key speed-key"></i>Velocidade</span><span><i class="legend-key accel-key"></i>Aceleração</span></div><div class="chart-wrap"><canvas id="motion-chart" aria-label="Histórico de velocidade e aceleração" role="img"></canvas><div id="motion-tip" class="chart-tip" hidden></div></div><p class="chart-footnote"><span class="chart-footnote-label">Escala</span><span>A velocidade começa em 0–30 km/h e a escala se ajusta quando necessário.</span></p></article>
@@ -120,6 +136,7 @@
         </article>
       </div>
       <div class="section-heading"><h2>Comunicação e sessão</h2></div>
+      <div class="connection-strip"><article class="card connection-count equipo-count"><div><span>Dispositivos na rede da Equipe</span><strong id="equipe-client-count">—</strong></div><button type="button" class="connection-link" data-open-clients="equipe">Gerenciar conexões</button></article><article class="card connection-count visitor-count"><div><span>Dispositivos na rede de Visitantes</span><strong id="visitantes-client-count">—</strong></div><button type="button" class="connection-link" data-open-clients="visitantes">Gerenciar conexões</button></article></div>
       <div class="detail-grid lower-grid">
         <article class="card detail-card"><div class="card-top"><h3>Qualidade da telemetria</h3><span id="link-badge" class="badge muted">Não disponível</span></div><dl><div><dt>Taxa de pacotes</dt><dd id="packet-rate">Não disponível</dd></div><div><dt>Idade da amostra</dt><dd id="sample-age">Não disponível</dd></div><div><dt>Perda estimada</dt><dd id="packet-loss">Não disponível</dd></div><div><dt>Falhas CRC</dt><dd id="crc-fails">Não disponível</dd></div></dl></article>
         <article class="card detail-card"><div class="card-top"><h3>Sessão e eventos</h3><button id="export-csv" class="button secondary" disabled>Exportar CSV</button></div><p class="context-note">Exportação das amostras recebidas nesta página. Gravação e sessões anteriores não são expostas pela API atual.</p><ol id="events" class="events"><li>Aguardando a primeira leitura.</li></ol></article>
@@ -142,6 +159,7 @@
         <button type="button" data-scroll-to="command-diagnostics">Diagnóstico</button>
         <button type="button" data-scroll-to="command-networks">Rede</button>
         <button type="button" data-scroll-to="command-operations">Operação</button>
+        <button type="button" data-scroll-to="command-developer">Desenvolvedor</button>
         <button type="button" data-scroll-to="command-activity">Atividade</button>
       </nav>
       <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
@@ -149,7 +167,7 @@
       <div id="command-center" class="command-grid">
         <section id="command-diagnostics" class="command-task" aria-labelledby="command-diagnostics-title">
           <h2 id="command-diagnostics-title">Diagnóstico</h2>
-          <details id="master-queries" class="card command-card" open>
+          <details id="master-queries" class="card command-card">
             <summary>Consultas <span>Estado e enlaces</span></summary>
             <div class="command-body">
               <div class="command-inline">
@@ -174,15 +192,47 @@
                 </label>
                 <button id="run-master-query" type="button" class="button secondary">Consultar</button>
               </div>
-              <div id="master-query-result" class="command-result" role="status">Nenhuma consulta.</div>
+              <div id="master-query-result" class="command-result">
+                <p id="master-query-status" role="status">Nenhuma consulta.</p>
+                <dl id="master-query-fields" class="query-fields" hidden></dl>
+                <details id="master-query-raw" class="query-raw" hidden>
+                  <summary>Resposta completa (JSON)</summary>
+                  <pre id="master-query-json"></pre>
+                </details>
+              </div>
             </div>
           </details>
           <details id="sensor-command" class="card command-card sensor-command-card">
             <summary>Sensores <span>Aquisição e diagnóstico</span></summary>
             <div class="command-body">
               <p id="sensor-status" class="command-field-status" role="status">Aguardando consulta.</p>
-              <ul id="sensor-list" class="sensor-list"></ul>
-              <details class="sensor-bus">
+              <p id="sensor-encoder-warning" class="message-state" data-tone="warning" role="status" hidden></p>
+              <ul id="sensor-list" class="sensor-list">
+                <li class="sensor-card">
+                  <dl class="sensor-facts" aria-label="Seletores do veículo">
+                    <div><dt>Marcha selecionada</dt><dd id="sensor-gear-selected">Não disponível</dd></div>
+                    <div><dt>Sentido selecionado</dt><dd id="sensor-direction-selected">Não disponível</dd></div>
+                    <div><dt>Comando de ré</dt><dd id="sensor-reverse-command">Não disponível</dd></div>
+                  </dl>
+                </li>
+                <li class="sensor-card">
+                  <details>
+                    <summary>
+                      <span><strong>Acelerador</strong><small id="sensor-throttle-glance">ADC do pedal · MCP4725</small></span>
+                      <span id="sensor-throttle-state" class="badge muted">Aguardando</span>
+                    </summary>
+                    <dl class="sensor-facts">
+                      <div><dt>ADC do pedal · GPIO5</dt><dd id="sensor-pedal-voltage">Não disponível</dd></div>
+                      <div><dt>Posição do pedal</dt><dd id="sensor-pedal-position">Não disponível</dd></div>
+                      <div><dt>Acelerador permitido</dt><dd id="sensor-pedal-allowed">Não disponível</dd></div>
+                      <div><dt>MCP4725 · I²C</dt><dd id="sensor-dac-state">Não disponível</dd></div>
+                      <div><dt>Última referência enviada</dt><dd id="sensor-dac-reference">Não disponível</dd></div>
+                      <div><dt>Escrita de 0 V confirmada</dt><dd id="sensor-dac-zero">Não disponível</dd></div>
+                    </dl>
+                  </details>
+                </li>
+              </ul>
+              <details id="sensor-bus" class="sensor-bus">
                 <summary>Barramento I²C <span id="sensor-i2c">Aguardando consulta</span></summary>
                 <dl id="sensor-i2c-facts" class="sensor-facts" hidden></dl>
               </details>
@@ -342,6 +392,7 @@
                   <button id="refresh-ota-state" type="button" class="button secondary">Atualizar</button>
                 </div>
                 <p id="ota-command-state" class="ota-summary">Aguardando mestre.</p>
+                <p id="ota-master-validation" class="message-state" data-tone="warning" role="status" hidden></p>
                 <div id="ota-targets" class="ota-targets"></div>
                 <p id="ota-state-checked" class="command-live-meta">Sem consulta.</p>
               </div>
@@ -409,6 +460,53 @@
           </details>
         </section>
 
+        <section id="command-developer" class="command-task" aria-labelledby="command-developer-title">
+          <h2 id="command-developer-title">Desenvolvedor</h2>
+          <details id="developer-command" class="card command-card">
+            <summary>Ajustes dos dispositivos</summary>
+            <div class="command-body developer-body">
+              <div id="developer-devices" class="developer-tabs developer-device-tabs" role="tablist" aria-label="Dispositivo">
+                <button type="button" id="developer-device-mestre" role="tab" aria-controls="developer-panel-mestre" aria-selected="true">Mestre</button>
+                <button type="button" id="developer-device-equipe" role="tab" aria-controls="developer-panel-equipe" aria-selected="false" tabindex="-1">Equipe</button>
+                <button type="button" id="developer-device-visitantes" role="tab" aria-controls="developer-panel-visitantes" aria-selected="false" tabindex="-1">Visitantes</button>
+              </div>
+              <div class="developer-toolbar">
+                <label>Senha dos ajustes<input id="developer-permission" type="password" autocomplete="off"
+                  aria-describedby="developer-permission-help">
+                  <small id="developer-permission-help">Digite uma vez enquanto esta página estiver aberta.</small>
+                </label>
+              </div>
+              <div id="developer-panel-mestre" role="tabpanel" aria-labelledby="developer-device-mestre">
+                <div id="developer-tabs" class="developer-tabs" role="tablist" aria-label="Grupos de ajustes do Mestre"></div>
+                <fieldset id="developer-fields" class="developer-fields" aria-label="Ajustes do Mestre" disabled>
+                  <div class="developer-toolbar">
+                    <p id="developer-status" class="command-field-status" role="status">Aguardando consulta.</p>
+                    <button type="button" id="developer-save" class="button"
+                      data-master-action="ajuste_desenvolvedor" disabled>Salvar alterações</button>
+                  </div>
+                  <div id="developer-settings"></div>
+                </fieldset>
+              </div>
+              <div id="developer-panel-equipe" role="tabpanel" aria-labelledby="developer-device-equipe" hidden></div>
+              <div id="developer-panel-visitantes" role="tabpanel" aria-labelledby="developer-device-visitantes" hidden></div>
+            </div>
+          </details>
+          <details class="card command-card">
+            <summary>Confirmações do painel</summary>
+            <form id="confirmation-preferences" class="command-body">
+              <div class="command-fields">
+                <label>Tempo antes de confirmar (s)
+                  <input id="command-confirmation-seconds" type="number" min="0" max="60" step="1"
+                    value="3" required aria-describedby="command-confirmation-help">
+                </label>
+                <button type="submit" class="button secondary">Aplicar</button>
+              </div>
+              <p id="command-confirmation-help" class="command-field-status">Use 0 para desligar a contagem. Para armar, a espera é de pelo menos 3 s.</p>
+              <p id="command-confirmation-status" class="command-field-status" role="status" hidden></p>
+            </form>
+          </details>
+        </section>
+
         <section id="command-activity" class="command-task" aria-labelledby="command-activity-title">
           <h2 id="command-activity-title">Atividade</h2>
           <article id="command-overview" class="card command-overview" aria-live="polite">
@@ -440,12 +538,26 @@
       <article id="remote-control" class="card remote-control">
         <div class="critical-control-head"><div><h2>Parada remota</h2></div><button type="button" class="button danger critical-stop" aria-describedby="critical-stop-note" data-master-action="parada_remota" data-cap="8192">PARADA DE EMERGÊNCIA</button></div>
         <div id="critical-stop-note" class="critical-stop-note message-state" data-tone="emergency" role="note"><span class="critical-stop-symbol" aria-hidden="true">!</span><p>Ao pressionar, o comando é enviado sem confirmação.</p></div>
-        <p id="remote-state" class="message-state" data-tone="info" role="status">Aguardando o mestre.</p>
-        <div class="critical-status-head"><h2>Estado do controle</h2><button id="refresh-remote-control" type="button" class="button secondary">Atualizar estado</button></div>
-        <dl class="remote-readings"><div><dt>Chave de marcha</dt><dd id="remote-gear-physical">—</dd></div><div><dt>Marcha permitida</dt><dd id="remote-gear-current">—</dd></div><div><dt>Marcha máxima</dt><dd id="remote-gear-limit-current">—</dd></div><div><dt>Sentido</dt><dd id="remote-reverse-current">—</dd></div><div><dt>Velocidade máxima</dt><dd id="remote-speed-current">—</dd></div><div><dt>Acelerador máximo</dt><dd id="remote-throttle-max-current">—</dd></div><div class="remote-stop-reading"><dt>Parada e relé</dt><dd id="remote-stop-current">—</dd></div></dl>
+        <p id="remote-state" class="message-state" data-tone="info" role="status">Consultando estado do controle.</p>
+        <section class="critical-status" aria-labelledby="control-status-title">
+          <div class="critical-status-head">
+            <h2 id="control-status-title">Estado do controle</h2>
+            <button id="refresh-remote-control" type="button" class="button secondary">Atualizar estado</button>
+          </div>
+          <dl class="remote-readings">
+            <div><dt>Chave de marcha</dt><dd id="remote-gear-physical">—</dd></div>
+            <div><dt>Marcha permitida</dt><dd id="remote-gear-current">—</dd></div>
+            <div><dt>Marcha máxima</dt><dd id="remote-gear-limit-current">—</dd></div>
+            <div><dt>Sentido</dt><dd id="remote-reverse-current">—</dd></div>
+            <div><dt>Velocidade máxima</dt><dd id="remote-speed-current">—</dd></div>
+            <div><dt>Acelerador máximo</dt><dd id="remote-throttle-max-current">—</dd></div>
+            <div class="remote-stop-reading"><dt>Parada e relé</dt><dd id="remote-stop-current">—</dd></div>
+          </dl>
+          <p id="remote-checked" class="context-note">Nenhuma consulta recebida.</p>
+        </section>
         <div class="critical-control-grid">
-          <div class="critical-settings">
-            <h2>Marcha e limites</h2>
+          <section class="critical-settings" aria-labelledby="control-limits-title">
+            <h2 id="control-limits-title">Marcha e limites</h2>
             <div class="remote-fields">
               <div>
                 <span id="remote-gear-label">Marcha máxima</span>
@@ -470,18 +582,20 @@
               </div>
               <div>
                 <label for="remote-throttle-max">Acelerador máximo (%)</label>
-                <input id="remote-throttle-max" type="number" min="0" max="100" step="1" value="0">
+                <input id="remote-throttle-max" type="number" min="0" max="100" step="0.1" value="0">
                 <button type="button" class="button" data-master-action="limite_acelerador" data-cap="8192">Salvar acelerador</button>
               </div>
             </div>
-          </div>
-          <div class="critical-release">
-            <div><h2>Rearme</h2><p>Mínimo de 5 s. Rearme automático após 30 s, se seguro. Após OTA, rearme manual.</p><p id="remote-rearm-wait" role="status" hidden></p></div>
-            <button type="button" class="button secondary" aria-describedby="remote-rearm-wait" data-master-action="liberar_parada_remota" data-cap="8192">Rearmar</button>
+          </section>
+          <div class="critical-support">
+            <section class="critical-release" aria-labelledby="control-rearm-title">
+              <h2 id="control-rearm-title">Armar</h2>
+              <p id="remote-arm-guidance">Com o veículo parado, solte o pedal do acelerador para armar.</p>
+              <p id="remote-rearm-wait" role="status" hidden></p>
+              <button type="button" class="button secondary" aria-describedby="remote-rearm-wait" data-master-action="liberar_parada_remota" data-cap="8192" disabled>Armar</button>
+            </section>
           </div>
         </div>
-        <div class="pedal-config"><div class="pedal-config-intro"><h2>Calibração do pedal</h2><p>Ajuste com o pedal solto.</p><p id="remote-pedal-status">Aguardando leituras.</p></div><div class="pedal-config-fields"><div><label for="remote-deadzone">Zona morta do pedal (%)</label><input id="remote-deadzone" type="number" min="0" max="30" step="0.1" value="5"><button type="button" class="button" data-master-action="zona_morta_pedal" data-cap="8192">Salvar zona morta</button></div></div></div>
-        <p id="remote-checked" class="context-note">Nenhuma consulta recebida.</p>
       </article>
     </section>
     <section id="sobre" class="page" role="tabpanel" aria-labelledby="tab-sobre">

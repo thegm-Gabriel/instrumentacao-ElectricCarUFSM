@@ -1,6 +1,7 @@
 // Mantém o ponto de acesso e o estado da rede Wi-Fi dos visitantes.
 #include "gerenciadores/gerenciador_wifi.h"
 
+#include <stdbool.h>
 #include <string.h>
 
 #include "nucleo/configuracao.h"
@@ -13,11 +14,12 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "lwip/inet.h"
 #include "nvs.h"
+#include "lwip/inet.h"
 #include "nvs_flash.h"
 
 static const char *TAG = "wifi_visitantes";
+
 static portMUX_TYPE trava_clientes = portMUX_INITIALIZER_UNLOCKED;
 static struct {
     uint8_t mac[6];
@@ -26,6 +28,94 @@ static struct {
     bool expirando;
 } sessoes[WIFI_AP_CLIENTES_CAPACIDADE];
 static uint16_t limite_sessao_minutos = 15;
+static const perfil_radio_satelite_t perfil_padrao = {
+    .canal = WIFI_CANAL, .largura_mhz = WIFI_LARGURA_CANAL_MHZ,
+    .potencia_quartos_dbm = WIFI_POTENCIA_MAXIMA_DBM * 4,
+    .maximo_clientes = WIFI_MAXIMO_CLIENTES,
+};
+static perfil_radio_satelite_t perfil_partida;
+static perfil_radio_satelite_t perfil_salvo;
+
+static esp_err_t limites_de_canal(uint8_t *minimo, uint8_t *maximo)
+{
+    wifi_country_t pais = {0};
+    const esp_err_t erro = esp_wifi_get_country(&pais);
+    if (erro != ESP_OK) return erro;
+    if (pais.schan == 0 || pais.nchan == 0) return ESP_ERR_INVALID_STATE;
+    *minimo = pais.schan;
+    *maximo = (uint8_t)(pais.schan + pais.nchan - 1);
+    if (*maximo > 13) *maximo = 13;
+    return ESP_OK;
+}
+
+static bool perfil_valido(const perfil_radio_satelite_t *perfil, uint8_t minimo, uint8_t maximo)
+{
+    return perfil->canal >= minimo && perfil->canal <= maximo &&
+           (perfil->largura_mhz == 20 || perfil->largura_mhz == 40) &&
+           (perfil->potencia_quartos_dbm == 0 ||
+            (perfil->potencia_quartos_dbm >= 8 && perfil->potencia_quartos_dbm <= 80)) &&
+           perfil->maximo_clientes >= 1 && perfil->maximo_clientes <= WIFI_MAXIMO_CLIENTES;
+}
+
+static perfil_radio_satelite_t carregar_perfil(uint8_t minimo, uint8_t maximo)
+{
+    perfil_radio_satelite_t perfil = {0};
+    nvs_handle_t nvs;
+    if (nvs_open("wifi_sessao", NVS_READONLY, &nvs) == ESP_OK) {
+        size_t tamanho = sizeof(perfil);
+        const esp_err_t erro = nvs_get_blob(nvs, "radio_v1", &perfil, &tamanho);
+        nvs_close(nvs);
+        if (erro == ESP_OK && tamanho == sizeof(perfil) && perfil_valido(&perfil, minimo, maximo))
+            return perfil;
+    }
+    perfil = perfil_padrao;
+    if (perfil.canal < minimo || perfil.canal > maximo) perfil.canal = minimo;
+    return perfil;
+}
+
+esp_err_t gerenciador_wifi_salvar_perfil(const perfil_radio_satelite_t *perfil)
+{
+    uint8_t minimo, maximo;
+    ESP_RETURN_ON_ERROR(limites_de_canal(&minimo, &maximo), TAG, "consultar canais");
+    if (!perfil || !perfil_valido(perfil, minimo, maximo)) return ESP_ERR_INVALID_ARG;
+    nvs_handle_t nvs;
+    esp_err_t erro = nvs_open("wifi_sessao", NVS_READWRITE, &nvs);
+    if (erro != ESP_OK) return erro;
+    erro = nvs_set_blob(nvs, "radio_v1", perfil, sizeof(*perfil));
+    if (erro == ESP_OK) erro = nvs_commit(nvs);
+    nvs_close(nvs);
+    if (erro == ESP_OK) {
+        portENTER_CRITICAL(&trava_clientes);
+        perfil_salvo = *perfil;
+        portEXIT_CRITICAL(&trava_clientes);
+    }
+    return erro;
+}
+
+esp_err_t gerenciador_wifi_consultar_perfil(resposta_radio_satelite_t *dados)
+{
+    if (!dados) return ESP_ERR_INVALID_ARG;
+    uint8_t minimo, maximo, canal;
+    wifi_second_chan_t secundario;
+    wifi_bandwidth_t largura;
+    int8_t potencia;
+    ESP_RETURN_ON_ERROR(limites_de_canal(&minimo, &maximo), TAG, "consultar canais");
+    ESP_RETURN_ON_ERROR(esp_wifi_get_channel(&canal, &secundario), TAG, "consultar canal");
+    ESP_RETURN_ON_ERROR(esp_wifi_get_bandwidth(WIFI_IF_AP, &largura), TAG, "consultar largura");
+    ESP_RETURN_ON_ERROR(esp_wifi_get_max_tx_power(&potencia), TAG, "consultar potência");
+    portENTER_CRITICAL(&trava_clientes);
+    const perfil_radio_satelite_t salvo = perfil_salvo;
+    portEXIT_CRITICAL(&trava_clientes);
+    *dados = (resposta_radio_satelite_t){
+        .salvo = salvo,
+        .ativo = {canal, largura == WIFI_BW_HT40 ? 40 : 20,
+                  potencia > 0 ? (uint8_t)potencia : 0, perfil_partida.maximo_clientes},
+        .canal_minimo = minimo, .canal_maximo = maximo,
+        .capacidade_clientes = WIFI_MAXIMO_CLIENTES,
+        .reinicio_pendente = memcmp(&salvo, &perfil_partida, sizeof(salvo)) != 0,
+    };
+    return ESP_OK;
+}
 
 static void registrar_entrada(const uint8_t mac[6], uint16_t aid)
 {
@@ -88,6 +178,15 @@ static void monitorar_sessoes(void *argumento)
     }
 }
 
+esp_err_t gerenciador_wifi_obter_total_clientes(uint8_t *total)
+{
+    if (total == NULL) return ESP_ERR_INVALID_ARG;
+    wifi_sta_list_t estacoes = {0};
+    const esp_err_t erro = esp_wifi_ap_get_sta_list(&estacoes);
+    if (erro == ESP_OK) *total = (uint8_t)estacoes.num;
+    return erro;
+}
+
 esp_err_t gerenciador_wifi_obter_clientes(situacao_clientes_wifi_t *saida)
 {
     if (!saida) return ESP_ERR_INVALID_ARG;
@@ -143,7 +242,19 @@ esp_err_t gerenciador_wifi_desconectar_cliente(const uint8_t mac[6])
     return erro;
 }
 
-
+static esp_err_t iniciar_monitoramento_clientes(void)
+{
+    nvs_handle_t nvs_sessao;
+    if (nvs_open("wifi_sessao", NVS_READONLY, &nvs_sessao) == ESP_OK) {
+        uint16_t salvo = 15;
+        if (nvs_get_u16(nvs_sessao, "limite_min", &salvo) == ESP_OK && salvo <= 1440)
+            limite_sessao_minutos = salvo;
+        nvs_close(nvs_sessao);
+    }
+    if (xTaskCreate(monitorar_sessoes, "wifi_sessoes", 3072, NULL, 4, NULL) != pdPASS)
+        return ESP_ERR_NO_MEM;
+    return ESP_OK;
+}
 
 static void ao_evento_wifi(void *argumento, esp_event_base_t base, int32_t id, void *dados)
 {
@@ -205,31 +316,27 @@ esp_err_t gerenciador_wifi_iniciar(void)
     wifi_init_config_t configuracao_inicial = WIFI_INIT_CONFIG_DEFAULT();
     ESP_RETURN_ON_ERROR(esp_wifi_init(&configuracao_inicial), TAG, "inicializar Wi-Fi");
     ESP_RETURN_ON_ERROR(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, ao_evento_wifi, NULL, NULL), TAG, "evento Wi-Fi");
+    ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_AP), TAG, "modo AP");
+    uint8_t canal_minimo, canal_maximo;
+    ESP_RETURN_ON_ERROR(limites_de_canal(&canal_minimo, &canal_maximo), TAG, "consultar canais de partida");
+    perfil_partida = carregar_perfil(canal_minimo, canal_maximo);
+    perfil_salvo = perfil_partida;
     wifi_config_t configuracao_ap = {0};
     strncpy((char *)configuracao_ap.ap.ssid, WIFI_SSID, sizeof(configuracao_ap.ap.ssid));
     strncpy((char *)configuracao_ap.ap.password, WIFI_SENHA, sizeof(configuracao_ap.ap.password));
     configuracao_ap.ap.ssid_len = strlen(WIFI_SSID);
-    configuracao_ap.ap.channel = WIFI_CANAL;
-    configuracao_ap.ap.max_connection = WIFI_MAXIMO_CLIENTES;
+    configuracao_ap.ap.channel = perfil_partida.canal;
+    configuracao_ap.ap.max_connection = perfil_partida.maximo_clientes;
     configuracao_ap.ap.authmode = WIFI_AUTH_WPA2_PSK;
-    ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_AP), TAG, "modo AP");
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_AP, &configuracao_ap), TAG, "configurar AP");
-    const wifi_bandwidth_t largura = WIFI_LARGURA_CANAL_MHZ == 40
+    const wifi_bandwidth_t largura = perfil_partida.largura_mhz == 40
                                          ? WIFI_BW_HT40 : WIFI_BW_HT20;
-    ESP_RETURN_ON_ERROR(esp_wifi_set_bandwidth(WIFI_IF_AP, largura), TAG,
-                        "configurar largura do canal");
+    if (esp_wifi_set_bandwidth(WIFI_IF_AP, largura) != ESP_OK)
+        ESP_LOGW(TAG, "Não foi possível aplicar a largura solicitada");
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "iniciar AP");
-    nvs_handle_t nvs_sessao;
-    if (nvs_open("wifi_sessao", NVS_READONLY, &nvs_sessao) == ESP_OK) {
-        uint16_t salvo = 15;
-        if (nvs_get_u16(nvs_sessao, "limite_min", &salvo) == ESP_OK && salvo <= 1440)
-            limite_sessao_minutos = salvo;
-        nvs_close(nvs_sessao);
-    }
-    if (xTaskCreate(monitorar_sessoes, "wifi_sessoes", 3072, NULL, 4, NULL) != pdPASS)
-        return ESP_ERR_NO_MEM;
-    esp_err_t erro_potencia =
-        esp_wifi_set_max_tx_power((int8_t)(WIFI_POTENCIA_MAXIMA_DBM * 4));
+    ESP_RETURN_ON_ERROR(iniciar_monitoramento_clientes(), TAG, "monitorar sessões Wi-Fi");
+    esp_err_t erro_potencia = perfil_partida.potencia_quartos_dbm == 0 ? ESP_OK :
+        esp_wifi_set_max_tx_power((int8_t)perfil_partida.potencia_quartos_dbm);
     if (erro_potencia != ESP_OK) {
         ESP_LOGW(TAG, "Potência solicitada indisponível; mantendo a do driver: %s",
                  esp_err_to_name(erro_potencia));
@@ -244,7 +351,7 @@ esp_err_t gerenciador_wifi_iniciar(void)
     if (erro_potencia == ESP_OK) {
         ESP_LOGI(TAG,
                  "Rádio AP: canal=%u, largura=%u MHz, potência máxima=%d.%02d dBm",
-                 (unsigned)WIFI_CANAL, (unsigned)WIFI_LARGURA_CANAL_MHZ,
+                 (unsigned)perfil_partida.canal, (unsigned)perfil_partida.largura_mhz,
                  potencia_aplicada / 4, (potencia_aplicada % 4) * 25);
     }
     return ESP_OK;

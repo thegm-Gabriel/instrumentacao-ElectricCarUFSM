@@ -228,7 +228,7 @@ void mostrar_leitura_adc() {
         imprimir_rodape_monitor_sensor();
         return;
     }
-    std::printf("GPIO              : %d\r\n", configuracao::PINO_LEITURA_TENSAO);
+    std::printf("GPIO              : %d\r\n", configuracao::PINO_ACELERADOR_ADC);
     std::printf("Leitura bruta     : %u de 4095 (%.1f%% da escala)\r\n",
                 static_cast<unsigned>(retrato.telemetria_atual.tensao_adc_bruta),
                 retrato.telemetria_atual.tensao_adc_bruta * 100.0f / 4095.0f);
@@ -310,13 +310,13 @@ void mostrar_leitura_mpu6050() {
                 sensor.identificacao == 0x68 ? "padrão" : "não padrão, aceito");
     std::printf("Endereço I2C      : 0x%02X\r\n",
                 static_cast<unsigned>(configuracao::ENDERECO_MPU6050));
-    std::printf("Configuração      : %s | ±2 g | ±250 °/s | DLPF 44 Hz\r\n",
+    std::printf("Configuração      : %s | ±2 g | ±250 °/s\r\n",
                  sensor.configuracao_verificada ? "verificada" : "NÃO VERIFICADA");
     std::printf("Serviço aquisição : %s\r\n",
                 aceleracao.iniciado ? "ativo" : "INATIVO");
-    std::printf("Amostragem/filtro : %lu Hz / %.1f Hz\r\n",
-                static_cast<unsigned long>(
-                    sensor.frequencia_amostragem_hz),
+    std::printf("Amostragem / filtros: %u Hz | DLPF: %u Hz | longitudinal: %.1f Hz\r\n",
+                static_cast<unsigned>(sensor.frequencia_amostragem_hz),
+                static_cast<unsigned>(sensor.frequencia_filtro_acelerometro_hz),
                 configuracao::FREQUENCIA_CORTE_ACELERACAO_HZ);
     std::printf("Acelerômetro bruto: X=%d Y=%d Z=%d\r\n",
                 leitura.aceleracao_x, leitura.aceleracao_y,

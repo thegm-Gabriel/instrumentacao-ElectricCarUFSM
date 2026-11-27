@@ -9,13 +9,16 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include "driver/uart_vfs.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "sdkconfig.h"
 #include "nucleo/configuracao/placa.h"
 #include "nucleo/configuracao/interface.h"
+#include "nucleo/configuracao/veiculo.h"
 #include "servicos/veiculo/controle.h"
 #include "servicos/manutencao/diagnostico.h"
 #include "servicos/manutencao/ota.h"
@@ -44,6 +47,7 @@ enum class TelaTerminal : uint8_t {
     ControleZonaMorta,
     ControleTensaoMinima,
     ControleAceleradorMaximo,
+    ControleConfirmarArmamento,
     Operacao,
     Intervalos,
     EscolherIntervalo,
@@ -118,7 +122,7 @@ static_assert(ESP_LOG_NONE == 0 && ESP_LOG_ERROR == 1 && ESP_LOG_WARN == 2 && ES
 constexpr const char* etiquetas_projeto_adicionais[] = {
     "contador_pulsos", "controle_remoto", "encoder_incremental", "gerenciador_ota",
     "gerenciador_uart", "ina228", "indicadores",
-    "leitor_tensao", "mestre", "mpu6050", "painel_local", "tela_ssd1306",
+    "adc_pedal", "mestre", "mpu6050", "painel_local", "tela_ssd1306",
 };
 std::atomic<SemaphoreHandle_t> mutex_logs{nullptr};
 StaticSemaphore_t memoria_mutex_logs{};
@@ -182,8 +186,6 @@ const char* nome_nivel_log(esp_log_level_t nivel) {
 
 TelaTerminal tela_atual = TelaTerminal::Principal;
 GrupoRelatorio grupo_em_edicao = GrupoRelatorio::Telemetria;
-int caractere_pendente = EOF;
-bool entrada_console_nao_bloqueante = false;
 
 }  // namespace
 
@@ -334,9 +336,8 @@ void mostrar_menu_controle_veiculo() {
                 controle.tensao_pedal_mv,
                 controle.acelerador_lido_decimos_percentual / 10,
                 controle.acelerador_lido_decimos_percentual % 10);
-    std::printf("  DAC: %s | saída %s | comando %u mV\r\n",
+    std::printf("  DAC: %s | última referência %u mV\r\n",
                 controle.dac_disponivel ? "presente" : "indisponível",
-                controle.atuacao_habilitada ? "habilitada" : "bloqueada para validação",
                 controle.tensao_dac_mv);
     std::printf("  Zona morta: %u,%u %% | saída mínima: %u mV | acelerador máximo: %u %%\r\n",
                 controle.zona_morta_decimos_percentual / 10,
@@ -345,8 +346,9 @@ void mostrar_menu_controle_veiculo() {
                 controle.acelerador_maximo_decimos_percentual / 10);
     std::printf("  [1] Atualizar leituras\r\n  [2] Definir zona morta\r\n");
     std::printf("  [3] Definir tensão mínima de saída\r\n  [4] Definir acelerador máximo\r\n");
+    std::printf("  [5] Armar\r\n  [6] Parada de emergência\r\n");
     std::printf("  [0] Voltar\r\n");
-    imprimir_prompt("Configure com o pedal solto. As alterações duram até reiniciar.");
+    imprimir_prompt("Para armar, mantenha o pedal solto e o veículo parado.");
 }
 
 void mostrar_menu_intervalos() {
@@ -513,7 +515,47 @@ void tratar_controle_veiculo(unsigned long opcao) {
         imprimir_prompt("Acelerador máximo em %: 0 a 100.");
         return;
     }
+    if (opcao == 5) {
+        tela_atual = TelaTerminal::ControleConfirmarArmamento;
+        imprimir_prompt(configuracao::HABILITAR_DAC_ISOLADO
+            ? "Desconecte VOUT da tração, solte o pedal e digite [1] para armar."
+            : "Com o veículo parado e o pedal solto, digite [1] para armar.");
+        return;
+    }
+    if (opcao == 6) {
+        const esp_err_t erro = servico_controle_remoto_definir(AjusteControleRemoto::Parada, 1);
+        if (erro != ESP_OK) std::printf("\r\nFalha ao confirmar o corte: %s\r\n", esp_err_to_name(erro));
+        mostrar_menu_controle_veiculo();
+        return;
+    }
     std::printf("\r\nOpção inválida.\r\n");
+    mostrar_menu_controle_veiculo();
+}
+
+void tratar_confirmacao_armamento(unsigned long opcao) {
+    tela_atual = TelaTerminal::ControleVeiculo;
+    if (opcao == 1) {
+        const esp_err_t erro = servico_controle_remoto_definir(
+            AjusteControleRemoto::Parada,
+            configuracao::HABILITAR_DAC_ISOLADO ? CONTROLE_REMOTO_ARMAR_DAC_ISOLADO : 0,
+            esp_timer_get_time());
+        if (erro == ESP_OK) {
+            std::printf("\r\nArmamento autorizado.\r\n");
+        } else {
+            const auto controle = servico_controle_remoto_obter_estado();
+            if (!controle.atuacao_habilitada && !configuracao::HABILITAR_DAC_ISOLADO) {
+                std::printf("\r\nA atuação de tração está desabilitada na configuração do Mestre.\r\n");
+            } else if (controle.rearme_restante_ms != 0) {
+                std::printf("\r\nAguarde %u s antes de armar.\r\n",
+                            static_cast<unsigned>((controle.rearme_restante_ms + 999) / 1000));
+            } else if (controle.acelerador_maximo_decimos_percentual == 0 ||
+                       controle.velocidade_maxima_centesimos_kmh == 0) {
+                std::printf("\r\nDefina limites de acelerador e velocidade acima de zero.\r\n");
+            } else {
+                std::printf("\r\nArmamento bloqueado. Confira marcha, pedal solto, DAC em zero e sensores reais.\r\n");
+            }
+        }
+    }
     mostrar_menu_controle_veiculo();
 }
 
@@ -568,30 +610,14 @@ void tratar_escolha_intervalo(unsigned long opcao) {
 }
 
 int ler_caractere_console() {
-    if (caractere_pendente != EOF) {
-        const int caractere = caractere_pendente;
-        caractere_pendente = EOF;
-        return caractere;
-    }
-    return std::getchar();
-}
-
-void consumir_segunda_quebra_de_linha() {
-    if (!entrada_console_nao_bloqueante) return;
-
-    // CRLF chega como dois bytes. O segundo precisa ser consumido antes que o
-    // menu seja desenhado; caso contrário ele pareceria um novo Enter vazio.
-    for (unsigned tentativa = 0; tentativa < 4; ++tentativa) {
-        const int proximo = std::getchar();
-        if (proximo == EOF) {
-            clearerr(stdin);
-            vTaskDelay(pdMS_TO_TICKS(1));
-            continue;
-        }
-        if (proximo != '\r' && proximo != '\n') {
-            caractere_pendente = proximo;
-        }
-        return;
+    // A metade LF do CRLF pode chegar depois de um EOF ou da troca de menu.
+    static bool descartar_lf = false;
+    while (true) {
+        const int caractere = std::getchar();
+        if (caractere == EOF) return EOF;
+        const bool descartar = descartar_lf && caractere == '\n';
+        descartar_lf = caractere == '\r';
+        if (!descartar) return descartar_lf ? '\n' : caractere;
     }
 }
 
@@ -613,12 +639,7 @@ void monitorar_sensor_ate_sair() {
         }
 
         const uint8_t caractere = static_cast<uint8_t>(recebido);
-        if (caractere == '\r' || caractere == '\n' || caractere == 0x03) {
-            if (caractere == '\r' || caractere == '\n') {
-                consumir_segunda_quebra_de_linha();
-            }
-            return;
-        }
+        if (caractere == '\n' || caractere == 0x03) return;
         // A tela ao vivo não possui comandos: caracteres diferentes de Enter
         // são ignorados para não corromper o desenho durante a atualização.
     }
@@ -645,8 +666,7 @@ ResultadoLeituraLinha ler_linha_interativa(char* linha, size_t capacidade,
         }
 
         const uint8_t caractere = static_cast<uint8_t>(recebido);
-        if (caractere == '\r' || caractere == '\n') {
-            consumir_segunda_quebra_de_linha();
+        if (caractere == '\n') {
             std::printf("\r\n");
             linha[tamanho] = '\0';
             return caracteres_excedentes != 0
@@ -725,7 +745,8 @@ void voltar_uma_tela() {
         mostrar_menu_intervalos();
     } else if (tela_atual == TelaTerminal::ControleZonaMorta ||
                tela_atual == TelaTerminal::ControleTensaoMinima ||
-               tela_atual == TelaTerminal::ControleAceleradorMaximo) {
+               tela_atual == TelaTerminal::ControleAceleradorMaximo ||
+               tela_atual == TelaTerminal::ControleConfirmarArmamento) {
         tela_atual = TelaTerminal::ControleVeiculo;
         mostrar_menu_controle_veiculo();
     } else if (tela_atual == TelaTerminal::ControleVeiculo) {
@@ -748,6 +769,7 @@ constexpr RotaTerminal ROTAS_TERMINAL[] = {
     {TelaTerminal::ControleZonaMorta, tratar_valor_controle},
     {TelaTerminal::ControleTensaoMinima, tratar_valor_controle},
     {TelaTerminal::ControleAceleradorMaximo, tratar_valor_controle},
+    {TelaTerminal::ControleConfirmarArmamento, tratar_confirmacao_armamento},
     {TelaTerminal::Operacao, terminal_operacao::tratar_opcao},
     {TelaTerminal::Intervalos, tratar_menu_intervalos},
     {TelaTerminal::EscolherIntervalo, tratar_escolha_intervalo},
@@ -767,16 +789,14 @@ bool despachar_opcao(TelaTerminal tela, unsigned long opcao) {
 
 void tarefa_terminal(void*) {
     char linha[TAMANHO_MAXIMO_LINHA]{};
-    // O console passa a entregar cada tecla imediatamente. A própria rotina de
-    // leitura abaixo reconhece CR, LF e CRLF, independentemente do monitor usado.
+    // Preserva CR e LF na entrada para a leitura local reconhecer o par CRLF.
+#if defined(CONFIG_ESP_CONSOLE_UART)
+    (void)uart_vfs_dev_port_set_rx_line_endings(CONFIG_ESP_CONSOLE_UART_NUM, ESP_LINE_ENDINGS_LF);
+#endif
     std::setvbuf(stdin, nullptr, _IONBF, 0);
     const int flags_entrada = fcntl(STDIN_FILENO, F_GETFL, 0);
-    entrada_console_nao_bloqueante =
-        flags_entrada >= 0 &&
-        fcntl(STDIN_FILENO, F_SETFL, flags_entrada | O_NONBLOCK) == 0;
-    if (!entrada_console_nao_bloqueante) {
-        ESP_LOGW(ETIQUETA,
-                 "Console não aceitou modo não bloqueante; CR e LF isolados continuam suportados");
+    if (flags_entrada < 0 || fcntl(STDIN_FILENO, F_SETFL, flags_entrada | O_NONBLOCK) != 0) {
+        ESP_LOGW(ETIQUETA, "Console não aceitou modo não bloqueante");
     }
     mostrar_menu_principal();
     while (true) {

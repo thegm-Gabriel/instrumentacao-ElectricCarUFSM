@@ -5,12 +5,13 @@
 #include <cstddef>
 
 #include "esp_log.h"
-#include "esp_timer.h"
+#include "nucleo/tempo.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "gerenciadores/indicadores.h"
 #include "nucleo/configuracao/placa.h"
+#include "servicos/manutencao/ajustes.h"
 #include "nucleo/configuracao/interface.h"
 #include "servicos/manutencao/diagnostico.h"
 #include "servicos/manutencao/ota.h"
@@ -19,7 +20,8 @@
 
 namespace {
 constexpr char ETIQUETA[] = "sinalizacao";
-constexpr TickType_t PASSO_TAREFA = pdMS_TO_TICKS(50);
+constexpr TickType_t PASSO_TAREFA = pdMS_TO_TICKS(configuracao::PASSO_SINALIZACAO_MS);
+static_assert(PASSO_TAREFA > 0);
 constexpr UBaseType_t CAPACIDADE_FILA_EVENTOS = 8;
 
 struct NotaMusical {
@@ -44,37 +46,36 @@ enum class PrioridadeSom : uint8_t {
 };
 
 enum class FaseMelodia : uint8_t {
-    IniciarNota,
-    Soando,
     Pausa,
+    Soando,
 };
 
 constexpr NotaMusical NOTAS_INICIALIZACAO[] = {
-    {392, 90, 35, 24}, {523, 140, 0, 27},
+    {660, 80, 60, 24}, {880, 120, 0, 28},
 };
 constexpr NotaMusical NOTAS_PRONTO[] = {
-    {523, 80, 35, 25}, {659, 80, 35, 27}, {784, 170, 0, 29},
+    {1047, 100, 0, 30},
 };
 constexpr NotaMusical NOTAS_CONFIRMACAO[] = {
     {659, 70, 30, 22}, {784, 110, 0, 24},
 };
 constexpr NotaMusical NOTAS_AVISO[] = {
-    {659, 120, 65, 29}, {523, 180, 0, 30},
+    {1500, 100, 120, 40}, {1500, 100, 0, 40},
 };
 constexpr NotaMusical NOTAS_FALHA_OTA[] = {
-    {523, 140, 70, 31}, {392, 220, 0, 33},
+    {1200, 140, 80, 42}, {800, 240, 0, 45},
 };
 constexpr NotaMusical NOTAS_FALHA[] = {
-    {440, 140, 55, 35}, {330, 190, 55, 37}, {220, 280, 0, 39},
+    {2200, 180, 100, 65}, {2200, 180, 100, 65}, {2200, 360, 0, 65},
 };
 constexpr NotaMusical NOTAS_OTA_DISPONIVEL[] = {
-    {659, 120, 50, 27}, {880, 180, 0, 30},
+    {880, 80, 220, 28}, {880, 80, 0, 28},
 };
 constexpr NotaMusical NOTAS_OTA_BAIXANDO[] = {
-    {587, 85, 45, 27}, {784, 150, 0, 30},
+    {980, 120, 60, 33}, {740, 120, 60, 33}, {980, 120, 0, 33},
 };
 constexpr NotaMusical NOTAS_OTA_CONCLUIDO[] = {
-    {523, 80, 35, 27}, {659, 80, 35, 29}, {784, 190, 0, 32},
+    {784, 100, 60, 30}, {1047, 100, 60, 34}, {1319, 200, 0, 37},
 };
 constexpr NotaMusical NOTAS_GOOGLE_INICIANDO[] = {
     {587, 75, 35, 22}, {740, 115, 0, 24},
@@ -115,7 +116,7 @@ struct SequenciadorMelodia {
     const Melodia* melodia = nullptr;
     PrioridadeSom prioridade = PrioridadeSom::Rotina;
     std::size_t indice = 0;
-    FaseMelodia fase = FaseMelodia::IniciarNota;
+    FaseMelodia fase = FaseMelodia::Pausa;
     int64_t proxima_transicao_ms = 0;
 };
 
@@ -130,16 +131,15 @@ bool som_pronto_pendente = false;
 int64_t aviso_temporario_ate_ms = 0;
 int64_t proximo_alarme_falha_ms = 0;
 int64_t proximo_alarme_ota_falha_ms = 0;
-int64_t ultimo_aviso_sonoro_ms = -configuracao::INTERVALO_AVISOS_SONOROS_MS;
+int64_t proximo_aviso_sonoro_ms = 0;
+int64_t ota_concluida_ate_ms = 0;
 int64_t ultimo_log_erro_hardware_ms = -5000;
 uint32_t conclusoes_ota_observadas = 0;
+EstadoValidacaoOta validacao_mestre_observada = EstadoValidacaoOta::Inativa;
+bool ota_disponivel_sinalizada = false;
 uint32_t sincronizacoes_google_iniciadas_observadas = 0;
 uint32_t sincronizacoes_google_finalizadas_observadas = 0;
 bool sincronizacao_google_em_andamento = false;
-
-int64_t agora_ms() {
-    return esp_timer_get_time() / 1000;
-}
 
 void registrar_resultado_hardware(esp_err_t erro) {
     if (erro == ESP_OK) {
@@ -152,7 +152,7 @@ void registrar_resultado_hardware(esp_err_t erro) {
     situacao.falhas_hardware++;
     situacao.ultimo_erro = erro;
     portEXIT_CRITICAL(&trava_situacao);
-    const int64_t instante_ms = agora_ms();
+    const int64_t instante_ms = tempo_monotonico::agora_ms();
     if (instante_ms - ultimo_log_erro_hardware_ms >= 5000) {
         ESP_LOGE(ETIQUETA, "Falha ao atualizar LEDs ou buzzer: %s",
                  esp_err_to_name(erro));
@@ -177,7 +177,7 @@ bool iniciar_melodia(const Melodia& melodia, PrioridadeSom prioridade,
     sequenciador.melodia = &melodia;
     sequenciador.prioridade = prioridade;
     sequenciador.indice = 0;
-    sequenciador.fase = FaseMelodia::IniciarNota;
+    sequenciador.fase = FaseMelodia::Pausa;
     sequenciador.proxima_transicao_ms = instante_ms;
     return true;
 }
@@ -189,131 +189,129 @@ void atualizar_melodia(int64_t instante_ms) {
     }
 
     const NotaMusical& nota = sequenciador.melodia->notas[sequenciador.indice];
-    switch (sequenciador.fase) {
-        case FaseMelodia::IniciarNota: {
-            // A configuração da placa continua sendo o limite global de volume.
-            const uint8_t intensidade =
-                nota.intensidade_percentual <
-                        configuracao::INTENSIDADE_BUZZER_PERCENTUAL
-                    ? nota.intensidade_percentual
-                    : configuracao::INTENSIDADE_BUZZER_PERCENTUAL;
-            registrar_resultado_hardware(gerenciador_indicadores_tocar_tom(
-                nota.frequencia_hz, intensidade));
-            sequenciador.proxima_transicao_ms = instante_ms + nota.duracao_ms;
-            sequenciador.fase = FaseMelodia::Soando;
-            break;
+    if (sequenciador.fase == FaseMelodia::Soando) {
+        registrar_resultado_hardware(gerenciador_indicadores_silenciar());
+        if (++sequenciador.indice == sequenciador.melodia->quantidade) {
+            sequenciador = {};
+            return;
         }
-        case FaseMelodia::Soando:
-            registrar_resultado_hardware(gerenciador_indicadores_silenciar());
-            sequenciador.proxima_transicao_ms = instante_ms + nota.pausa_apos_ms;
-            sequenciador.fase = FaseMelodia::Pausa;
-            break;
-        case FaseMelodia::Pausa:
-            sequenciador.indice++;
-            if (sequenciador.indice >= sequenciador.melodia->quantidade) {
-                sequenciador = {};
-            } else {
-                sequenciador.fase = FaseMelodia::IniciarNota;
-                sequenciador.proxima_transicao_ms = instante_ms;
-            }
-            break;
+        sequenciador.proxima_transicao_ms = instante_ms + nota.pausa_apos_ms;
+        sequenciador.fase = FaseMelodia::Pausa;
+        return;
     }
+    const uint8_t limite = ajustes_desenvolvedor_obter().buzzer_intensidade_percentual;
+    const uint8_t intensidade = nota.intensidade_percentual < limite
+        ? nota.intensidade_percentual : limite;
+    registrar_resultado_hardware(gerenciador_indicadores_tocar_tom(nota.frequencia_hz, intensidade));
+    sequenciador.proxima_transicao_ms = instante_ms + nota.duracao_ms;
+    sequenciador.fase = FaseMelodia::Soando;
 }
 
-EstadoSinalizacao determinar_estado_automatico() {
+EstadoSinalizacao determinar_estado_automatico(int64_t instante_ms) {
     if (falha_critica_travada) return EstadoSinalizacao::Falha;
     if (!sistema_pronto) return EstadoSinalizacao::Inicializando;
 
     const ResumoSaudeSistema saude = servico_diagnostico_obter_resumo();
-    if (saude.estado == EstadoSaudeSistema::Falha) {
-        return EstadoSinalizacao::Falha;
-    }
-
     const SituacaoOta ota = servico_ota_obter_situacao();
-    switch (ota.estado) {
-        case EstadoServicoOta::Inicializando:
-        case EstadoServicoOta::AguardandoRede:
-        case EstadoServicoOta::Verificando:
-            return EstadoSinalizacao::OtaVerificando;
-        case EstadoServicoOta::AguardandoAutorizacao:
-            return EstadoSinalizacao::OtaAguardandoAutorizacao;
-        case EstadoServicoOta::Baixando:
-            return EstadoSinalizacao::OtaBaixando;
-        case EstadoServicoOta::Aplicado:
-            return EstadoSinalizacao::OtaConcluido;
-        case EstadoServicoOta::Falha:
-            return EstadoSinalizacao::OtaFalha;
-        default:
-            break;
+    if (ota.conclusoes != conclusoes_ota_observadas ||
+        (ota.validacao_mestre == EstadoValidacaoOta::Concluida &&
+         validacao_mestre_observada != EstadoValidacaoOta::Concluida)) {
+        ota_concluida_ate_ms = instante_ms + configuracao::DURACAO_SINAL_OTA_CONCLUIDO_MS;
     }
+    conclusoes_ota_observadas = ota.conclusoes;
+    validacao_mestre_observada = ota.validacao_mestre;
+    if (ota.estado == EstadoServicoOta::Atualizado || ota.estado == EstadoServicoOta::Cancelado ||
+        ota.estado == EstadoServicoOta::Baixando || ota.estado == EstadoServicoOta::Aplicado)
+        ota_disponivel_sinalizada = false;
 
-    if (agora_ms() < aviso_temporario_ate_ms ||
+    if (saude.estado == EstadoSaudeSistema::Falha) return EstadoSinalizacao::Falha;
+    if (ota.validacao_mestre == EstadoValidacaoOta::Validando ||
+        ota.validacao_mestre == EstadoValidacaoOta::EmObservacao)
+        return EstadoSinalizacao::OtaValidando;
+    if (ota.estado == EstadoServicoOta::Baixando || ota.estado == EstadoServicoOta::Aplicado)
+        return EstadoSinalizacao::OtaBaixando;
+    if (ota.estado == EstadoServicoOta::Falha)
+        return EstadoSinalizacao::OtaFalha;
+    if (instante_ms < aviso_temporario_ate_ms ||
         saude.estado == EstadoSaudeSistema::Atencao ||
-        saude.estado == EstadoSaudeSistema::Recuperando) {
+        saude.estado == EstadoSaudeSistema::Recuperando)
         return EstadoSinalizacao::Aviso;
-    }
+    if (instante_ms < ota_concluida_ate_ms) return EstadoSinalizacao::OtaConcluido;
+    if (ota.estado == EstadoServicoOta::AguardandoAutorizacao)
+        return EstadoSinalizacao::OtaAguardandoAutorizacao;
+    if (ota.estado == EstadoServicoOta::AguardandoRede || ota.estado == EstadoServicoOta::Verificando)
+        return EstadoSinalizacao::OtaVerificando;
     if (servico_wifi_obter_resumo().radio_ativo) return EstadoSinalizacao::WifiAtivo;
     return EstadoSinalizacao::Saudavel;
 }
 
-bool intervalo_ativo(uint32_t fase_ms, uint32_t inicio_ms, uint32_t duracao_ms) {
-    return fase_ms >= inicio_ms && fase_ms < inicio_ms + duracao_ms;
+constexpr bool pulsos(int64_t decorrido_ms, uint32_t periodo_ms, uint32_t aceso_ms,
+                      uint32_t intervalo_ms = 0, uint8_t quantidade = 1) {
+    const uint32_t fase = static_cast<uint32_t>(decorrido_ms % periodo_ms);
+    return fase / (aceso_ms + intervalo_ms) < quantidade &&
+           fase % (aceso_ms + intervalo_ms) < aceso_ms;
 }
 
-EstadoLeds leds_para_estado(EstadoSinalizacao estado, int64_t instante_ms) {
-    const uint32_t fase_1500 = static_cast<uint32_t>(instante_ms % 1500);
-    const uint32_t fase_2000 = static_cast<uint32_t>(instante_ms % 2000);
-    const uint32_t fase_3000 = static_cast<uint32_t>(instante_ms % 3000);
+EstadoLeds leds_para_estado(EstadoSinalizacao estado, int64_t decorrido_ms) {
+    constexpr uint8_t brilho = configuracao::BRILHO_LED_INTEGRADO;
+    constexpr CorLed branco{brilho, brilho, brilho};
+    constexpr CorLed verde{0, brilho, 0};
+    constexpr CorLed ciano{0, brilho, brilho};
+    constexpr CorLed azul{0, 0, brilho};
+    constexpr CorLed roxo{brilho / 2, 0, brilho};
+    constexpr CorLed amarelo{brilho, brilho / 2, 0};
+    constexpr CorLed vermelho{brilho, 0, 0};
+
     EstadoLeds leds{};
     switch (estado) {
         case EstadoSinalizacao::Inicializando:
-            leds.azul = intervalo_ativo(fase_1500, 0, 600);
+            leds.amarelo = pulsos(decorrido_ms, 1200, 600);
+            if (leds.amarelo) leds.integrado = branco;
             break;
         case EstadoSinalizacao::Saudavel:
+        case EstadoSinalizacao::WifiAtivo: {
             leds.verde = true;
+            const bool atividade = sincronizacao_google_em_andamento
+                ? pulsos(decorrido_ms, 1600, 160, 160, 2)
+                : estado == EstadoSinalizacao::WifiAtivo && pulsos(decorrido_ms, 3000, 160);
+            leds.integrado = atividade ? ciano : verde;
             break;
-        case EstadoSinalizacao::WifiAtivo:
-            leds.verde = true;
-            leds.azul = intervalo_ativo(fase_3000, 0, 180);
-            break;
+        }
         case EstadoSinalizacao::OtaVerificando:
-            leds.azul = intervalo_ativo(fase_1500, 0, 750);
+            leds.verde = true;
+            leds.integrado = pulsos(decorrido_ms, 1400, 350) ? azul : verde;
             break;
         case EstadoSinalizacao::OtaAguardandoAutorizacao:
-            leds.azul = true;
-            leds.amarelo = intervalo_ativo(fase_3000, 0, 220) ||
-                            intervalo_ativo(fase_3000, 420, 220);
+            leds.amarelo = pulsos(decorrido_ms, 2400, 160, 180, 2);
+            if (leds.amarelo) leds.integrado = azul;
             break;
         case EstadoSinalizacao::OtaBaixando:
-            leds.azul = true;
-            leds.amarelo = intervalo_ativo(fase_1500, 0, 220);
+            leds.amarelo = pulsos(decorrido_ms, 500, 250);
+            if (leds.amarelo) leds.integrado = roxo;
+            break;
+        case EstadoSinalizacao::OtaValidando:
+            leds.amarelo = true;
+            leds.integrado = pulsos(decorrido_ms, 1800, 180, 180, 2) ? roxo : amarelo;
             break;
         case EstadoSinalizacao::OtaConcluido:
-            leds.verde = true;
-            leds.azul = intervalo_ativo(fase_3000, 0, 220) ||
-                        intervalo_ativo(fase_3000, 420, 220);
+            leds.verde = pulsos(decorrido_ms, 1800, 160, 160, 3);
+            if (leds.verde) leds.integrado = verde;
             break;
         case EstadoSinalizacao::OtaFalha:
-            leds.amarelo = true;
-            leds.vermelho = intervalo_ativo(fase_3000, 0, 220);
+            leds.vermelho = pulsos(decorrido_ms, 1000, 500);
+            leds.amarelo = !leds.vermelho;
+            leds.integrado = leds.vermelho ? vermelho : amarelo;
             break;
         case EstadoSinalizacao::Aviso:
-            leds.amarelo = intervalo_ativo(fase_2000, 0, 400);
+            leds.amarelo = pulsos(decorrido_ms, 1200, 900);
+            if (leds.amarelo) leds.integrado = amarelo;
             break;
         case EstadoSinalizacao::Falha:
-            // Vermelho predominante; uma breve pausa mostra que a tarefa segue viva.
-            leds.vermelho = !intervalo_ativo(fase_2000, 0, 150);
+            leds.vermelho = true;
+            leds.integrado = vermelho;
             break;
         case EstadoSinalizacao::Desligado:
             break;
-    }
-    // O envio ao Google tem um pulso próprio, mas nunca encobre alertas ou OTA.
-    if (sincronizacao_google_em_andamento &&
-        (estado == EstadoSinalizacao::Saudavel ||
-         estado == EstadoSinalizacao::WifiAtivo)) {
-        leds.verde = true;
-        leds.azul = intervalo_ativo(fase_1500, 0, 180) ||
-                    intervalo_ativo(fase_1500, 360, 180);
     }
     return leds;
 }
@@ -321,6 +319,13 @@ EstadoLeds leds_para_estado(EstadoSinalizacao estado, int64_t instante_ms) {
 void tratar_transicao(EstadoSinalizacao anterior, EstadoSinalizacao atual,
                       int64_t instante_ms) {
     if (anterior == atual) return;
+    if ((anterior == EstadoSinalizacao::Falha &&
+         sequenciador.prioridade == PrioridadeSom::FalhaCritica) ||
+        (anterior == EstadoSinalizacao::OtaFalha &&
+         sequenciador.prioridade == PrioridadeSom::FalhaOta)) {
+        registrar_resultado_hardware(gerenciador_indicadores_silenciar());
+        sequenciador = {};
+    }
     ESP_LOGI(ETIQUETA, "Estado visual: %s -> %s",
              servico_sinalizacao_nome_estado(anterior),
              servico_sinalizacao_nome_estado(atual));
@@ -332,10 +337,13 @@ void tratar_transicao(EstadoSinalizacao anterior, EstadoSinalizacao atual,
             break;
         case EstadoSinalizacao::WifiAtivo:
         case EstadoSinalizacao::OtaVerificando:
+        case EstadoSinalizacao::OtaValidando:
             // Entrada no Wi-Fi e consulta OTA são frequentes: indicação apenas por LED.
             break;
         case EstadoSinalizacao::OtaAguardandoAutorizacao:
-            iniciar_melodia(MELODIA_OTA_DISPONIVEL, PrioridadeSom::Ota, instante_ms);
+            if (!ota_disponivel_sinalizada)
+                ota_disponivel_sinalizada =
+                    iniciar_melodia(MELODIA_OTA_DISPONIVEL, PrioridadeSom::Ota, instante_ms);
             break;
         case EstadoSinalizacao::OtaBaixando:
             iniciar_melodia(MELODIA_OTA_BAIXANDO, PrioridadeSom::Ota, instante_ms);
@@ -349,11 +357,10 @@ void tratar_transicao(EstadoSinalizacao anterior, EstadoSinalizacao atual,
                 instante_ms + configuracao::INTERVALO_ALARME_OTA_FALHA_MS;
             break;
         case EstadoSinalizacao::Aviso:
-            if (instante_ms - ultimo_aviso_sonoro_ms >=
-                configuracao::INTERVALO_AVISOS_SONOROS_MS) {
+            if (instante_ms >= proximo_aviso_sonoro_ms) {
                 if (iniciar_melodia(MELODIA_AVISO, PrioridadeSom::Aviso,
                                     instante_ms)) {
-                    ultimo_aviso_sonoro_ms = instante_ms;
+                    proximo_aviso_sonoro_ms = instante_ms + configuracao::INTERVALO_AVISOS_SONOROS_MS;
                 }
             }
             break;
@@ -415,7 +422,8 @@ void detectar_sincronizacao_google(EstadoSinalizacao estado_atual,
                      ? "concluída" : "falhou");
         const bool sucesso = registro.ultimo_resultado_sincronizacao == ESP_OK;
         if (som_de_rotina_permitido(estado_atual) ||
-            (!sucesso && estado_atual == EstadoSinalizacao::Aviso)) {
+            (!sucesso && estado_atual == EstadoSinalizacao::Aviso &&
+             sequenciador.melodia != &MELODIA_AVISO)) {
             iniciar_melodia(sucesso ? MELODIA_GOOGLE_CONCLUIDO
                                     : MELODIA_GOOGLE_FALHA,
                             sucesso ? PrioridadeSom::Operacao
@@ -433,28 +441,16 @@ void detectar_sincronizacao_google(EstadoSinalizacao estado_atual,
     }
 }
 
-void detectar_conclusao_ota(EstadoSinalizacao estado_atual,
-                            int64_t instante_ms) {
-    AlvoOta alvo{};
-    if (!servico_ota_observar_conclusao(conclusoes_ota_observadas, alvo)) return;
-    ESP_LOGI(ETIQUETA, "Conclusão OTA detectada para %s",
-             servico_ota_nome_alvo(alvo));
-    if (estado_atual != EstadoSinalizacao::Falha &&
-        estado_atual != EstadoSinalizacao::OtaFalha &&
-        estado_atual != EstadoSinalizacao::OtaConcluido) {
-        iniciar_melodia(MELODIA_OTA_CONCLUIDO, PrioridadeSom::Ota, instante_ms);
-    }
-}
-
 void tarefa_sinalizacao(void*) {
     EstadoSinalizacao estado_anterior = EstadoSinalizacao::Desligado;
     EstadoSinalizacao estado_atual = EstadoSinalizacao::Inicializando;
     EstadoLeds leds_anteriores{};
     bool primeira_escrita = true;
+    int64_t inicio_estado_ms = 0;
     int64_t proxima_tentativa_leds_ms = 0;
     int64_t proxima_avaliacao_servicos_ms = 0;
     while (true) {
-        const int64_t instante_ms = agora_ms();
+        const int64_t instante_ms = tempo_monotonico::agora_ms();
         EventoSinalizacao evento{};
         bool evento_recebido = false;
         bool servicos_avaliados = false;
@@ -465,12 +461,15 @@ void tarefa_sinalizacao(void*) {
         }
 
         if (evento_recebido || instante_ms >= proxima_avaliacao_servicos_ms) {
-            estado_atual = determinar_estado_automatico();
+            estado_atual = determinar_estado_automatico(instante_ms);
             proxima_avaliacao_servicos_ms =
                 instante_ms + configuracao::INTERVALO_AVALIACAO_SERVICOS_MS;
             servicos_avaliados = true;
         }
-        tratar_transicao(estado_anterior, estado_atual, instante_ms);
+        if (estado_anterior != estado_atual) {
+            inicio_estado_ms = instante_ms;
+            tratar_transicao(estado_anterior, estado_atual, instante_ms);
+        }
         if (som_pronto_pendente && som_de_rotina_permitido(estado_atual)) {
             if (iniciar_melodia(MELODIA_PRONTO, PrioridadeSom::Rotina,
                                 instante_ms)) {
@@ -482,7 +481,6 @@ void tarefa_sinalizacao(void*) {
                             PrioridadeSom::Operacao, instante_ms);
         }
         if (servicos_avaliados) {
-            detectar_conclusao_ota(estado_atual, instante_ms);
             detectar_sincronizacao_google(estado_atual, instante_ms);
         }
         if (estado_atual == EstadoSinalizacao::Falha &&
@@ -499,12 +497,10 @@ void tarefa_sinalizacao(void*) {
                 instante_ms + configuracao::INTERVALO_ALARME_OTA_FALHA_MS;
         }
 
-        const EstadoLeds leds = leds_para_estado(estado_atual, instante_ms);
+        EstadoLeds leds = leds_para_estado(estado_atual, instante_ms - inicio_estado_ms);
+        if (!ajustes_desenvolvedor_led_integrado_ativo()) leds.integrado = {};
         if (instante_ms >= proxima_tentativa_leds_ms &&
-            (primeira_escrita || leds.verde != leds_anteriores.verde ||
-             leds.amarelo != leds_anteriores.amarelo ||
-             leds.vermelho != leds_anteriores.vermelho ||
-             leds.azul != leds_anteriores.azul)) {
+            (primeira_escrita || !(leds == leds_anteriores))) {
             const esp_err_t erro_leds = gerenciador_indicadores_definir_leds(leds);
             registrar_resultado_hardware(erro_leds);
             if (erro_leds == ESP_OK) {
@@ -540,7 +536,10 @@ esp_err_t servico_sinalizacao_iniciar() {
     aviso_temporario_ate_ms = 0;
     proximo_alarme_falha_ms = 0;
     proximo_alarme_ota_falha_ms = 0;
-    ultimo_aviso_sonoro_ms = -configuracao::INTERVALO_AVISOS_SONOROS_MS;
+    proximo_aviso_sonoro_ms = 0;
+    ota_concluida_ate_ms = 0;
+    ota_disponivel_sinalizada = false;
+    validacao_mestre_observada = EstadoValidacaoOta::Inativa;
     conclusoes_ota_observadas = servico_ota_obter_situacao().conclusoes;
     const EstadoRegistroTelemetria registro =
         servico_registro_telemetria_obter_estado();
@@ -611,6 +610,7 @@ const char* servico_sinalizacao_nome_estado(EstadoSinalizacao estado) {
         case EstadoSinalizacao::OtaAguardandoAutorizacao:
             return "OTA aguardando autorização";
         case EstadoSinalizacao::OtaBaixando: return "instalando OTA";
+        case EstadoSinalizacao::OtaValidando: return "validando OTA";
         case EstadoSinalizacao::OtaConcluido: return "OTA concluído";
         case EstadoSinalizacao::OtaFalha: return "falha OTA";
         case EstadoSinalizacao::Aviso: return "aviso";

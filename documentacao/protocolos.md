@@ -2,8 +2,8 @@
 
 [Índice da documentação](README.md)
 
-Esta pasta contém estruturas binárias e regras que precisam ser idênticas no mestre,
-no módulo da equipe e no módulo de visitantes.
+Os cabeçalhos em `firmware/compartilhado/protocolos` definem as estruturas
+binárias usadas pelo Mestre, pela Equipe e por Visitantes.
 
 ## Enlace físico
 
@@ -11,7 +11,7 @@ As duas UARTs do mestre são independentes e bidirecionais. Usam nível de 3,3 V
 8N1 e 1.000.000 baud de `configuracao_enlace_uart.h`. O parser de
 `protocolo_enlace_uart.h` distingue telemetria (`AA 55` para dados, `AA 56`
 para ACK), comandos (`C7 7C`) e OTA (`A5 5A`) pelo início do quadro. Os inteiros
-multibyte dos quadros compactados usam little-endian, ordem nativa dos ESP32-S3.
+multibyte dos quadros compactados usam little-endian, ordem nativa do ESP32-S3 e do ESP32-C3.
 
 | Família | Sentido usual | Integridade | Uso |
 |---|---|---|---|
@@ -22,8 +22,9 @@ multibyte dos quadros compactados usam little-endian, ordem nativa dos ESP32-S3.
 
 ## Telemetria e ACK
 
-`protocolo_telemetria.h` define o quadro v5 de 122 bytes, com versão, tipo,
-tamanho da carga e CRC-16/CCITT-FALSE. Os três firmwares devem usar a mesma
+[`protocolo_telemetria.h`](../firmware/compartilhado/protocolos/protocolo_telemetria.h)
+define o quadro v5 de 122 bytes, com carga de 115 bytes e CRC-16/CCITT-FALSE.
+Os três firmwares devem usar a mesma
 revisão deste arquivo.
 Além dos valores brutos, a versão 5 transporta aceleração em g, giroscópio em
 graus por segundo, aceleração longitudinal filtrada, temperatura e o estado de
@@ -42,13 +43,16 @@ ordem e tipos. O bit 7 de `estado_mpu`, antes livre, indica que tensão do
 barramento, corrente e potência contêm uma medição elétrica válida do INA228
 ou dados simulados; os outros bits continuam descrevendo o MPU6050. Sem esse
 bit, os três campos elétricos não são leitura
-física, mesmo que estejam zerados. Carga percentual e autonomia continuam
-indisponíveis no modo real.
+física, mesmo que estejam zerados. No modo real, o SoC corresponde à última
+estimativa em repouso. A autonomia é disponibilizada na simulação.
 
 A versão 5 acrescenta queda de tensão no shunt (µV), temperatura do chip
 (centésimos de °C), energia acumulada (mWh), carga acumulada com sinal (mAh),
 diagnóstico bruto e `estado_ina`. Neste último, bit 0 marca INA presente, bit 1
-marca energia válida e bit 2 marca carga válida. Os acumuladores começam no
+marca energia válida e bit 2 marca carga acumulada válida. O bit 3 marca a
+presença da estimativa de SoC em `carga_decimos_percentual`. O Mestre só envia
+esse bit aos satélites que anunciam suporte na confirmação de telemetria.
+Os acumuladores começam no
 reset do sensor e podem ficar indisponíveis por transbordamento. Esses campos
 são zerados quando a leitura física falha ou a aquisição é pausada; em
 simulação, só os campos elétricos gerais são simulados.
@@ -67,14 +71,16 @@ tempo do mestre retrocedendo indica reinício e resincroniza o histórico.
 
 ## Comandos
 
-`protocolo_comandos.h` define o transporte bidirecional de comandos. O quadro é
+[`protocolo_comandos.h`](../firmware/compartilhado/protocolos/protocolo_comandos.h)
+define o transporte bidirecional de comandos. O quadro é
 genérico: contém código, identificador da solicitação, resultado e uma carga
 binária variável protegida por CRC-32. Assim, novos comandos e respostas podem
 ser incluídos sem criar outro enquadramento UART. Respostas evolutivas devem
 indicar sua versão na própria carga ou continuar reconhecíveis pelo tamanho.
 
-O cabeçalho carrega marcador, versão, tipo solicitação/resposta, origem/destino,
-código, identificador, resultado e tamanho. A carga tem no máximo 128 bytes.
+O cabeçalho de 16 bytes carrega marcador, versão, tipo solicitação/resposta,
+origem/destino, código, identificador, resultado e tamanho da carga. O CRC-32
+ocupa 4 bytes. Com carga de até 128 bytes, o quadro ocupa até 148 bytes.
 Resultados possíveis incluem OK, não suportado, carga inválida, ocupado,
 negado, erro interno e timeout. O destinatário valida cabeçalho, tamanho e CRC
 antes de interpretar a carga. O destinatário responde quando uma operação não
@@ -100,12 +106,12 @@ A resposta detalhada de estado OTA usa o formato 2 e informa separadamente o
 mestre, o satélite da equipe e o satélite de visitantes. A estrutura antiga foi
 mantida para permitir a atualização gradual dos dispositivos.
 
-As operações do menu serial do mestre usam um único comando operacional
-estruturado. O campo `acao` identifica a operação e os campos tipados carregam
-índices, intervalos ou credenciais; isso evita criar um código de protocolo para
-cada botão da interface. Consultas de configuração e de redes salvas permanecem
-separadas por não terem efeito colateral. A repetição de uma solicitação devolve
-a resposta memorizada e não executa a ação novamente.
+A página da Equipe envia as ações operacionais no comando UART 31. O campo
+`acao` identifica a operação e os campos tipados carregam índices, intervalos
+ou credenciais. O menu serial do Mestre chama os serviços locais. Consultas
+de configuração e de redes salvas têm códigos próprios. Quando a resposta à
+solicitação ainda está memorizada, uma retransmissão recebe a resposta em
+cache. O Mestre mantém a última resposta por origem.
 
 `ACAO_MESTRE_DEFINIR_REDE_WIFI_SALVA_COMO_PRINCIPAL` (ação 21) recebe o índice
 da rede secundária e a permissão administrativa. O mestre testa a conexão,
@@ -120,9 +126,11 @@ A resposta informa estado atual, padrão compilado, dinâmica e total de amostra
 
 ## OTA dos satélites
 
-`protocolo_ota_satelites.h` usa sessão, sequência, deslocamento, tipo e tamanho
-da carga no cabeçalho. Os tipos são iniciar, dados, finalizar, cancelar e
-resposta. O limite atual é 4096 bytes de carga por bloco; 2048 bytes permanece
+[`protocolo_ota_satelites.h`](../firmware/compartilhado/protocolos/protocolo_ota_satelites.h)
+define um cabeçalho de 18 bytes com sessão, sequência, deslocamento, tipo e
+tamanho da carga, e um CRC-32 de 4 bytes. Os tipos são iniciar, dados, finalizar,
+cancelar e resposta. O limite atual é 4096 bytes de carga por bloco, para um
+quadro de até 4118 bytes. O tamanho de 2048 bytes permanece
 como tamanho compatível para versões antigas. O início leva tamanho total,
 SHA-256 esperado e versão. Cada bloco recebe confirmação; o satélite rejeita
 sessão, sequência, deslocamento e tamanho incompatíveis. Um cancelamento de
@@ -135,12 +143,13 @@ autorização e rollback.
 
 ## Modelo da aplicação e testes
 
-`firmware/compartilhado/telemetria/dados_telemetria_veiculo.h` descreve o
-conjunto de leituras antes da compactação: alguns campos já usam unidades como
-km/h e m/s²; outros ainda são contagens brutas ou indicam validade. O serviço do mestre
+[O modelo interno do Mestre](../firmware/mestre-s3/include/nucleo/dados_telemetria_veiculo.h)
+reúne medições em unidades como km/h e m/s², contagens brutas e indicadores de
+validade antes da compactação. O serviço do Mestre
 converte esse modelo para `pacote_telemetria_t`; os satélites usam o mesmo
-cabeçalho binário para reconstruir as amostras. Utilitários pequenos usados por
-mais de um firmware ficam em `firmware/compartilhado/comum`.
+cabeçalho binário para reconstruir as amostras. Os contratos e as rotinas
+portáveis de codificação e validação ficam em
+`firmware/compartilhado/protocolos`.
 
 A suíte em `firmware/mestre-s3/test/test_protocolo_telemetria` verifica tamanho
 e serialização, CRC-16, limites de conteúdo, ACK, sequência com perda,
@@ -150,12 +159,25 @@ executor de testes do PlatformIO no ambiente do mestre.
 
 ## Controle de marcha e acelerador
 
-A Equipe usa ações do comando UART 31 para faixa L/M/H, faixa máxima, sentido,
-limites de velocidade e pedal, e parada. Não há comando remoto para acelerar.
-A consulta UART 41 retorna o estado compactado
-no formato 6, incluindo marcha física, bloqueios, estado da partida, armamento inicial e OTA, medições, zona morta, tensão mínima,
-estado do pedal e do DAC e prazos restantes. O quadro de
-comandos permanece v1; os campos e unidades novos estão em
-[`controle_remoto.h`](../firmware/compartilhado/protocolos/controle_remoto.h).
-Consulte [Controle de marcha e acelerador](controle-remoto.md) para os IDs,
-faixas, intertravamentos e limite da integração sem atuadores.
+A Equipe usa ações do comando UART 31 para limite de faixa L/M/H, permissão de
+ré, limites de velocidade e pedal, parada e rearme. O acelerador físico fornece
+a leitura de pedal ao Mestre.
+
+A Equipe solicita o formato 7 no comando de consulta UART 41. A resposta de
+66 bytes acrescenta `reversao_permitida` e `rearme_restante_ms` aos 61 bytes do
+formato 6. A Equipe também lê o formato 6 de um Mestre antigo. O
+enquadramento de comandos continua v1, e a referência dos campos e unidades
+é [`controle_remoto.h`](../firmware/compartilhado/protocolos/controle_remoto.h).
+
+O valor 5 em `estado_operacao` identifica `CONTROLE_ESTADO_LIMITANDO_VELOCIDADE`.
+Durante a limitação progressiva normal, o Mestre reduz a referência do pedal
+preservando a marcha. O bit `CONTROLE_BLOQUEIO_VELOCIDADE` permanece definido
+para interpretar respostas de firmwares antigos.
+
+O Mestre verifica o instante da primeira recepção recente de um pedido de
+rearme usando seu relógio local. O pedido deve chegar depois dos **5 s** de
+espera da parada ativa e ser executado em até **2 s** após a recepção. Assim,
+uma espera na fila não torna válido um pedido antigo ou anterior à janela
+de rearme da parada atual. A validação acontece no Mestre e mantém os mesmos
+campos UART. Consulte as condições adicionais em
+[Controle de marcha e acelerador](controle-remoto.md).

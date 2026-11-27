@@ -1,6 +1,6 @@
 NEXUS — MANUAL TÉCNICO PARA OVERLEAF
 
-Revisão documental 3.0, conferida com o repositório em 12/11/2026.
+Revisão documental 3.1, conferida com o repositório em 21/11/2026.
 NEXUS é o sistema de instrumentação e telemetria do Carro Elétrico UFSM-CS;
 não é o nome do veículo.
 
@@ -18,7 +18,8 @@ que ainda precisam de confirmação na placa ou em ensaio. O firmware não
 comprova, por si só, a montagem física nem a calibração dos sensores.
 
 IMPORTAÇÃO E COMPILAÇÃO
-1. No Overleaf, escolha New Project > Upload Project e envie o ZIP do manual.
+1. Crie um ZIP com o conteúdo de manual_overleaf/ e envie em New Project >
+   Upload Project. main.tex deve ficar na raiz do projeto importado.
 2. Configure main.tex como arquivo principal, se necessário.
 3. Selecione XeLaTeX ou pdfLaTeX e compile duas vezes para resolver sumário,
    referências e listas de figuras e tabelas.

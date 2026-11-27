@@ -1,4 +1,4 @@
-# ESP32-S3 4 MB: duas imagens OTA de 1920 KiB e 128 KiB reservados.
+# ESP32-C3 SuperMini Plus de 4 MiB: duas imagens OTA de 1920 KiB.
 # Name,   Type, SubType, Offset,   Size,     Flags
 nvs,      data, nvs,     0x9000,   0x5000,
 otadata,  data, ota,     0xE000,   0x2000,

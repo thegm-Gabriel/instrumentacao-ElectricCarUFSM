@@ -16,6 +16,7 @@ enum class ModuloSupervisionado : uint8_t {
     UploadGoogle,
     Ota,
     PipelineOta,
+    InicializacaoRegistroSd,
     Quantidade,
 };
 

@@ -67,6 +67,39 @@ class SimuladorTests(unittest.TestCase):
         self.advance(2)
         self.assertEqual(self.sim.ota()["estado"], 4)
 
+    def test_ota_mestre_bloqueia_ate_encerrar_observacao_e_exige_armar(self):
+        self.sim.comando("verificar_ota", "")
+        self.advance(2)
+        self.sim.comando("autorizar_mestre", "")
+        self.advance(10)
+        self.assertEqual(self.sim.ota()["mestre"]["estado"], 10)
+        with self.assertRaisesRegex(ValueError, "validação OTA"):
+            self.sim.comando("parada_remota", "0")
+        self.advance(4)
+        self.assertEqual(self.sim.ota()["mestre"]["estado"], 11)
+        self.assertTrue(self.sim.consulta("controle_remoto", {})["ota_em_andamento"])
+        with self.assertRaisesRegex(ValueError, "validação OTA"):
+            self.sim.comando("parada_remota", "0")
+        self.advance(6)
+        self.assertEqual(self.sim.ota()["mestre"]["estado"], 12)
+        controle = self.sim.consulta("controle_remoto", {})
+        self.assertFalse(controle["ota_em_andamento"])
+        self.assertTrue(controle["parada_solicitada"])
+        self.sim.comando("parada_remota", "0")
+        self.assertFalse(self.sim.controle["armamento_inicial_pendente"])
+
+    def test_led_integrado_do_mestre_aceita_ligar_e_desligar(self):
+        nome = "ajustes_desenvolvedor"
+        antes = self.sim.consulta(nome, {})["valores"]
+        self.assertEqual(antes[36], 1)
+        self.sim.comando("ajuste_desenvolvedor", "36\n0\npermissao-ficticia")
+        depois = self.sim.consulta(nome, {})["valores"]
+        self.assertEqual(depois, antes[:36] + [0])
+        with self.assertRaises(ValueError):
+            self.sim.comando("ajuste_desenvolvedor", "36\n2\npermissao-ficticia")
+        self.sim.comando("ajuste_desenvolvedor", "36\n1\npermissao-ficticia")
+        self.assertEqual(self.sim.consulta(nome, {})["valores"], antes)
+
     def test_wifi_preparar_conectar_salvar_excluir(self):
         with self.assertRaises(ValueError):
             self.sim.comando("wifi_conectar_preparada", "")
@@ -169,26 +202,48 @@ class SimuladorTests(unittest.TestCase):
             tensao = d["tensao_pacote_mv"] / 1000
             self.assertAlmostEqual(d["potencia_w"], corrente * tensao, delta=1)
 
+    def test_perfil_wifi_dos_satelites_e_independente_e_aplicado_na_partida(self):
+        equipe = "satelite_equipe_radio"
+        visitantes = "satelite_visitantes_radio"
+        antes = self.sim.consulta(equipe, {})
+        self.assertFalse(antes["reinicio_pendente"])
+        with self.assertRaises(ValueError):
+            self.sim.comando(visitantes, "6\n20\n60\n6\n")
+        with self.assertRaises(ValueError):
+            self.sim.comando(visitantes, "13\n20\n60\n6\npermissao")
+        perfil = self.sim.comando(visitantes, "6\n20\n60\n6\npermissao")
+        self.assertEqual(perfil["salvo"], (6, 20, 60, 6))
+        self.assertEqual(perfil["ativo"], (1, 20, 60, 10))
+        self.assertTrue(perfil["reinicio_pendente"])
+        self.assertEqual(self.sim.consulta(equipe, {}), antes)
+
     def test_controle_remoto_intertravamentos_e_parada_sem_retomada(self):
         self.assertFalse(self.sim.consulta("controle_remoto", {})["atuacao_habilitada"])
         with self.assertRaises(ValueError):
             self.sim.comando("definir_faixa_marcha", "1")
         self.sim.comando("velocidade_maxima", "2500")
         self.sim.comando("limite_acelerador", "500")
+        self.sim.comando("limite_marcha", "1")
         self.sim.comando("parada_remota", "0")
         self.assertEqual(self.sim.controle["faixa_marcha_solicitada"], 1)
+        self.assertEqual(self.sim.consulta("controle_remoto", {})["tensao_dac_mv"], 1000)
         self.sim.comando("limite_marcha", "2")
         self.assertEqual(self.sim.controle["faixa_marcha_solicitada"], 2)
         self.sim.comando("parada_remota", "1")
         self.assertEqual(self.sim.controle["faixa_marcha_solicitada"], 0)
-        self.advance(5)
+        self.assertEqual(self.sim.consulta("controle_remoto", {})["tensao_dac_mv"], 0)
+        self.advance(35)
+        self.assertTrue(self.sim.consulta("controle_remoto", {})["parada_solicitada"])
         self.sim.comando("parada_remota", "0")
         self.assertEqual(self.sim.controle["faixa_marcha_solicitada"], 2)
         self.sim.comando("velocidade_maxima", "0")
         self.assertEqual(self.sim.controle["faixa_marcha_solicitada"], 2)
         fresh = SimuladorEquipe().controle
-        self.assertTrue(fresh["parada_solicitada"])
-        self.assertEqual(fresh["velocidade_maxima_centesimos_kmh"], 0)
+        self.assertFalse(fresh["parada_solicitada"])
+        self.assertTrue(fresh["armamento_inicial_pendente"])
+        self.assertEqual(fresh["velocidade_maxima_centesimos_kmh"], 3000)
+        self.assertEqual(fresh["acelerador_maximo_decimos_percentual"], 1000)
+        self.assertEqual(fresh["faixa_marcha_maxima"], 3)
 
     def test_rearme_exige_cinco_segundos_desde_a_ultima_parada(self):
         self.sim.comando("parada_remota", "1")
@@ -214,8 +269,12 @@ class SimuladorTests(unittest.TestCase):
         self.assertEqual(self.sim.controle, original)
 
     def test_reversao_e_limite_do_pedal_na_previa(self):
+        self.assertTrue(self.sim.controle["reversao_permitida"])
+        self.assertFalse(self.sim.controle["reversao_solicitada"])
+        self.sim.comando("permitir_re", "0")
         self.sim.comando("velocidade_maxima", "2000")
         self.sim.comando("limite_acelerador", "400")
+        self.sim.comando("limite_marcha", "1")
         self.assertEqual(self.sim.controle["acelerador_maximo_decimos_percentual"], 400)
         self.sim.comando("parada_remota", "0")
         with self.assertRaisesRegex(ValueError, "Ré bloqueada"):
@@ -227,7 +286,8 @@ class SimuladorTests(unittest.TestCase):
         self.assertEqual(self.sim.controle["faixa_marcha_solicitada"], 1)
         self.sim.comando("permitir_re", "0")
         self.assertFalse(self.sim.controle["reversao_permitida"])
-        self.assertTrue(self.sim.controle["parada_solicitada"])
+        self.assertFalse(self.sim.controle["parada_solicitada"])
+        self.assertTrue(self.sim.controle["armamento_inicial_pendente"])
         self.assertEqual(self.sim.consulta("controle_remoto", {})["rearme_restante_ms"], 5000)
         self.assertEqual(self.sim.controle["acelerador_permitido_decimos_percentual"], 0)
         self.assertEqual(self.sim.controle["faixa_marcha_solicitada"], 0)

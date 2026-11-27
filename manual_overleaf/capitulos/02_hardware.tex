@@ -1,13 +1,13 @@
 \chapter{Hardware e instrumentação}\label{cap:hardware}
-\section{Placas ESP32-S3 e restrições de pinos}
-O Mestre usa um ESP32-S3-WROOM-1-N16R8, configurado para 16\,MiB de flash e 8\,MiB de PSRAM Octal. Os satélites usam placas ESP32-S3 SuperMini com flash configurada para 4\,MiB. Os três processadores possuem dois núcleos Xtensa LX7; o chip admite até 240\,MHz, e os três projetos fixam 160\,MHz nos respectivos arquivos \texttt{sdkconfig}. Clock do processador, capacidade da flash e memória externa são propriedades diferentes: aumentar a primeira não cria espaço para programa ou histórico.
+\section{Placas ESP32 e restrições de pinos}
+O Mestre usa um ESP32-S3-WROOM-1-N16R8, configurado para 16\,MiB de flash e 8\,MiB de PSRAM Octal. Os satélites usam ESP32-C3 SuperMini Plus de 4\,MiB. O Mestre tem dois núcleos Xtensa LX7, e cada satélite tem um núcleo RISC-V. Os projetos usam 160\,MHz. Clock do processador, capacidade da flash e memória externa são propriedades diferentes: aumentar a primeira não cria espaço para programa ou histórico.
 
 \begin{table}[htbp]\centering\small
 \caption{Placas e recursos usados pelos três programas}\label{tab:modelos-esp}
 \begin{tabularx}{\textwidth}{@{}p{2.5cm}p{4.2cm}X@{}}\toprule
 Unidade & Placa/módulo previsto & Recursos e conferência necessária\\\midrule
 Mestre & ESP32-S3-WROOM-1-N16R8 & Dois núcleos a 160\,MHz; flash de 16\,MiB e PSRAM Octal de 8\,MiB. Conferir o módulo soldado e a entrada de alimentação da placa.\\
-Equipe e Visitantes & ESP32-S3 SuperMini & Dois núcleos a 160\,MHz e flash configurada para 4\,MiB em cada placa. Confirmar fabricante, pinagem e capacidade física da variante adquirida.\\\bottomrule
+Equipe e Visitantes & ESP32-C3 SuperMini Plus & Um núcleo a 160\,MHz e flash de 4\,MiB em cada placa. Confirmar fabricante, pinagem e capacidade física da variante adquirida.\\\bottomrule
 \end{tabularx}\end{table}
 
 O repositório contém mais de uma revisão de circuito e não identifica de forma inequívoca a PCB montada. A tabela de GPIO abaixo descreve \textbf{a atribuição no firmware}, que deve ser comparada com conectores e trilhas da placa real. Antes de energizar, conferir polaridade e tensão dos trilhos, continuidade do GND, proteções e ausência de curto. Não aplicar 12 ou 24\,V diretamente aos GPIOs: UART, I\textsuperscript{2}C, entradas dos encoders e demais sinais lógicos do ESP trabalham em 3,3\,V.
@@ -29,14 +29,17 @@ Essas restrições vêm da \href{https://docs.espressif.com/projects/esp-idf/en/
 \caption{Interfaces do mestre definidas no firmware}\label{tab:pinos-mestre}
 \begin{tabularx}{\textwidth}{@{}p{3.0cm}p{2.4cm}X@{}}\toprule
 Interface & GPIO do Mestre & Ligação e função\\\midrule
-Encoder esquerdo & 5 (A), 6 (B) & Entradas de pulsos do lado esquerdo; cada canal recebe pull-up externo a 3,3\,V.\\
-Encoder direito & 7 (A), 21 (B) & Entradas independentes do lado direito, com a mesma referência GND e pull-ups.\\
-I\textsuperscript{2}C & 8 (SDA), 9 (SCL) & Barramento compartilhado por MPU6050, OLED e INA228, configurado a 400\,kHz; confirmar no esquema e na montagem o conector efetivamente usado pelo INA228.\\
-LEDs & 10, 11, 12, 13 & Verde, amarelo, vermelho e azul, respectivamente; saídas ativas em alto e resistor em série por LED.\\
-Buzzer passivo & 14 & Saída de tons por PWM; dimensionar o estágio de acionamento para o buzzer instalado.\\
-UART Visitantes & 15 (TX), 16 (RX) & Canal dedicado ao satélite público; cruzar TX com RX do outro ESP.\\
-UART Equipe & 17 (TX), 18 (RX) & Canal dedicado ao satélite técnico; não unir as duas UARTs.\\
-microSD SPI2 & 38 (CLK), 39 (MOSI), 40 (MISO), 41 (CS) & Barramento do cartão, configurado a 10\,MHz; conferir alimentação e nível lógico do módulo.\\\bottomrule
+Pedal Hall & 5 (ADC1) & Entrada calibrada para validar a faixa e calcular o pedido do pedal.\\
+Seletor de marcha e ré & 16, 15, 4 & Entradas ativas em nível baixo para L, H e ré. A tensão do banco vem do INA228.\\
+Encoder esquerdo & 17 (A), 18 (B) & Entradas de pulsos do lado esquerdo; cada canal recebe pull-up externo a 3,3\,V.\\
+Encoder direito & 8 (A), 9 (B) & Entradas independentes do lado direito, com a mesma referência GND e pull-ups.\\
+I\textsuperscript{2}C & 7 (SDA), 6 (SCL) & Barramento de MPU6050, OLED, INA228 e MCP4725, configurado a 400\,kHz. Confirmar endereços e níveis na montagem.\\
+LEDs & 10, 11, 12 & Vermelho, verde e azul. O aviso amarelo combina vermelho e verde.\\
+Buzzer passivo & 38 & Saída de tons por PWM; dimensionar o estágio de acionamento para o buzzer instalado.\\
+UART Visitantes & 19 (TX), 20 (RX) & Canal dedicado ao satélite público; cruzar TX com RX do outro ESP.\\
+UART Equipe & 39 (TX), 40 (RX) & Canal dedicado ao satélite técnico; não unir as duas UARTs.\\
+microSD SPI2 & 2 (CLK), 42 (MOSI), 1 (MISO), 41 (CS) & Barramento do cartão. Conferir alimentação, nível lógico e frequência efetiva reportada na montagem.\\
+Modo A/B, ré e relé & 14, 13, 47, 21 & Saídas ativas em alto. O relé usa o contato normalmente aberto.\\\bottomrule
 \end{tabularx}\end{table}
 
 \section{Encoders e medição do movimento}
@@ -57,29 +60,29 @@ v_j=\frac{\Delta d_j}{\Delta t}\,3{,}6 ,
 \end{equation}
 em que $n_j$ é a contagem acumulada, $P_j$ os pulsos nominais por volta, $i_j$ as voltas do encoder por volta da roda, $D_j$ o diâmetro efetivo em metros e $\Delta t$ o intervalo em segundos. O fator 3,6 converte m/s em km/h. O firmware configura $D=0{,}300$\,m e $i=1{,}0$ para cada lado; são valores a medir na montagem. O serviço usa a média das distâncias esquerda e direita, rejeita saltos acima do limite diagnóstico de 200\,km/h e alerta sobre divergência persistente. Esse limite é filtro de plausibilidade, \textbf{não} velocidade certificada do carro.
 
-O percurso da sessão reinicia no boot. O odômetro total é recuperado da NVS e persistido a cada 100\,m, compromisso entre desgaste de flash e perda potencial após corte de energia. Medir circunferência efetiva com o pneu carregado, confirmar relação de transmissão e comparar ambos os lados com uma referência independente antes de usar distância ou velocidade em análise quantitativa.
+O PCNT acumula pulsos por hardware e o odômetro lê as duas rodas a cada 20\,ms. A velocidade divulgada usa a média. Para limitar tração, o Mestre usa a roda mais rápida. O percurso da sessão reinicia no boot, enquanto o total é recuperado da NVS. A cada 100\,m acumulados, o odômetro sinaliza a necessidade de persistir. Outra tarefa executa a escrita. Uma interrupção de energia pode perder o trecho que ainda não foi salvo. Para o ensaio, medir circunferência efetiva com o pneu carregado, confirmar a relação de transmissão e comparar ambos os lados com uma referência independente.
 
 \section{MPU6050: aceleração e rotação}
-O MPU6050 reúne um \emph{acelerômetro}, que responde à aceleração e à gravidade, e um \emph{giroscópio}, que mede a velocidade de rotação. Ele conversa com o Mestre por I\textsuperscript{2}C no endereço \texttt{0x68}; SDA vai ao GPIO 8 e SCL ao GPIO 9. A placa do sensor deve ficar rigidamente fixada ao chassi. O firmware foi parametrizado para X vertical positivo para cima e Y longitudinal positivo para frente. Se a montagem girar ou inverter o módulo, é preciso ajustar eixo e sinal em \path{firmware/mestre-s3/include/nucleo/configuracao/veiculo.h} e repetir a calibração.
+O MPU6050 reúne um \emph{acelerômetro}, que responde à aceleração e à gravidade, e um \emph{giroscópio}, que mede a velocidade de rotação. Ele conversa com o Mestre por I\textsuperscript{2}C no endereço \texttt{0x68}; SDA vai ao GPIO 7 e SCL ao GPIO 6. A placa do sensor deve ficar rigidamente fixada ao chassi. O firmware foi parametrizado para X vertical positivo para cima e Y longitudinal positivo para frente. Se a montagem girar ou inverter o módulo, é preciso ajustar eixo e sinal em \path{firmware/mestre-s3/include/nucleo/configuracao/veiculo.h} e repetir a calibração.
 
-O acelerômetro não distingue sozinho a aceleração do veículo da componente da gravidade produzida por inclinação da placa. O serviço amostra a 100\,Hz, usa o giroscópio para acompanhar mudanças rápidas de orientação e corrige lentamente a estimativa de gravidade quando o movimento permite. Subtrai então a gravidade projetada no eixo longitudinal, filtra ruído e usa dois limiares com confirmação temporal para classificar aceleração, desaceleração ou condição próxima do repouso sem alternar a cada vibração. O valor em \emph{g} é convertido nominalmente por $a_{\mathrm{m/s^2}}=9{,}80665\,a_g$.
+O acelerômetro não distingue sozinho a aceleração do veículo da componente da gravidade produzida por inclinação da placa. O serviço amostra a 10\,Hz, com filtro interno de 5\,Hz, usa o giroscópio para acompanhar mudanças rápidas de orientação e corrige lentamente a estimativa de gravidade quando o movimento permite. Subtrai então a gravidade projetada no eixo longitudinal, filtra ruído e usa dois limiares com confirmação temporal para classificar aceleração, desaceleração ou condição próxima do repouso sem alternar a cada vibração. O valor em \emph{g} é convertido nominalmente por $a_{\mathrm{m/s^2}}=9{,}80665\,a_g$.
 
-Ao iniciar, o veículo deve permanecer parado: o firmware usa 100 amostras para estimar os desvios e rejeita calibração com giro, intensidade de gravidade implausível ou eixo longitudinal quase vertical. Uma calibração aceita não corrige uma fixação que depois se moveu. A velocidade principal vem dos encoders, pois integrar a aceleração inercial para obter velocidade acumularia erro de inclinação, ruído e viés. Telemetria e diagnóstico distinguem sensor presente, calibração concluída e dado válido; conferir esses estados antes de comparar aceleração com outro instrumento.
+Ao iniciar, o veículo deve permanecer parado: o firmware usa 10 amostras para estimar os desvios e rejeita calibração com giro, intensidade de gravidade implausível ou eixo longitudinal quase vertical. Uma calibração aceita não corrige uma fixação que depois se moveu. A velocidade principal vem dos encoders, pois integrar a aceleração inercial para obter velocidade acumularia erro de inclinação, ruído e viés. Telemetria e diagnóstico distinguem sensor presente, calibração concluída e dado válido; conferir esses estados antes de comparar aceleração com outro instrumento.
 
 \section{Tela, sinalização e armazenamento}
 A OLED SSD1306 de 0,96\,pol e 128$\times$64 pixels usa SDA/SCL do mesmo barramento I\textsuperscript{2}C que atende o MPU6050. O firmware procura os endereços \texttt{0x3C} e \texttt{0x3D}; isso permite encontrar variantes comuns sem alterar o programa. Conferir alimentação e nível dos pull-ups no módulo adquirido: o barramento precisa permanecer compatível com 3,3\,V, e resistores de módulos em paralelo alteram sua resistência equivalente. A seção~\ref{sec:eletronica} explica o dimensionamento. A tela apresenta etapas de partida, estado, medições disponíveis e progresso de operações; sua ausência é reportada, mas não impede as UARTs nem o registro. As páginas e os avisos são detalhados na seção~\ref{sec:diagnostico}.
 
-Os quatro LEDs externos mostram estados resumidos sem exigir telefone ou terminal: verde para condição normal, amarelo para atenção, vermelho para falha crítica e azul para fases como partida, Wi-Fi e OTA. Cada um precisa de resistor em série dimensionado para a corrente e luminosidade do componente instalado; o esquema/fiação deve confirmar sua polaridade. O buzzer passivo recebe tons por PWM no GPIO 14. Como o GPIO não deve alimentar uma carga acima de sua capacidade, prever transistor e resistor de base conforme o buzzer escolhido, com retorno em GND; se a carga for indutiva, prever proteção contra o pulso de desligamento. A porcentagem de PWM configurada não equivale a um nível acústico medido.
+Os LEDs externos mostram verde para condição normal, amarelo para atenção ou instalação e vermelho para falha crítica. O GPIO 12 aciona o LED amarelo pelo sinal \texttt{LED\_BLUE\_CMD} do esquema. O LED RGB integrado, no GPIO 48, também distingue partida, Wi-Fi e as fases de OTA. O painel Desenvolvedor permite desligar o RGB integrado e salva a preferência no Mestre. Cada LED externo precisa de resistor em série dimensionado para o componente instalado. O buzzer passivo recebe tons por PWM no GPIO 38. Como o GPIO tem capacidade de corrente limitada, prever transistor e resistor de base conforme o buzzer escolhido, com retorno em GND. Cargas indutivas precisam de proteção contra o pulso de desligamento. A porcentagem de PWM configura a razão do pulso.
 
 O microSD usa SPI2, com CLK, MOSI, MISO e CS nos GPIOs 38, 39, 40 e 41. Ele armazena CSV, logs e cópia de ajustes; uma tarefa de gravação recebe amostras por fila para que o tempo de escrita do cartão não dite o ritmo da aquisição. A falta do cartão elimina esses arquivos persistentes enquanto durar a falha, embora o fluxo ao vivo possa continuar. Confirmar alimentação, nível lógico, desacoplamento e pinagem no módulo comprado; um módulo com regulador ou conversores de nível pode ter requisitos diferentes de um encaixe de cartão simples. O capítulo~\ref{cap:memorias_google} descreve arquivos e recuperação.
 
 \section{UART e referência elétrica entre os três ESPs}
 \begin{table}[htbp]\centering\small
-\caption{Ligações bidirecionais entre os três ESP32-S3}\label{tab:uart-fios}
+\caption{Ligações bidirecionais entre o Mestre e os satélites}\label{tab:uart-fios}
 \begin{tabularx}{\textwidth}{@{}p{2.2cm}X X p{1.8cm}@{}}\toprule
 Enlace & Mestre TX $\to$ satélite RX & Satélite TX $\to$ mestre RX & Referência\\\midrule
-Equipe & GPIO 17 $\to$ GPIO 5 & GPIO 6 $\to$ GPIO 18 & GND comum\\
-Visitantes & GPIO 15 $\to$ GPIO 5 & GPIO 6 $\to$ GPIO 16 & GND comum\\\bottomrule
+Equipe & GPIO 39 $\to$ GPIO 5 & GPIO 6 $\to$ GPIO 40 & GND comum\\
+Visitantes & GPIO 19 $\to$ GPIO 5 & GPIO 6 $\to$ GPIO 20 & GND comum\\\bottomrule
 \end{tabularx}\end{table}
 Cada satélite tem um par TX/RX exclusivo do Mestre. TX transmite e deve chegar ao RX da outra placa; unir TX com TX impede a comunicação. Os três GNDs precisam compartilhar uma referência elétrica para que cada receptor interprete corretamente os níveis dos sinais. \textbf{Não é necessário interligar as linhas de 3,3\,V das três placas}: cada uma pode receber alimentação pelo seu ramo previsto, desde que os sinais e retornos respeitem os limites elétricos. Aterramento comum não significa usar o fio fino da UART como caminho de retorno da corrente de potência.
 
@@ -127,7 +130,7 @@ Na folha de alimentação, C1 de 47\,$\mu$F aparece entre 5 V e GND na saída do
 
 Posicionar desacoplamentos com trilhas curtas de alimentação e retorno; medir afundamento e ruído nos pinos durante Wi-Fi, escrita SD e acionamentos. Verificar tensão nominal, corrente de ripple, polaridade e ESR (resistência série equivalente) conforme o conversor e o regulador efetivamente usados. Os módulos ESP e sensores podem incluir capacitores próprios; sua presença e valor não devem ser inferidos apenas pelo símbolo do conector. As diretrizes de hardware do ESP32-S3 recomendam desacoplamento local também no domínio de 3,3 V e junto à memória.
 
-\subsection{Barramento I\textsuperscript{2}C e resistores de pull-up}
+\subsection{Barramento \texorpdfstring{I\textsuperscript{2}C}{I2C} e resistores de pull-up}
 I\textsuperscript{2}C usa SDA (dados) e SCL (clock) compartilhados. As saídas são do tipo \emph{dreno aberto}: um dispositivo consegue puxar a linha para zero, mas não a força ativamente para nível alto. Um resistor de \emph{pull-up} em cada linha fornece esse alto quando ninguém a puxa para baixo. No esquema v4, R5 e R6 são de 4,7\,k$\Omega$ para 3,3 V; o firmware configura 400\,kHz no mestre. MPU6050 e OLED compartilham o barramento; o conector J8 reserva SDA/SCL para o módulo associado ao INA228. Endereços diferentes permitem coexistência, mas o endereço efetivo do INA228 depende da montagem de A0/A1 no módulo e ainda deve ser registrado.
 
 Módulos comerciais frequentemente já trazem resistores de pull-up. Todos os resistores da mesma linha ficam em paralelo:
@@ -139,7 +142,7 @@ Duas unidades de 4,7\,k$\Omega$ equivalem a 2,35\,k$\Omega$; quatro equivalem a 
 
 Antes de montar todos os módulos, identificar os pull-ups existentes em cada placa, medir a resistência equivalente de SDA e SCL com a alimentação desligada e decidir quais resistores de módulo devem ser removidos ou desconectados. \textbf{Manter ao menos um par de pull-ups a 3,3 V}, mas remover os pares excedentes quando a associação em paralelo sair da janela calculada. Se um módulo puxar SDA/SCL para 5 V, remover seus pull-ups para 5 V ou instalar adaptação de nível apropriada antes de ligar ao ESP32-S3. Confirmar o resultado no osciloscópio, com todos os módulos e cabos, durante transferências a 400\,kHz. Resistores dos encoders são outro circuito e não entram nessa conta.
 
-\subsection{INA228 e shunt de 1 m$\Omega$}
+\subsection{INA228 e shunt de 1 \texorpdfstring{m$\Omega$}{mΩ}}
 O conector J8 da folha de periféricos é denominado INA228 e entradas do motorista; ele traz alimentação indicada como 5 V, GND, SDA/SCL e outros sinais. O firmware mestre contém um driver para o INA228 no endereço I\textsuperscript{2}C \texttt{0x40} e publica grandezas elétricas quando a leitura é válida. O código configura shunt nominal de 1\,m$\Omega$ e corrente máxima de 75\,A. A posição física do shunt, o módulo específico e um ensaio de calibração ainda precisam ser confirmados na montagem. Os parâmetros a seguir descrevem a intenção de projeto e a configuração do software, não uma leitura experimental já comprovada.
 
 \begin{figure}[htbp]\centering
@@ -209,9 +212,9 @@ A função prevista para K1 é interromper a \emph{linha de habilitação} do dr
 \caption{Integração prevista: botão de emergência NF e contato K1 NA em série na linha de habilitação. A bobina energizada fecha o contato; sem energia o driver fica desabilitado. A seta tracejada relaciona bobina e contato.}\label{fig:rele-habilitador}
 \end{figure}
 
-A folha do esquema contém K1 (símbolo SANYOU SRD), Q4 (BC337), R1 de 1\,k$\Omega$, R2 de 10\,k$\Omega$ e D1 (1N4007). \textbf{A função de desabilitação remota ainda não está implementada eletricamente}: o mestre zera o acelerador no seu estado e marca corte por relé ao receber parada, mas não aciona Q4, K1 ou a entrada do driver. Para transformar esse estado em atuação, serão necessários mapeamento dos GPIOs, definição do estado seguro de K1 durante falha ou reinício, política para perda de comunicação, retorno do estado real do contato/driver e ensaio de resposta. O botão físico deve funcionar independentemente do navegador, Wi-Fi e UART.
+A folha do esquema contém K1 (símbolo SANYOU SRD), Q4 (BC337), R1 de 1\,k$\Omega$, R2 de 10\,k$\Omega$ e D1 (1N4007). O Mestre comanda Q4 pelo GPIO21. O armamento energiza K1 e a parada desenergiza a bobina e comanda 0 V no DAC. Confira o estado do contato na placa e o tempo de resposta durante falha e reinício. O botão físico deve funcionar independentemente do navegador, Wi-Fi e UART.
 
-A opção pelo contato normalmente aberto coincide com o arquivo \path{hardware/kicad/KiCad_pcb_telemetria/KiCad_pcb_telemetria.kicad_pcb}: nele, o comum de K1 recebe \texttt{+48V}, o contato normalmente aberto alimenta \texttt{DRV\_ENABLE\_SW} e o normalmente fechado fica sem conexão. A PCB consultada também liga \texttt{DRV\_MODE\_B\_CMD}, \texttt{DRV\_MODE\_A\_CMD} e \texttt{DRV\_ENABLE\_CMD} aos GPIOs 13, 14 e 21, já reservados pelo firmware para LED azul, buzzer e encoder direito B. Nenhum desses pinos pode ser assumido como saída de controle sem revisar a placa realmente montada e resolver o conflito. Até lá, a seleção L/M/H e o corte por relé são estados calculados pelo mestre, sem efeito no controlador do veículo.
+A opção pelo contato normalmente aberto coincide com o arquivo \path{hardware/kicad/KiCad_pcb_telemetria/KiCad_pcb_telemetria.kicad_pcb}: nele, o comum de K1 recebe \texttt{+48V}, o contato normalmente aberto alimenta \texttt{DRV\_ENABLE\_SW} e o normalmente fechado fica sem conexão. A PCB consultada também liga \texttt{DRV\_MODE\_B\_CMD}, \texttt{DRV\_MODE\_A\_CMD} e \texttt{DRV\_ENABLE\_CMD} aos GPIOs 13, 14 e 21, usados para atuação pelo firmware.
 
 A bobina é indutiva. Ao interromper sua corrente, o campo magnético tenta mantê-la e pode produzir sobretensão no transistor. O diodo de roda livre D1 em paralelo oferece um caminho temporário para essa corrente: cátodo no lado positivo da bobina e ânodo no lado comutado pelo transistor, ficando reversamente polarizado durante o acionamento normal. Ele reduz o pico de tensão, mas pode aumentar o tempo de soltura do relé; medir esse tempo no circuito final. Q4 evita exigir do GPIO a corrente da bobina; R1 limita a corrente de base, e o estado de desligamento da base precisa ser definido durante reset e partida.
 
@@ -219,7 +222,7 @@ A bobina é indutiva. Ao interromper sua corrente, o campo magnético tenta mant
 No desenho exportado da folha, R2 de 10\,k$\Omega$ aparece em série com a alimentação da bobina e Q4 como derivação desse ramo; essa ligação não corresponde diretamente ao acionamento por transistor em série mostrado funcionalmente acima. A queda de tensão em R2 pode impedir a corrente nominal da bobina. É necessário revisar a ligação no esquema, conferir bobina, contato escolhido, orientação de D1 e estado sem alimentação, executar a checagem elétrica do KiCad e testar com fonte limitada em bancada antes de conectar o driver. A posição do botão de emergência em série também deve constar do esquema e do chicote finais.
 \end{nota}
 
-Outros transistores da folha representam sinais de modo e reversão e o MCP4725 aparece como DAC (conversor digital-analógico) para a referência de acelerador. O MCP4725 é inicializado em 0 V; sua saída diferente de zero permanece bloqueada. Os demais caminhos ainda não recebem comandos elétricos do serviço de controle. Antes de integração, mapear tensão exigida pelo driver, estado seguro de cada fio, isolação, tempo de resposta, limites físicos e retorno medido; testar separadamente de toda a tração.
+Outros transistores da folha representam sinais de modo e reversão e o MCP4725 aparece como DAC (conversor digital-analógico) para a referência de acelerador. O MCP4725 inicia em 0 V e só aplica a referência de tração quando o controle habilita o relé. Antes de integração, mapear tensão exigida pelo driver, estado seguro de cada fio, isolação, tempo de resposta, limites físicos e retorno medido; testar separadamente de toda a tração.
 
 \paragraph{Fontes técnicas.}
 As faixas e equações do INA228 vêm da \href{https://www.ti.com/lit/ds/symlink/ina228.pdf}{folha de dados da Texas Instruments}. O cálculo da janela de pull-ups segue \href{https://www.ti.com/lit/an/slva689/slva689.pdf}{I\textsuperscript{2}C Bus Pull-Up Resistor Calculation}, da TI. O desacoplamento do ESP deve ser confrontado com o \href{https://docs.espressif.com/projects/esp-hardware-design-guidelines/en/latest/esp32s3/schematic-checklist.html}{checklist de esquema do ESP32-S3}, da Espressif, e com a folha de dados de cada módulo comprado.

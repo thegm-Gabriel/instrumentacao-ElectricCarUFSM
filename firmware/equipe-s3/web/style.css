@@ -255,6 +255,9 @@
   gap: 8px;
   align-items: start;
 }
+#comandos .sensor-card > details:only-child { grid-column: 1 / -1; }
+#comandos .sensor-card > .sensor-facts:only-child { grid-column: 1 / -1; margin: 0; }
+#comandos .sensor-card > .sensor-facts:only-child > div:first-child { border-top: 0; }
 #comandos :is(.sensor-card, .sensor-bus) summary {
   display: flex;
   align-items: center;
@@ -285,12 +288,123 @@
 }
 #comandos .sensor-facts dt { color: var(--muted); }
 #comandos .sensor-facts dd { margin: 0; font-variant-numeric: tabular-nums; }
+#comandos .developer-fields { border: 0; margin: 0; padding: 0; min-width: 0; }
+#comandos .developer-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg);
+}
+#comandos .developer-tabs button {
+  min-height: 44px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+#comandos .developer-tabs button[aria-selected="true"] {
+  border-color: var(--line);
+  background: var(--card);
+  color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--cyan, #50cfed);
+}
+#comandos .developer-tabs.developer-device-tabs {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+@media (min-width: 601px) {
+  #comandos #developer-tabs { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
+#comandos .developer-radio-fields {
+  margin: 10px 0;
+}
+#comandos .developer-tabs button:focus-visible {
+  outline: 2px solid var(--cyan, #50cfed);
+  outline-offset: -3px;
+}
+#comandos .developer-toolbar {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  padding: 12px 0;
+}
+#comandos .developer-toolbar label { width: min(100%, 16rem); min-width: 0; }
+#comandos .developer-toolbar label small { color: var(--muted); }
+#comandos .developer-toolbar .command-field-status { align-self: center; }
+#comandos .developer-rows {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 22px;
+}
+#comandos .developer-rows[hidden] { display: none; }
+#comandos .developer-startup {
+  grid-column: 1 / -1;
+  margin: 0 0 10px;
+  padding: 9px 0;
+  color: var(--muted);
+}
+#comandos .developer-startup strong { color: var(--text); }
+#comandos .developer-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(5rem, 7rem);
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+#comandos .developer-row label { overflow-wrap: anywhere; }
+#comandos .developer-row small { display: block; margin-top: 3px; color: var(--muted); }
+#comandos .developer-name { position: relative; min-width: 0; }
+#comandos .developer-name > label { padding-right: 28px; }
+#comandos .developer-help > summary {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  list-style: none;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+#comandos .developer-help > summary::-webkit-details-marker { display: none; }
+#comandos .developer-help[open] > summary { background: var(--bg); }
+#comandos .developer-help > p {
+  margin: 7px 0 0;
+  padding: 5px 8px;
+  border-left: 2px solid var(--line);
+  color: var(--text);
+  font-size: 12px;
+}
+#comandos .developer-row :is(input, select) { width: 100%; min-width: 0; font-variant-numeric: tabular-nums; }
+#comandos .developer-row [data-edited] { border-color: var(--accent); }
+@media (max-width: 860px) {
+  #comandos .developer-rows { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 600px) {
+  #comandos .developer-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #comandos .developer-toolbar :is(label, .button) { width: 100%; }
+}
 @media (max-width: 380px) {
   #comandos .command-card > summary span { font-size: 10px; }
   #comandos .page-heading .badge { max-width: 55%; white-space: normal; }
 }
 @media (min-width: 560px) {
-  #comandos .command-jump { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  #comandos .command-jump { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 }
 @media (min-width: 760px) {
   #comandos .command-grid { gap: 24px; }
